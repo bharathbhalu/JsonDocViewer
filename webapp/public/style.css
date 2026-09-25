@@ -51,7 +51,10 @@ html, body { height: 100%; margin: 0; font-family: -apple-system, BlinkMacSystem
 #toolbar button:hover:not(:disabled) { background: #45494e; }
 #toolbar button:disabled { opacity: 0.4; cursor: default; }
 
-#editor { flex: 1; min-height: 0; }
+#editor-area { flex: 1; min-height: 0; position: relative; }
+#editor { position: absolute; inset: 0; }
+#html-preview-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: none; background: #fff; }
+#html-preview-frame.hidden { display: none; }
 
 .hidden { display: none !important; }
 

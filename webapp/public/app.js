@@ -24,6 +24,9 @@ const favoritesList = document.getElementById('favorites-list');
 const findInFileBtn = document.getElementById('find-in-file-btn');
 const collapseAllBtn = document.getElementById('collapse-all-btn');
 const expandAllBtn = document.getElementById('expand-all-btn');
+const viewToggleBtn = document.getElementById('view-toggle-btn');
+const htmlPreviewFrame = document.getElementById('html-preview-frame');
+let viewMode = 'code'; // 'code' | 'render' - only meaningful for .html/.htm files
 const newFolderBtn = document.getElementById('new-folder-btn');
 const newFileBtn = document.getElementById('new-file-btn');
 const saveAsBtn = document.getElementById('saveas-btn');
@@ -428,6 +431,8 @@ async function deleteItem(relPath, { endpoint, kind, confirmMessage }) {
     findInFileBtn.disabled = true;
     collapseAllBtn.disabled = true;
     expandAllBtn.disabled = true;
+    viewToggleBtn.classList.add('hidden');
+    setViewMode('code');
   }
   await loadTree();
 
@@ -766,7 +771,34 @@ async function openFile(relPath, lineToReveal) {
     editor.setPosition({ lineNumber: lineToReveal, column: 1 });
     editor.focus();
   }
+
+  const isHtml = /\.html?$/i.test(relPath);
+  if (isHtml) {
+    viewToggleBtn.classList.remove('hidden');
+    setViewMode('render');
+  } else {
+    viewToggleBtn.classList.add('hidden');
+    setViewMode('code');
+  }
 }
+
+function setViewMode(mode) {
+  viewMode = mode;
+  if (mode === 'render') {
+    htmlPreviewFrame.srcdoc = editor.getValue();
+    htmlPreviewFrame.classList.remove('hidden');
+    document.getElementById('editor').classList.add('hidden');
+    viewToggleBtn.textContent = 'View Source 💻';
+  } else {
+    htmlPreviewFrame.classList.add('hidden');
+    document.getElementById('editor').classList.remove('hidden');
+    viewToggleBtn.textContent = 'View Rendered 👁️';
+  }
+}
+
+viewToggleBtn.addEventListener('click', () => {
+  setViewMode(viewMode === 'render' ? 'code' : 'render');
+});
 
 // --- Save ---
 async function saveCurrentFile() {

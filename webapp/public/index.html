@@ -53,6 +53,7 @@
 
         <div class="toolbar-group">
           <button id="convert-btn" disabled>Convert &#8644;</button>
+          <button id="view-toggle-btn" class="hidden">View Source &#128187;</button>
         </div>
 
         <div class="toolbar-sep"></div>
@@ -66,7 +67,10 @@
           <button id="save-btn" disabled>Save</button>
         </div>
       </div>
-      <div id="editor"></div>
+      <div id="editor-area">
+        <div id="editor"></div>
+        <iframe id="html-preview-frame" class="hidden" sandbox="allow-scripts allow-forms allow-modals" referrerpolicy="no-referrer"></iframe>
+      </div>
     </div>
   </div>
 
