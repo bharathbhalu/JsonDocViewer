@@ -104,6 +104,18 @@ function isJsonYaml(name) {
   return /\.(json|yaml|yml)$/i.test(name);
 }
 
+function isLikelyBinary(fullPath) {
+  try {
+    const fd = fs.openSync(fullPath, 'r');
+    const buf = Buffer.alloc(512);
+    const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
+    fs.closeSync(fd);
+    return buf.slice(0, bytesRead).includes(0);
+  } catch (e) {
+    return true;
+  }
+}
+
 function buildTree(dir) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const children = [];
@@ -113,7 +125,7 @@ function buildTree(dir) {
     const rel = path.relative(DATA_ROOT, full);
     if (entry.isDirectory()) {
       children.push({ type: 'dir', name: entry.name, path: rel, children: buildTree(full) });
-    } else if (isJsonYaml(entry.name)) {
+    } else {
       children.push({ type: 'file', name: entry.name, path: rel });
     }
   }
@@ -151,25 +163,25 @@ function broadcastRefresh() {
   for (const client of sseClients) client.write('data: refresh\n\n');
 }
 
-function listAllJsonYamlFiles(dir, out) {
+function listAllFiles(dir, out) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      listAllJsonYamlFiles(full, out);
-    } else if (isJsonYaml(entry.name)) {
+      listAllFiles(full, out);
+    } else {
       out.push(path.relative(DATA_ROOT, full));
     }
   }
   return out;
 }
 
-let knownFiles = new Set(listAllJsonYamlFiles(DATA_ROOT, []));
+let knownFiles = new Set(listAllFiles(DATA_ROOT, []));
 let watchDebounce = null;
 
 function reconcileWatchedFiles() {
-  const current = new Set(listAllJsonYamlFiles(DATA_ROOT, []));
+  const current = new Set(listAllFiles(DATA_ROOT, []));
   const added = [...current].filter((p) => !knownFiles.has(p));
   const removed = [...knownFiles].filter((p) => !current.has(p));
   knownFiles = current;
@@ -221,7 +233,6 @@ app.post('/api/file/create', (req, res) => {
   try {
     const { path: relPath } = req.body;
     if (!relPath) return res.status(400).json({ error: 'path is required' });
-    if (!isJsonYaml(relPath)) return res.status(400).json({ error: 'File must end in .json, .yaml or .yml' });
     const full = resolveSafe(relPath);
     if (fs.existsSync(full)) {
       return res.status(400).json({ error: 'A file already exists at that path' });
@@ -290,11 +301,20 @@ app.post('/api/favorites/toggle', (req, res) => {
   }
 });
 
+const MAX_EDITABLE_SIZE = 5 * 1024 * 1024; // 5MB
+
 app.get('/api/file', (req, res) => {
   try {
     const full = resolveSafe(req.query.path);
-    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+    const stat = fs.existsSync(full) && fs.statSync(full);
+    if (!stat || !stat.isFile()) {
       return res.status(404).json({ error: 'File not found' });
+    }
+    if (isLikelyBinary(full)) {
+      return res.status(400).json({ error: 'This looks like a binary file and cannot be edited here' });
+    }
+    if (stat.size > MAX_EDITABLE_SIZE) {
+      return res.status(400).json({ error: 'File is too large to open in the editor (limit 5MB)' });
     }
     const content = fs.readFileSync(full, 'utf8');
     res.json({ path: req.query.path, content });
@@ -403,17 +423,19 @@ app.get('/api/search', (req, res) => {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(full);
-        } else if (isJsonYaml(entry.name)) {
+        } else {
           const rel = path.relative(DATA_ROOT, full);
           if (rel.toLowerCase().includes(needle)) {
             results.push({ path: rel, line: null, text: null, matchType: 'filename' });
           }
-          const content = fs.readFileSync(full, 'utf8');
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].toLowerCase().includes(needle)) {
-              results.push({ path: rel, line: i + 1, text: lines[i].trim().slice(0, 200), matchType: 'content' });
-              if (results.length >= 200) return;
+          if (!isLikelyBinary(full)) {
+            const content = fs.readFileSync(full, 'utf8');
+            const lines = content.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].toLowerCase().includes(needle)) {
+                results.push({ path: rel, line: i + 1, text: lines[i].trim().slice(0, 200), matchType: 'content' });
+                if (results.length >= 200) return;
+              }
             }
           }
         }

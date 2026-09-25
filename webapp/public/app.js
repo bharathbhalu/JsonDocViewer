@@ -1,6 +1,7 @@
 let editor = null;
 let currentPath = null;
-let currentLang = null;
+let currentLang = null; // Monaco language id used for syntax highlighting
+let currentDataFormat = null; // 'json' | 'yaml' | null - drives validation & conversion
 let isDirty = false;
 let autoSaveEnabled = true;
 let autoSaveTimer = null;
@@ -36,6 +37,33 @@ function langForPath(p) {
   if (/\.json$/i.test(p)) return 'json';
   if (/\.(yaml|yml)$/i.test(p)) return 'yaml';
   return null;
+}
+
+const EXTENSION_TO_MONACO_LANG = {
+  json: 'json', yaml: 'yaml', yml: 'yaml',
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
+  cs: 'csharp', php: 'php', sh: 'shell', bash: 'shell',
+  html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
+  xml: 'xml', sql: 'sql', md: 'markdown', markdown: 'markdown',
+  ini: 'ini', toml: 'ini', env: 'ini', conf: 'ini',
+  dockerfile: 'dockerfile', txt: 'plaintext', log: 'plaintext',
+};
+
+function monacoLanguageForPath(p) {
+  const name = p.split('/').pop();
+  const match = name.match(/\.([^.]+)$/);
+  const ext = match ? match[1].toLowerCase() : name.toLowerCase();
+  return EXTENSION_TO_MONACO_LANG[ext] || 'plaintext';
+}
+
+function iconForFile(p) {
+  const fmt = langForPath(p);
+  if (fmt === 'json') return '{}';
+  if (fmt === 'yaml') return 'y:';
+  return '📄';
 }
 
 // --- Minimal JSON tokenizer/parser used only to find line numbers of
@@ -185,17 +213,25 @@ function validateYaml(text) {
 }
 
 function runValidation() {
-  if (!editor || !currentLang) return;
+  if (!editor || !currentPath) return;
+  convertBtn.disabled = !currentDataFormat;
+
+  if (!currentDataFormat) {
+    monaco.editor.setModelMarkers(editor.getModel(), 'corruption', []);
+    setStatus(isDirty ? 'Modified (unsaved)' : '', isDirty ? 'dirty' : '');
+    return;
+  }
+
   const text = editor.getValue();
   const model = editor.getModel();
-  const result = currentLang === 'json' ? validateJson(text) : validateYaml(text);
+  const result = currentDataFormat === 'json' ? validateJson(text) : validateYaml(text);
   monaco.editor.setModelMarkers(model, 'corruption', result.markers);
 
   const errorCount = result.markers.filter(m => m.severity === monaco.MarkerSeverity.Error).length;
   const warnCount = result.markers.filter(m => m.severity === monaco.MarkerSeverity.Warning).length;
 
   if (errorCount > 0) {
-    setStatus(`Invalid ${currentLang.toUpperCase()} — ${errorCount} error(s)`, 'error');
+    setStatus(`Invalid ${currentDataFormat.toUpperCase()} — ${errorCount} error(s)`, 'error');
   } else if (warnCount > 0) {
     setStatus(`Valid, but ${warnCount} duplicate key warning(s)`, 'dirty');
   } else if (isDirty) {
@@ -345,7 +381,7 @@ function renderFavorites() {
 
     const icon = document.createElement('span');
     icon.className = 'icon';
-    icon.textContent = isDir ? '📁' : (langForPath(favPath) === 'json' ? '{}' : 'y:');
+    icon.textContent = isDir ? '📁' : iconForFile(favPath);
     const label = document.createElement('span');
     label.className = 'label';
     label.textContent = favPath;
@@ -382,6 +418,7 @@ async function deleteItem(relPath, { endpoint, kind, confirmMessage }) {
   if (currentPath && (currentPath === relPath || currentPath.startsWith(relPath + '/'))) {
     currentPath = null;
     currentLang = null;
+    currentDataFormat = null;
     currentPathEl.textContent = 'No file open';
     saveBtn.disabled = true;
     saveAsBtn.disabled = true;
@@ -485,15 +522,11 @@ function makeNewSubfolderButton(relPath) {
 
 async function createFile(parentPath) {
   const promptLabel = parentPath
-    ? `New file name inside "${parentPath}" (e.g. "config.json"):`
-    : 'New file path (relative to data/, e.g. "config.json" or "reports/q1.yaml"):';
+    ? `New file name inside "${parentPath}" (any file type, e.g. "config.json", "notes.md"):`
+    : 'New file path (relative to data/, e.g. "config.json" or "reports/notes.md"):';
   const name = prompt(promptLabel);
   if (!name || !name.trim()) return;
   const trimmedName = name.trim();
-  if (!langForPath(trimmedName)) {
-    alert('File must end in .json, .yaml or .yml');
-    return;
-  }
   const fullPath = parentPath ? `${parentPath}/${trimmedName}` : trimmedName;
 
   const res = await fetch('/api/file/create', {
@@ -671,7 +704,7 @@ function renderNodes(nodes) {
     } else {
       const icon = document.createElement('span');
       icon.className = 'icon';
-      icon.textContent = langForPath(node.name) === 'json' ? '{}' : 'y:';
+      icon.textContent = iconForFile(node.name);
       const label = document.createElement('span');
       label.className = 'label';
       label.textContent = node.name;
@@ -710,11 +743,11 @@ async function openFile(relPath, lineToReveal) {
     return;
   }
   currentPath = relPath;
-  currentLang = langForPath(relPath) || 'plaintext';
+  currentLang = monacoLanguageForPath(relPath);
+  currentDataFormat = langForPath(relPath);
   currentPathEl.textContent = relPath;
   isDirty = false;
   saveBtn.disabled = false;
-  convertBtn.disabled = false;
   historyBtn.disabled = false;
   commitBtn.disabled = false;
   findInFileBtn.disabled = false;
@@ -956,8 +989,8 @@ async function restoreVersion(hash) {
 
 // --- Convert JSON <-> YAML ---
 convertBtn.addEventListener('click', async () => {
-  if (!currentPath || !currentLang) return;
-  const from = currentLang;
+  if (!currentPath || !currentDataFormat) return;
+  const from = currentDataFormat;
   const to = from === 'json' ? 'yaml' : 'json';
   const content = editor.getValue();
 
@@ -981,6 +1014,7 @@ convertBtn.addEventListener('click', async () => {
   if (newPath === null) {
     // Cancelled: just preview the converted content, unsaved.
     currentLang = to;
+    currentDataFormat = to;
     const model = monaco.editor.createModel(data.output, to);
     editor.setModel(model);
     isDirty = true;
