@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>JsonDocViewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div id="sidebar-header">
+        <span>data/</span>
+        <div>
+          <button id="new-file-btn" title="New file">+&#128196;</button>
+          <button id="new-folder-btn" title="New folder">+&#128193;</button>
+          <button id="refresh-btn" title="Refresh tree">&#8635;</button>
+        </div>
+      </div>
+      <div id="search-box">
+        <input id="search-input" type="text" placeholder="Search files & content..." />
+        <div id="search-results" class="hidden"></div>
+      </div>
+      <div id="favorites-section">
+        <div id="favorites-header">Favorites</div>
+        <div id="favorites-list"></div>
+      </div>
+      <div id="tree"></div>
+    </div>
+    <div id="main">
+      <div id="toolbar">
+        <div class="toolbar-group toolbar-info">
+          <span id="current-path">No file open</span>
+          <span id="status" class="status"></span>
+        </div>
+        <div class="spacer"></div>
+
+        <div class="toolbar-group">
+          <button id="find-in-file-btn" disabled title="Search within the open file (Cmd/Ctrl+F)">Find&hellip;</button>
+          <button id="collapse-all-btn" disabled title="Collapse all foldable sections">Collapse All</button>
+          <button id="expand-all-btn" disabled title="Expand all foldable sections">Expand All</button>
+        </div>
+
+        <div class="toolbar-sep"></div>
+
+        <div class="toolbar-group">
+          <button id="back-to-latest-btn" class="hidden">&larr; Back to latest</button>
+          <button id="history-btn" disabled>History</button>
+          <button id="commit-btn" disabled title="Save a named version to history">Commit&hellip;</button>
+        </div>
+
+        <div class="toolbar-sep"></div>
+
+        <div class="toolbar-group">
+          <button id="convert-btn" disabled>Convert &#8644;</button>
+        </div>
+
+        <div class="toolbar-sep"></div>
+
+        <div class="toolbar-group">
+          <label id="autosave-toggle" class="toggle">
+            <input type="checkbox" id="autosave-checkbox" checked />
+            <span>Auto-save</span>
+          </label>
+          <button id="saveas-btn" disabled>Save As&hellip;</button>
+          <button id="save-btn" disabled>Save</button>
+        </div>
+      </div>
+      <div id="editor"></div>
+    </div>
+  </div>
+
+  <div id="history-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span id="history-title">Version history</span>
+        <button id="history-close">&times;</button>
+      </div>
+      <div id="history-list"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
