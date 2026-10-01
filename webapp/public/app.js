@@ -3,6 +3,9 @@ let currentPath = null;
 let currentLang = null; // Monaco language id used for syntax highlighting
 let currentDataFormat = null; // 'json' | 'yaml' | null - drives validation & conversion
 let isDirty = false;
+let ignoreDirtyUntil = 0;
+let openToken = 0;
+let saveInFlight = null;
 let autoSaveEnabled = true;
 let autoSaveTimer = null;
 
@@ -50,6 +53,7 @@ const askKinds = document.getElementById('ask-kinds');
 const askHint = document.getElementById('ask-hint');
 const askOk = document.getElementById('ask-ok');
 const askCancel = document.getElementById('ask-cancel');
+const askExtra = document.getElementById('ask-extra');
 const askClose = document.getElementById('ask-close');
 const themeBtn = document.getElementById('theme-btn');
 const sidebarToggleBtn = document.getElementById('sidebar-toggle');
@@ -355,19 +359,16 @@ require(['vs/editor/editor.main'], function () {
   });
   editor.onDidChangeModelContent(() => {
     if (suppressEditorChange) return;
-    if (currentPath) {
-      isDirty = true;
-      saveBtn.disabled = false;
-      runValidation();
-      if (autoSaveEnabled) scheduleAutoSave();
-    }
+    noteUnsaved();
   });
   loadTree();
 });
 
 function scheduleAutoSave() {
   clearTimeout(autoSaveTimer);
+  if (!autoSaveEnabled || !isDirty || saveInFlight) return;
   autoSaveTimer = setTimeout(() => {
+    if (!isDirty || saveInFlight) return;
     saveCurrentFile();
   }, 800);
 }
@@ -894,8 +895,9 @@ function finishAsk(value) {
   askMode = 'ask';
   askHasKinds = false;
   askKindMeta = [];
-  if (askModal) askModal.classList.remove('ask-confirm');
+  if (askModal) askModal.classList.remove('ask-confirm', 'ask-leave');
   if (askOk) askOk.classList.remove('ask-danger');
+  if (askExtra) askExtra.classList.add('hidden');
   if (askModal) askModal.classList.add('hidden');
   if (askInput) askInput.classList.remove('hidden');
   if (askLabel) askLabel.classList.remove('hidden');
@@ -929,14 +931,23 @@ function showAsk(opts) {
     }
     if (askResolver) askResolver(null);
     askResolver = resolve;
-    askMode = opts.mode === 'confirm' ? 'confirm' : 'ask';
+    askMode = opts.mode === 'leave' ? 'leave' : (opts.mode === 'confirm' ? 'confirm' : 'ask');
     askHasKinds = !!(opts.kinds && opts.kinds.length);
     askKindMeta = askHasKinds ? opts.kinds : [];
-    askModal.classList.toggle('ask-confirm', askMode === 'confirm');
-    askOk.classList.toggle('ask-danger', !!opts.danger);
+    askModal.classList.toggle('ask-confirm', askMode === 'confirm' || askMode === 'leave');
+    askModal.classList.toggle('ask-leave', askMode === 'leave');
+    askOk.classList.toggle('ask-danger', !!opts.danger && askMode !== 'leave');
     askTitle.textContent = opts.title || 'Name';
     askLabel.textContent = opts.label || 'Name';
     askOk.textContent = opts.confirmLabel || 'OK';
+    if (askExtra) {
+      if (askMode === 'leave') {
+        askExtra.classList.remove('hidden');
+        askExtra.textContent = opts.discardLabel || 'Discard';
+      } else {
+        askExtra.classList.add('hidden');
+      }
+    }
     if (askHasKinds) {
       askKinds.classList.remove('hidden');
       askKinds.innerHTML = opts.kinds.map((k, i) => (
@@ -954,7 +965,7 @@ function showAsk(opts) {
     askInput.value = opts.value || '';
     askModal.classList.remove('hidden');
     requestAnimationFrame(() => {
-      if (askMode === 'confirm') {
+      if (askMode === 'confirm' || askMode === 'leave') {
         askOk.focus();
         return;
       }
@@ -967,6 +978,10 @@ function showAsk(opts) {
 function submitAsk() {
   if (askMode === 'confirm') {
     finishAsk(true);
+    return;
+  }
+  if (askMode === 'leave') {
+    finishAsk('save');
     return;
   }
   const name = askInput.value.trim();
@@ -997,6 +1012,7 @@ if (askKinds) {
   });
 }
 if (askOk) askOk.addEventListener('click', submitAsk);
+if (askExtra) askExtra.addEventListener('click', () => finishAsk('discard'));
 if (askCancel) askCancel.addEventListener('click', () => finishAsk(null));
 if (askClose) askClose.addEventListener('click', () => finishAsk(null));
 if (askModal) {
@@ -1328,18 +1344,14 @@ saveAsBtn.addEventListener('click', async () => {
     return;
   }
   const content = getSaveContent();
-  const res = await fetch('/api/file', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: trimmed, content }),
-  });
-  const data = await res.json();
+  const { res, data } = await postFileContent(trimmed, content);
   if (!res.ok) {
-    alert('Save As failed: ' + data.error);
+    alert('Save As failed: ' + ((data && data.error) || 'unknown error'));
     return;
   }
   await loadTree();
-  await openFile(trimmed);
+  markClean();
+  await openFile(trimmed, undefined, { skipDirty: true, force: true });
 });
 
 // --- Move (drag and drop) ---
@@ -1529,11 +1541,7 @@ function destroyBoard() {
 }
 
 function onBoardChange() {
-  if (!currentPath) return;
-  isDirty = true;
-  saveBtn.disabled = false;
-  setStatus('Modified (unsaved)', 'dirty');
-  if (autoSaveEnabled) scheduleAutoSave();
+  noteUnsaved();
 }
 
 function ensureScript(src, flag, ready) {
@@ -1576,29 +1584,66 @@ function ensureStylesheet(href, flag) {
 
 function ensureMindmapAssets() {
   ensureStylesheet('/mindmap/engine.css?v=90', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=109', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  return ensureScript('/mindmap/engine.js?v=112', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
-  ensureStylesheet('/flow/engine.css?v=20', 'data-fl-css');
-  return ensureScript('/flow/core.js?v=17', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=26', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+  ensureStylesheet('/flow/engine.css?v=23', 'data-fl-css');
+  return ensureScript('/flow/core.js?v=20', 'data-fl-core', () => !!window.FlowCore)
+    .then(() => ensureScript('/flow/engine.js?v=31', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function getSaveContent() {
   if (boardEngine && viewMode === 'board') {
     return boardEngine.serializeToHtml();
   }
-  return editor.getValue();
+  return editor && editor.getValue ? editor.getValue() : '';
+}
+
+function markClean() {
+  isDirty = false;
+  ignoreDirtyUntil = Date.now() + 1500;
+  clearTimeout(autoSaveTimer);
+}
+
+function noteUnsaved() {
+  if (!currentPath || isPdfPath(currentPath) || saveInFlight) return;
+  if (Date.now() < ignoreDirtyUntil) return;
+  if (!isDirty) {
+    isDirty = true;
+    saveBtn.disabled = false;
+    setStatus('Modified (unsaved)', 'dirty');
+  }
+  if (autoSaveEnabled) scheduleAutoSave();
+}
+
+async function confirmLeaveIfDirty() {
+  if (!isDirty) return true;
+  try {
+    const choice = await showAsk({
+      title: 'Unsaved changes',
+      label: 'This file has unsaved changes.',
+      hint: '',
+      mode: 'leave',
+      confirmLabel: 'Save',
+      discardLabel: 'Discard',
+    });
+    if (choice === 'save') {
+      await saveCurrentFile();
+      return !isDirty;
+    }
+    return choice === 'discard';
+  } catch (err) {
+    return true;
+  }
 }
 
 function syncBoardIntoEditor() {
   if (!boardEngine || !editor || !editor.getModel()) return;
   const html = boardEngine.serializeToHtml();
-  if (editor.getValue() === html) return;
   suppressEditorChange = true;
   editor.getModel().setValue(html);
-  suppressEditorChange = false;
+  requestAnimationFrame(() => { suppressEditorChange = false; });
 }
 
 function hidePdfFrame() {
@@ -1608,13 +1653,19 @@ function hidePdfFrame() {
 }
 
 async function openPdf(relPath) {
-  if (isDirty && !confirm('Discard unsaved changes?')) return;
+  if (relPath === currentPath) {
+    highlightActiveRow(relPath);
+    return;
+  }
+  const token = ++openToken;
+  if (!(await confirmLeaveIfDirty())) return;
+  if (token !== openToken) return;
   destroyBoard();
   currentPath = relPath;
   currentLang = null;
   currentDataFormat = null;
   currentPathEl.textContent = relPath;
-  isDirty = false;
+  markClean();
   saveBtn.disabled = true;
   saveAsBtn.disabled = true;
   if (exportFileBtn) exportFileBtn.disabled = false;
@@ -1638,11 +1689,26 @@ async function openPdf(relPath) {
   setViewMode('pdf');
 }
 
-async function openFile(relPath, lineToReveal) {
+async function openFile(relPath, lineToReveal, opts) {
   if (isPdfPath(relPath)) return openPdf(relPath);
-  if (isDirty && !confirm('Discard unsaved changes?')) return;
-  const res = await fetch('/api/file?path=' + encodeURIComponent(relPath));
+  if (relPath === currentPath && lineToReveal == null && !(opts && opts.force)) {
+    highlightActiveRow(relPath);
+    return;
+  }
+  const token = ++openToken;
+  if (!(opts && opts.skipDirty) && !(await confirmLeaveIfDirty())) return;
+  if (token !== openToken) return;
+  let res;
+  try {
+    res = await fetch('/api/file?path=' + encodeURIComponent(relPath));
+  } catch (err) {
+    if (token !== openToken) return;
+    alert('Failed to open file: ' + ((err && err.message) || err));
+    return;
+  }
+  if (token !== openToken) return;
   const data = await res.json();
+  if (token !== openToken) return;
   if (!res.ok) {
     alert('Failed to open file: ' + data.error);
     return;
@@ -1652,7 +1718,7 @@ async function openFile(relPath, lineToReveal) {
   currentLang = monacoLanguageForPath(relPath);
   currentDataFormat = langForPath(relPath);
   currentPathEl.textContent = relPath;
-  isDirty = false;
+  markClean();
   saveBtn.disabled = false;
   historyBtn.disabled = false;
   commitBtn.disabled = false;
@@ -1663,6 +1729,10 @@ async function openFile(relPath, lineToReveal) {
   collapseAllBtn.disabled = false;
   expandAllBtn.disabled = false;
   backToLatestBtn.classList.add('hidden');
+  if (!editor) {
+    alert('Editor is still loading. Try again in a moment.');
+    return;
+  }
   editor.updateOptions({ readOnly: false });
 
   const model = monaco.editor.createModel(data.content, currentLang);
@@ -1682,10 +1752,12 @@ async function openFile(relPath, lineToReveal) {
     viewToggleBtn.classList.remove('hidden');
     try {
       await ensureMindmapAssets();
+      if (token !== openToken) return;
       boardEngine = new window.MindmapEngine(mindmapStage, { onChange: onBoardChange });
       boardEngine.loadFromHtml(data.content);
       setViewMode('board');
     } catch (err) {
+      if (token !== openToken) return;
       console.error(err);
       alert('Mindmap failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
@@ -1694,10 +1766,12 @@ async function openFile(relPath, lineToReveal) {
     viewToggleBtn.classList.remove('hidden');
     try {
       await ensureFlowAssets();
+      if (token !== openToken) return;
       boardEngine = new window.FlowEngine(mindmapStage, { onChange: onBoardChange });
       boardEngine.loadFromHtml(data.content);
       setViewMode('board');
     } catch (err) {
+      if (token !== openToken) return;
       console.error(err);
       alert('Flow failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
@@ -1710,6 +1784,8 @@ async function openFile(relPath, lineToReveal) {
     setViewMode('code');
   }
   setStandaloneVisible(boardKind === 'mindmap' || boardKind === 'flow');
+  if (token !== openToken) return;
+  markClean();
 }
 
 function setViewMode(mode) {
@@ -1760,22 +1836,40 @@ viewToggleBtn.addEventListener('click', () => {
 });
 
 // --- Save ---
-async function saveCurrentFile() {
-  if (!currentPath || isPdfPath(currentPath)) return;
-  const content = getSaveContent();
-  if (boardEngine && viewMode === 'board') syncBoardIntoEditor();
+async function postFileContent(relPath, content) {
   const res = await fetch('/api/file', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: currentPath, content }),
+    body: JSON.stringify({ path: relPath, content }),
   });
-  const data = await res.json();
-  if (!res.ok) {
-    alert('Save failed: ' + data.error);
-    return;
-  }
-  isDirty = false;
-  runValidation();
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* ignore */ }
+  return { res, data };
+}
+
+async function saveCurrentFile() {
+  if (!currentPath || isPdfPath(currentPath)) return false;
+  if (saveInFlight) return saveInFlight;
+  saveInFlight = (async () => {
+    clearTimeout(autoSaveTimer);
+    setStatus('Saving…');
+    await new Promise((r) => setTimeout(r, 0));
+    if (boardEngine && typeof boardEngine.commitEdit === 'function') boardEngine.commitEdit();
+    const content = getSaveContent();
+    const { res, data } = await postFileContent(currentPath, content);
+    if (!res.ok) {
+      const msg = (data && data.error) || res.statusText || 'Save failed';
+      setStatus('Save failed: ' + msg, 'dirty');
+      alert('Save failed: ' + msg);
+      return false;
+    }
+    markClean();
+    runValidation();
+    return true;
+  })().finally(() => {
+    saveInFlight = null;
+  });
+  return saveInFlight;
 }
 
 saveBtn.addEventListener('click', saveCurrentFile);
@@ -2035,11 +2129,19 @@ async function viewVersion(hash) {
 backToLatestBtn.addEventListener('click', () => {
   editor.updateOptions({ readOnly: false });
   backToLatestBtn.classList.add('hidden');
-  openFile(currentPath);
+  openFile(currentPath, undefined, { force: true });
 });
 
 async function restoreVersion(hash) {
-  if (!confirm(`Restore this file to commit ${hash.slice(0, 7)}? This creates a new version with that content.`)) return;
+  const ok = await showAsk({
+    title: 'Restore version',
+    label: `Restore this file to commit ${hash.slice(0, 7)}? This creates a new version with that content.`,
+    hint: 'The current file is replaced with that snapshot.',
+    mode: 'confirm',
+    danger: true,
+    confirmLabel: 'Restore',
+  });
+  if (!ok) return;
   const res = await fetch('/api/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2052,7 +2154,7 @@ async function restoreVersion(hash) {
   }
   editor.updateOptions({ readOnly: false });
   historyModal.classList.add('hidden');
-  await openFile(currentPath);
+  await openFile(currentPath, undefined, { force: true, skipDirty: true });
 }
 
 
@@ -2102,54 +2204,40 @@ convertBtn.addEventListener('click', async () => {
     return;
   }
 
-  const saveRes = await fetch('/api/file', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: trimmed, content: data.output }),
-  });
-  if (!saveRes.ok) {
-    const err = await saveRes.json();
-    alert('Save failed: ' + err.error);
+  const saveRes = await postFileContent(trimmed, data.output);
+  if (!saveRes.res.ok) {
+    alert('Save failed: ' + ((saveRes.data && saveRes.data.error) || 'unknown error'));
     return;
   }
   await loadTree();
-  await openFile(trimmed);
+  await openFile(trimmed, undefined, { skipDirty: true, force: true });
 });
 
 document.getElementById('refresh-btn').addEventListener('click', loadTree);
 
 // --- Live sync with files changed outside the app ---
-// One EventSource only. Closing+reconnecting on every error used up the
-// browser's 6 connections-per-host, so every later fetch stayed "pending".
-let liveSyncSource = null;
-let liveSyncRetry = null;
-let liveSyncRefreshTimer = null;
+// Short JSON poll instead of EventSource: a held SSE stream uses 1 of
+// Chrome's 6 HTTP/1.1 connections per host and can stall CSS/saves.
+let liveSyncRev = null;
+let liveSyncTimer = null;
 
 function connectLiveSync() {
-  if (liveSyncSource) {
-    liveSyncSource.close();
-    liveSyncSource = null;
-  }
-  clearTimeout(liveSyncRetry);
-  liveSyncSource = new EventSource('/api/events');
-  liveSyncSource.onmessage = () => {
-    clearTimeout(liveSyncRefreshTimer);
-    liveSyncRefreshTimer = setTimeout(() => {
-      loadTree();
-      setStatus('Detected external changes — tree refreshed', 'dirty');
-    }, 250);
+  clearTimeout(liveSyncTimer);
+  const tick = async () => {
+    try {
+      const res = await fetch('/api/changes', { cache: 'no-store' });
+      const data = await res.json();
+      if (liveSyncRev != null && data.rev !== liveSyncRev) {
+        loadTree();
+        setStatus('Detected external changes — tree refreshed', 'dirty');
+      }
+      liveSyncRev = data.rev;
+    } catch (e) { /* offline / restarting */ }
+    liveSyncTimer = setTimeout(tick, 2500);
   };
-  liveSyncSource.onerror = () => {
-    // CONNECTING = native auto-reconnect. Opening another stream here
-    // is what filled the connection pool.
-    if (liveSyncSource && liveSyncSource.readyState === EventSource.CLOSED) {
-      liveSyncSource = null;
-      liveSyncRetry = setTimeout(connectLiveSync, 3000);
-    }
-  };
+  tick();
 }
 connectLiveSync();
 window.addEventListener('beforeunload', () => {
-  clearTimeout(liveSyncRetry);
-  if (liveSyncSource) liveSyncSource.close();
+  clearTimeout(liveSyncTimer);
 });

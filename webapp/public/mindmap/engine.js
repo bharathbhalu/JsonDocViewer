@@ -973,7 +973,7 @@
   function serializeToHtml(data) {
     const first = data.rootIds && data.nodes[data.rootIds[0]];
     const title = escapeHtml((stripTags(first && first.content) || 'Mindmap').slice(0, 80) || 'Mindmap');
-    const json = JSON.stringify(data, null, 2).replace(/</g, '\\u003c');
+    const json = JSON.stringify(data).replace(/</g, '\\u003c');
     return `<!DOCTYPE html>\n<html lang="en" data-docviewer="mindmap">\n<head><meta charset="UTF-8"><title>${title}</title></head>\n<body>\n<script type="application/json" id="mindmap-data">\n${json}\n</script>\n</body>\n</html>\n`;
   }
 
@@ -1273,10 +1273,10 @@
       this._onDblClick = this._onDblClick.bind(this);
 
       this.els.canvas.addEventListener('pointerdown', this._onPointerDown);
-      this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false });
-      this.els.canvas.addEventListener('gesturestart', this._onGestureStart, { passive: false });
-      this.els.canvas.addEventListener('gesturechange', this._onGestureChange, { passive: false });
-      this.els.canvas.addEventListener('gestureend', this._onGestureEnd, { passive: false });
+      this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false, capture: true });
+      window.addEventListener('gesturestart', this._onGestureStart, { passive: false, capture: true });
+      window.addEventListener('gesturechange', this._onGestureChange, { passive: false, capture: true });
+      window.addEventListener('gestureend', this._onGestureEnd, { passive: false, capture: true });
       this.els.canvas.addEventListener('contextmenu', this._onContext);
       this.els.canvas.addEventListener('dblclick', this._onDblClick);
       window.addEventListener('pointermove', this._onPointerMove);
@@ -1287,6 +1287,10 @@
       window.addEventListener('blur', this._onWinBlur = () => {
         this._spaceDown = false;
         this.els.root.classList.remove('is-space');
+        this._pointers.clear();
+        this._pinch = null;
+        this._gestureActive = false;
+        clearTimeout(this._gestureTimer);
       });
 
       this.els.toolbar.addEventListener('click', (e) => this._onToolbarClick(e));
@@ -1414,10 +1418,11 @@
       this._closeYoutube();
       this._clearLockHold();
       this.els.canvas.removeEventListener('pointerdown', this._onPointerDown);
-      this.els.canvas.removeEventListener('wheel', this._onWheel);
-      this.els.canvas.removeEventListener('gesturestart', this._onGestureStart);
-      this.els.canvas.removeEventListener('gesturechange', this._onGestureChange);
-      this.els.canvas.removeEventListener('gestureend', this._onGestureEnd);
+      this.els.canvas.removeEventListener('wheel', this._onWheel, { capture: true });
+      window.removeEventListener('gesturestart', this._onGestureStart, { capture: true });
+      window.removeEventListener('gesturechange', this._onGestureChange, { capture: true });
+      window.removeEventListener('gestureend', this._onGestureEnd, { capture: true });
+      clearTimeout(this._gestureTimer);
       this.els.canvas.removeEventListener('contextmenu', this._onContext);
       this.els.canvas.removeEventListener('dblclick', this._onDblClick);
       window.removeEventListener('pointermove', this._onPointerMove);
@@ -1491,9 +1496,28 @@
     }
 
     _histKey(data) {
-      const d = clone(data);
-      if (d.viewport) delete d.viewport;
-      return JSON.stringify(d);
+      const nodes = data.nodes || {};
+      const slim = {};
+      Object.keys(nodes).forEach((id) => {
+        const n = nodes[id];
+        if (!n) return;
+        const c = n.content;
+        if (typeof c === 'string' && c.length > 160) {
+          slim[id] = {
+            id: n.id, parentId: n.parentId, dir: n.dir, type: n.type,
+            content: c.length, w: n.w, h: n.h, x: n.x, y: n.y,
+            label: n.label, note: n.note, order: n.order,
+            userPlaced: n.userPlaced, locked: n.locked,
+          };
+        } else slim[id] = n;
+      });
+      return JSON.stringify({
+        rootIds: data.rootIds,
+        nodes: slim,
+        frames: data.frames,
+        frameCats: data.frameCats,
+        links: data.links,
+      });
     }
 
     _captureSnap() {
@@ -1515,16 +1539,13 @@
 
     _recordHistory() {
       const key = this._histKey(this.data);
+      if (key === this._lastHistKey) return;
       const snap = JSON.stringify({
         data: this.data,
         selectedId: this.selectedId,
         selectedIds: [...this.selectedIds],
         selectedFrameId: this.selectedFrameId,
       });
-      if (key === this._lastHistKey) {
-        this._lastSnap = snap;
-        return;
-      }
       if (this._lastSnap) {
         this._undoStack.push(this._lastSnap);
         if (this._undoStack.length > 80) this._undoStack.shift();
@@ -1707,8 +1728,7 @@
     }
 
     _scheduleVpEmit() {
-      clearTimeout(this._vpEmit);
-      this._vpEmit = setTimeout(() => this._emit(), 180);
+      /* pan/zoom stays in memory; it is not a document edit */
     }
 
     fitView(emit) {
@@ -5436,6 +5456,24 @@
       return { nodes: this.nodesArr().filter((n) => !this.hiddenByCollapse(n.id)).map(clone), frames: clone(this.data.frames || []), links };
     }
 
+    _now() {
+      return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    }
+
+    _overCanvas(e) {
+      const canvas = this.els && this.els.canvas;
+      if (!canvas || this._destroyed) return false;
+      if (e.target && (e.target === canvas || canvas.contains(e.target))) return true;
+      if (typeof e.clientX !== 'number') return false;
+      const r = canvas.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    }
+
+    _armGestureTimeout() {
+      clearTimeout(this._gestureTimer);
+      this._gestureTimer = setTimeout(() => { this._gestureActive = false; }, 700);
+    }
+
     _zoomAtClient(clientX, clientY, deltaY, intensity) {
       this._zoomPend = this._zoomPend || { dy: 0, x: clientX, y: clientY, k: intensity || 0.01 };
       this._zoomPend.dy += deltaY;
@@ -5469,24 +5507,23 @@
         return;
       }
       e.preventDefault();
-      if (this._gestureActive || this._pinch) return;
-      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      const pinch = e.ctrlKey || e.metaKey || (e.deltaZ && e.deltaZ !== 0);
-      if (pinch) this._pinchWheelUntil = now + 320;
+      if (this._pinch && this._pointers.size < 2) this._endPinch();
+      if (this._pinch && this._pointers.size >= 2) return;
+      const now = this._now();
+      let dy = e.deltaY;
+      if (!dy && e.deltaZ) dy = e.deltaZ;
+      if (e.deltaMode === 1) dy *= 16;
+      else if (e.deltaMode === 2) dy *= 160;
+      const pinch = !!(e.ctrlKey || e.metaKey || (e.deltaZ && e.deltaZ !== 0));
+      if (pinch && dy) this._pinchWheelUntil = now + 480;
       if (pinch || now < (this._pinchWheelUntil || 0) || this._wheelShouldZoom(e)) {
-        let dy = e.deltaY;
-        if (!dy && e.deltaZ) dy = e.deltaZ;
-        if (e.deltaMode === 1) dy *= 16;
-        else if (e.deltaMode === 2) dy *= 160;
+        if (!dy) return;
         this._zoomAtClient(e.clientX, e.clientY, dy, pinch || now < (this._pinchWheelUntil || 0) ? 0.01 : 0.003);
         return;
       }
+      if (this._gestureActive) return;
       let dx = e.deltaX;
-      let dy = e.deltaY;
-      if (e.deltaMode === 1) {
-        dx *= 16;
-        dy *= 16;
-      }
+      if (e.deltaMode === 1) dx *= 16;
       this.data.viewport.x -= dx;
       this.data.viewport.y -= dy;
       this._applyTransform();
@@ -5494,24 +5531,30 @@
     }
 
     _onGestureStart(e) {
-      if (this._ytOpen) return;
+      if (this._ytOpen || !this._overCanvas(e)) return;
       e.preventDefault();
       this._gestureActive = true;
       this._gestureZoom = this.data.viewport.zoom;
+      this._armGestureTimeout();
     }
 
     _onGestureChange(e) {
-      if (this._ytOpen) return;
+      if (this._ytOpen || !this._overCanvas(e)) return;
       e.preventDefault();
+      this._armGestureTimeout();
+      if (this._now() < (this._pinchWheelUntil || 0)) return;
       this._gestureActive = true;
       const rect = this.els.canvas.getBoundingClientRect();
-      this._setZoomAt((this._gestureZoom || 1) * (e.scale || 1), e.clientX - rect.left, e.clientY - rect.top);
+      const sx = (typeof e.clientX === 'number' ? e.clientX : rect.left + rect.width / 2) - rect.left;
+      const sy = (typeof e.clientY === 'number' ? e.clientY : rect.top + rect.height / 2) - rect.top;
+      this._setZoomAt((this._gestureZoom || 1) * (e.scale || 1), sx, sy);
       this._scheduleVpEmit();
     }
 
     _onGestureEnd(e) {
-      e.preventDefault();
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
       this._gestureActive = false;
+      clearTimeout(this._gestureTimer);
       this._scheduleVpEmit();
     }
 

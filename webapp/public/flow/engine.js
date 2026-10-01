@@ -8,7 +8,7 @@
 
   const FILL_PALETTE = ['#ffffff', '#D7E3FC', '#D8F3DC', '#FFF3C4', '#FFD6E0', '#E4D5F5', '#CFF1F5', '#FFE0C2', '#90CAF9', '#A5D6A7'];
   const LINE_PALETTE = ['#5B7EAE', '#1565c0', '#2e7d32', '#c62828', '#6a1b9a', '#e65100', '#37474f', '#1a2130'];
-  const FLOW_SHAPES = C.SHAPE_TYPES.filter((t) => t !== 'image' && t !== 'sticky');
+  const FLOW_SHAPES = C.SHAPE_TYPES.filter((t) => t !== 'image' && t !== 'sticky' && t !== 'textbox');
   const IMG_W = 280;
   const FRAME_Z = 1;
   const CELL_Z = 10;
@@ -211,7 +211,7 @@
       if (!global.FlowExport) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/flow/export.js?v=10';
+          s.src = '/flow/export.js?v=11';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Export module failed to load'));
           document.body.appendChild(s);
@@ -239,6 +239,7 @@
           <button type="button" data-tool="frame" title="Draw a frame">Frame</button>
           <button type="button" data-tool="image" title="Place image or SVG">Image</button>
           <button type="button" data-tool="shape-sticky" title="Sticky note">Sticky</button>
+          <button type="button" data-tool="shape-textbox" title="Text box (T)">Text</button>
           <div class="fl-palette">
             <button type="button" data-act="shapes" title="Flow shapes">Shapes</button>
             <div class="fl-palette-menu">${shapeBtns}</div>
@@ -293,7 +294,7 @@
             <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="18"></circle></svg>
           </div>
         </div>
-        <div class="fl-hint">Frame to group · Sticky notes · Notes on cells · Connect via blue ports · Export from the top menu</div>
+        <div class="fl-hint">Frame to group · Text boxes (T) · Sticky notes · Notes on cells · Connect via blue ports · Export from the top menu</div>
         <div class="fl-menu"></div>
         <input class="fl-file" type="file" accept="image/*,.svg,image/svg+xml" />
       `;
@@ -339,10 +340,10 @@
       this._onPaste = this._onPaste.bind(this);
       this._onDrop = this._onDrop.bind(this);
       this.els.canvas.addEventListener('pointerdown', this._onPointerDown);
-      this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false });
-      this.els.canvas.addEventListener('gesturestart', this._onGestureStart, { passive: false });
-      this.els.canvas.addEventListener('gesturechange', this._onGestureChange, { passive: false });
-      this.els.canvas.addEventListener('gestureend', this._onGestureEnd, { passive: false });
+      this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false, capture: true });
+      window.addEventListener('gesturestart', this._onGestureStart, { passive: false, capture: true });
+      window.addEventListener('gesturechange', this._onGestureChange, { passive: false, capture: true });
+      window.addEventListener('gestureend', this._onGestureEnd, { passive: false, capture: true });
       this.els.canvas.addEventListener('dblclick', this._onDblClick);
       this.els.canvas.addEventListener('contextmenu', this._onContext);
       this.els.canvas.addEventListener('dragover', (e) => { e.preventDefault(); });
@@ -353,6 +354,14 @@
       window.addEventListener('keydown', this._onKey);
       window.addEventListener('keyup', this._onKeyUp);
       window.addEventListener('paste', this._onPaste);
+      window.addEventListener('blur', this._onWinBlur = () => {
+        this._spaceDown = false;
+        if (this.els.root) this.els.root.classList.remove('is-space');
+        this._pointers.clear();
+        this._pinch = null;
+        this._gestureActive = false;
+        clearTimeout(this._gestureTimer);
+      });
       this.els.toolbar.addEventListener('click', (e) => this._onToolbar(e));
       this.els.inspector.addEventListener('input', (e) => this._onInspector(e));
       this.els.inspector.addEventListener('change', (e) => this._onInspector(e));
@@ -412,10 +421,11 @@
 
     _unbind() {
       this.els.canvas.removeEventListener('pointerdown', this._onPointerDown);
-      this.els.canvas.removeEventListener('wheel', this._onWheel);
-      this.els.canvas.removeEventListener('gesturestart', this._onGestureStart);
-      this.els.canvas.removeEventListener('gesturechange', this._onGestureChange);
-      this.els.canvas.removeEventListener('gestureend', this._onGestureEnd);
+      this.els.canvas.removeEventListener('wheel', this._onWheel, { capture: true });
+      window.removeEventListener('gesturestart', this._onGestureStart, { capture: true });
+      window.removeEventListener('gesturechange', this._onGestureChange, { capture: true });
+      window.removeEventListener('gestureend', this._onGestureEnd, { capture: true });
+      clearTimeout(this._gestureTimer);
       this.els.canvas.removeEventListener('dblclick', this._onDblClick);
       this.els.canvas.removeEventListener('contextmenu', this._onContext);
       this.els.canvas.removeEventListener('drop', this._onDrop);
@@ -426,6 +436,7 @@
       window.removeEventListener('keydown', this._onKey);
       window.removeEventListener('keyup', this._onKeyUp);
       window.removeEventListener('paste', this._onPaste);
+      window.removeEventListener('blur', this._onWinBlur);
       document.removeEventListener('mousedown', this._onDocDown);
       document.removeEventListener('fullscreenchange', this._onFs);
       document.removeEventListener('webkitfullscreenchange', this._onFs);
@@ -500,8 +511,7 @@
     }
 
     _scheduleVpEmit() {
-      clearTimeout(this._vpEmit);
-      this._vpEmit = setTimeout(() => this._emit(), 180);
+      /* pan/zoom stays in memory; it is not a document edit */
     }
 
     _setTool(tool) {
@@ -1705,13 +1715,15 @@
       el.classList.toggle('is-collapsed', s.type === 'sticky' && !!s.collapsed);
       const locked = this.isShapeLocked(s);
       el.classList.toggle('is-locked', locked);
+      el.classList.toggle('is-borderless', !!(s.style && s.style.borderless));
+      el.classList.toggle('is-editing', !!(this._edit && !this._edit.link && this._edit.id === s.id));
       el.title = locked ? 'Locked · press and hold to unlock' : '';
       el.style.left = s.x + 'px';
       el.style.top = s.y + 'px';
       el.style.width = s.w + 'px';
       el.style.height = s.h + 'px';
       el.style.zIndex = String(this._shapeZ(s) + (s.noteOpen ? 40 : 0));
-      const handles = locked ? '' : ((s.type === 'image' || s.type === 'sticky')
+      const handles = locked ? '' : ((s.type === 'image' || s.type === 'sticky' || s.type === 'textbox')
         ? ['nw', 'ne', 'se', 'sw'].map((h) => `<span class="fl-handle" data-h="${h}"></span>`).join('')
         : '<span class="fl-handle" data-h="se"></span>');
       const lockBadge = locked ? '<span class="fl-shape-lock" title="Locked · press and hold to unlock"></span>' : '';
@@ -1756,12 +1768,15 @@
         label.style.lineHeight = (s.h || C.stickyMiniHeight(s)) + 'px';
       } else {
         label.style.lineHeight = '';
+        const valign = C.normValign(fmt.valign, s.type === 'textbox' ? 'top' : 'middle');
+        label.style.alignItems = valign === 'top' ? 'flex-start' : valign === 'bottom' ? 'flex-end' : 'center';
       }
       label.style.fontWeight = fmt.bold ? '800' : '650';
       label.style.fontStyle = fmt.italic ? 'italic' : 'normal';
       label.style.textDecoration = fmt.underline ? 'underline' : 'none';
       label.style.justifyContent = fmt.align === 'left' ? 'flex-start' : fmt.align === 'right' ? 'flex-end' : 'center';
       label.style.textAlign = fmt.align || 'center';
+      label.style.whiteSpace = s.type === 'textbox' ? 'pre-wrap' : '';
     }
 
     _stickyBarHtml(s) {
@@ -1921,10 +1936,12 @@
       const fmt = Object.assign(C.defaultFormat(), s.format || {});
       const line = Object.assign(C.defaultLine(), s.line || {});
       const isSticky = s.type === 'sticky';
+      const isTextbox = s.type === 'textbox';
       const shapeOpts = FLOW_SHAPES.map((t) => `<option value="${t}"${s.type === t ? ' selected' : ''}>${C.SHAPE_META[t].label}</option>`).join('');
+      const valign = C.normValign(fmt.valign, isTextbox ? 'top' : 'middle');
       box.innerHTML = `
         <button type="button" data-act="lock">${anyUnlocked ? 'Lock' : 'Unlock'}</button>
-        ${isSticky ? '' : `<label>Shape <select data-insp="kind">${shapeOpts}</select></label>`}
+        ${isSticky || isTextbox ? '' : `<label>Shape <select data-insp="kind">${shapeOpts}</select></label>`}
         ${isSticky ? `<button type="button" data-act="sticky-toggle">${s.collapsed ? 'Expand' : 'Minimize'}</button>` : this._lineSelectHtml(line.arrow, line.route, line.bend)}
         <label>Fill <input type="color" data-insp="fill" value="${toColor(s.style.fill, '#D7E3FC')}"></label>
         ${this._alphaSlider('fillAlpha', s.style.fillAlpha, 'Fill opacity')}
@@ -1944,6 +1961,10 @@
         <button type="button" data-fmt="align-left" class="${fmt.align === 'left' ? 'active' : ''}">L</button>
         <button type="button" data-fmt="align-center" class="${fmt.align === 'center' ? 'active' : ''}">C</button>
         <button type="button" data-fmt="align-right" class="${fmt.align === 'right' ? 'active' : ''}">R</button>
+        ${isTextbox ? `<button type="button" data-fmt="valign-top" class="${valign === 'top' ? 'active' : ''}" title="Align top">Top</button>
+        <button type="button" data-fmt="valign-middle" class="${valign === 'middle' ? 'active' : ''}" title="Align middle">Mid</button>
+        <button type="button" data-fmt="valign-bottom" class="${valign === 'bottom' ? 'active' : ''}" title="Align bottom">Bot</button>
+        <button type="button" data-act="fit-text" title="Shrink or grow the box to the text">Fit</button>` : ''}
         ${isSticky ? '' : `<button type="button" data-act="notes" class="${s.noteOpen ? 'active' : ''}" title="Add a note to this object">${s.note && s.note.trim() ? 'Notes' : 'Add note'}</button>`}
         <span class="fl-sep"></span>
         ${layerBtns}
@@ -2061,7 +2082,7 @@
           s.format = Object.assign(C.defaultFormat(), s.format, { fontSize: C.clampFontSize(el.value) });
           if (s.type === 'sticky' && s.collapsed) this._applyCollapsedSticky(s);
         }
-        if (key === 'kind' && C.SHAPE_META[el.value] && s.type !== 'image' && s.type !== 'sticky') {
+        if (key === 'kind' && C.SHAPE_META[el.value] && s.type !== 'image' && s.type !== 'sticky' && s.type !== 'textbox') {
           s.type = el.value;
         }
       }, { noUndo: live && this._inspUndo, live: live && key !== 'kind' && key !== 'font' && key !== 'size' });
@@ -2107,6 +2128,16 @@
         }
         return;
       }
+      const fitTextBtn = e.target.closest('[data-act="fit-text"]');
+      if (fitTextBtn) {
+        const boxes = this._selectedShapes().filter((s) => s.type === 'textbox' && !this.isShapeLocked(s));
+        if (!boxes.length) return;
+        this._pushUndo();
+        boxes.forEach((s) => this._fitTextBox(s));
+        this.render();
+        this._emit();
+        return;
+      }
       const stickyBtn = e.target.closest('[data-act="sticky-toggle"]');
       if (stickyBtn) {
         const s = this._selectedShapes().find((x) => x.type === 'sticky');
@@ -2128,6 +2159,9 @@
           if (act === 'align-left') s.format.align = 'left';
           if (act === 'align-center') s.format.align = 'center';
           if (act === 'align-right') s.format.align = 'right';
+          if (act === 'valign-top') s.format.valign = 'top';
+          if (act === 'valign-middle') s.format.valign = 'middle';
+          if (act === 'valign-bottom') s.format.valign = 'bottom';
           if (s.type === 'sticky' && s.collapsed) this._applyCollapsedSticky(s);
         });
         this.render();
@@ -2153,7 +2187,9 @@
         return;
       }
       const fill = e.target.closest('[data-fill-chip]');
-      if (fill) this._patchSelectedStyle((s) => { s.style.fill = fill.getAttribute('data-fill-chip'); });
+      if (fill) this._patchSelectedStyle((s) => {
+        s.style.fill = fill.getAttribute('data-fill-chip');
+      });
       const line = e.target.closest('[data-line-chip]');
       if (line && this.selectedLink && this.data.connectors[this.selectedLink]) {
         this._pushUndo();
@@ -2217,6 +2253,19 @@
         const s = this._selectedShapes().find((x) => x.type === 'sticky');
         if (s) this._toggleSticky(s);
       }
+      if (m === 'edit-text') {
+        const s = this._selectedShapes()[0];
+        if (s) this._beginEdit(s);
+      }
+      if (m === 'fit-text') {
+        const boxes = this._selectedShapes().filter((s) => s.type === 'textbox' && !this.isShapeLocked(s));
+        if (boxes.length) {
+          this._pushUndo();
+          boxes.forEach((s) => this._fitTextBox(s));
+          this.render();
+          this._emit();
+        }
+      }
       if (m === 'rename' && this.selectedFrameId) this._beginFrameRename(this.selectedFrameId);
       if (m === 'fit' && this.selectedFrameId) this.fitFrameToContent(this.selectedFrameId);
       if (m === 'cat' && this.selectedFrameId) this._assignFrameCat(this.selectedFrameId, btn.getAttribute('data-cat') || null);
@@ -2238,8 +2287,9 @@
         }
         this._selectOnly(shapeEl.dataset.id);
         this.render();
-        this._openMenu(x, y, `<div class="fl-menu-label">${s && s.type === 'sticky' ? 'Sticky' : 'Shape'}</div>
+        this._openMenu(x, y, `<div class="fl-menu-label">${s && s.type === 'sticky' ? 'Sticky' : s && s.type === 'textbox' ? 'Text box' : 'Shape'}</div>
           <button type="button" data-m="lock">${s && s.locked ? 'Unlock' : 'Lock'}</button>
+          ${s && s.type === 'textbox' ? `<button type="button" data-m="edit-text"${s && this.isShapeLocked(s) ? ' disabled' : ''}>Edit text</button><button type="button" data-m="fit-text"${s && this.isShapeLocked(s) ? ' disabled' : ''}>Fit to text</button>` : ''}
           ${s && s.type === 'sticky' ? `<button type="button" data-m="sticky-toggle"${s && this.isShapeLocked(s) ? ' disabled' : ''}>${s.collapsed ? 'Expand' : 'Minimize'}</button>` : `<button type="button" data-m="notes"${s && this.isShapeLocked(s) ? ' disabled' : ''}>Notes</button>`}
           <button type="button" data-m="front">Bring to front</button>
           <button type="button" data-m="forward">Bring forward</button>
@@ -2340,7 +2390,7 @@
       if (!shape || this.isShapeLocked(shape)) return;
       this._endEdit(true);
       const ta = document.createElement('textarea');
-      ta.className = 'fl-edit';
+      ta.className = 'fl-edit' + (shape.type === 'textbox' ? ' is-textbox' : '');
       ta.value = shape.text || '';
       ta.style.left = shape.x + 'px';
       ta.style.top = shape.y + 'px';
@@ -2352,15 +2402,33 @@
       ta.style.fontSize = (fmt.fontSize || 14) + 'px';
       ta.style.fontWeight = fmt.bold ? '800' : '650';
       ta.style.fontStyle = fmt.italic ? 'italic' : 'normal';
-      ta.style.textAlign = fmt.align || 'center';
+      ta.style.textAlign = fmt.align || (shape.type === 'textbox' ? 'left' : 'center');
+      ta.style.textDecoration = fmt.underline ? 'underline' : 'none';
+      if (shape.type === 'textbox') {
+        ta.style.background = C.hexAlpha((shape.style && shape.style.fill) || '#ffffff', shape.style && shape.style.fillAlpha);
+      }
       this.els.world.appendChild(ta);
-      this._edit = { el: ta, id: shape.id };
+      this._edit = { el: ta, id: shape.id, type: shape.type, startH: shape.h };
+      const host = this.els.world.querySelector(`.fl-shape[data-id="${CSS.escape(shape.id)}"]`);
+      if (host) host.classList.add('is-editing');
       ta.focus();
-      ta.select();
+      if (shape.type !== 'textbox') ta.select();
+      else ta.setSelectionRange(0, ta.value.length);
+      const grow = () => {
+        if (shape.type !== 'textbox') return;
+        ta.style.height = '0px';
+        const next = Math.max(shape.h, Math.min(900, ta.scrollHeight + 10));
+        ta.style.height = next + 'px';
+      };
+      ta.addEventListener('input', grow);
+      grow();
       ta.addEventListener('blur', () => this._endEdit(true));
       ta.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); this._endEdit(true); }
-        if (ev.key === 'Escape') { ev.preventDefault(); this._endEdit(false); }
+        if (ev.key === 'Escape') { ev.preventDefault(); this._endEdit(false); return; }
+        if (ev.key === 'Enter' && (shape.type === 'textbox' ? (ev.metaKey || ev.ctrlKey) : !ev.shiftKey)) {
+          ev.preventDefault();
+          this._endEdit(true);
+        }
       });
     }
 
@@ -2368,8 +2436,11 @@
       if (!this._edit) return;
       const { el, id, link } = this._edit;
       const next = el.value;
+      const grownH = el.offsetHeight;
+      const host = !link && this.els.world.querySelector(`.fl-shape[data-id="${CSS.escape(id)}"]`);
       el.remove();
       this._edit = null;
+      if (host) host.classList.remove('is-editing');
       if (!commit) return;
       if (link) {
         const c = this.data.connectors[id];
@@ -2382,13 +2453,32 @@
         return;
       }
       const shape = this.data.shapes[id];
-      if (shape && next !== shape.text) {
+      if (!shape) return;
+      const grew = shape.type === 'textbox' && grownH > shape.h + 4;
+      if (next !== shape.text || grew) {
         this._pushUndo();
         shape.text = next;
+        if (grew) shape.h = C.snap(Math.max(C.MIN_H, grownH));
         if (shape.type === 'sticky' && shape.collapsed) this._applyCollapsedSticky(shape);
         this.render();
         this._emit();
       }
+    }
+
+    _fitTextBox(s) {
+      if (!s || s.type !== 'textbox') return;
+      const fmt = Object.assign(C.defaultFormat(), s.format || {});
+      const fs = Number(fmt.fontSize) || 16;
+      const canvas = this._measureCanvas || (this._measureCanvas = document.createElement('canvas'));
+      const ctx = canvas.getContext('2d');
+      ctx.font = `${fmt.italic ? 'italic ' : ''}${fmt.bold ? 800 : 650} ${fs}px ${C.fontCss(fmt.fontFamily)}`;
+      const lines = String(s.text || 'Text').split(/\n/);
+      let maxW = 0;
+      lines.forEach((line) => {
+        maxW = Math.max(maxW, ctx.measureText(line || ' ').width);
+      });
+      s.w = C.snap(C.clamp(Math.ceil(maxW + 28), 72, 720));
+      s.h = C.snap(C.clamp(Math.ceil(Math.max(1, lines.length) * fs * 1.38 + 22), 36, 900));
     }
 
     _placeImage(src, x, y, replaceId) {
@@ -2617,6 +2707,7 @@
         const id = shapeEl.dataset.id;
         const shape = this.data.shapes[id];
         if (shape && this._beginShapeLockHold(shape, e)) return;
+        const tapEdit = !!(shape && shape.type === 'textbox' && this.selected.has(id) && this.selected.size === 1 && !e.shiftKey);
         if (!this.selected.has(id) && !e.shiftKey) this._selectOnly(id);
         else if (e.shiftKey) {
           if (this.selected.has(id)) this.selected.delete(id);
@@ -2628,6 +2719,7 @@
           kind: 'move',
           start: { x: w.x, y: w.y },
           items: this._selectedShapes().filter((s) => !this.isShapeLocked(s)).map((s) => ({ id: s.id, x: s.x, y: s.y })),
+          tapEdit,
         };
         this.render();
         return;
@@ -2898,6 +2990,10 @@
         this._selectedShapes().forEach((s) => this._assignFrame(s));
         this.render();
         if (d.didUndo) this._emit();
+        else if (d.tapEdit) {
+          const s = this.data.shapes[d.items && d.items[0] && d.items[0].id];
+          if (s && s.type === 'textbox' && !this.isShapeLocked(s)) this._beginEdit(s);
+        }
         return;
       }
       if (d.kind === 'resize' || d.kind === 'resize-frame' || d.kind === 'move-frame') {
@@ -2906,6 +3002,7 @@
         return;
       }
       if (d.kind === 'draw-shape') {
+        let created = null;
         if (!d.tempId) {
           this._pushUndo();
           const s = C.defaultShape(d.type, d.x0, d.y0);
@@ -2915,13 +3012,18 @@
           this._assignFrame(s);
           this.data.shapes[s.id] = s;
           this._selectOnly(s.id);
+          created = s;
         } else {
           const s = this.data.shapes[d.tempId];
           if (s) this._assignFrame(s);
+          created = s;
         }
         this._setTool('select');
         this.render();
         this._emit();
+        if (created && created.type === 'textbox' && !this.isShapeLocked(created)) {
+          requestAnimationFrame(() => this._beginEdit(created));
+        }
         return;
       }
       if (d.kind === 'draw-frame') {
@@ -2976,18 +3078,41 @@
       }
     }
 
+    _now() {
+      return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    }
+
+    _overCanvas(e) {
+      const canvas = this.els && this.els.canvas;
+      if (!canvas || !this._active()) return false;
+      if (e.target && (e.target === canvas || canvas.contains(e.target))) return true;
+      if (typeof e.clientX !== 'number') return false;
+      const r = canvas.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    }
+
+    _armGestureTimeout() {
+      clearTimeout(this._gestureTimer);
+      this._gestureTimer = setTimeout(() => { this._gestureActive = false; }, 700);
+    }
+
     _onWheel(e) {
       if (!this._active()) return;
       e.preventDefault();
-      if (this._gestureActive || this._pinch) return;
-      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      const pinch = e.ctrlKey || e.metaKey || (e.deltaZ && e.deltaZ !== 0);
-      if (pinch) this._pinchWheelUntil = now + 320;
+      if (this._pinch && this._pointers.size < 2) {
+        this._pinch = null;
+        this._scheduleVpEmit();
+      }
+      if (this._pinch && this._pointers.size >= 2) return;
+      const now = this._now();
+      let dy = e.deltaY;
+      if (!dy && e.deltaZ) dy = e.deltaZ;
+      if (e.deltaMode === 1) dy *= 16;
+      else if (e.deltaMode === 2) dy *= 160;
+      const pinch = !!(e.ctrlKey || e.metaKey || (e.deltaZ && e.deltaZ !== 0));
+      if (pinch && dy) this._pinchWheelUntil = now + 480;
       if (pinch || now < (this._pinchWheelUntil || 0) || e.deltaMode === 1 || e.deltaMode === 2) {
-        let dy = e.deltaY;
-        if (!dy && e.deltaZ) dy = e.deltaZ;
-        if (e.deltaMode === 1) dy *= 16;
-        else if (e.deltaMode === 2) dy *= 160;
+        if (!dy) return;
         this._zoomPend = this._zoomPend || { dy: 0, x: e.clientX, y: e.clientY, k: 0.01 };
         this._zoomPend.dy += dy;
         this._zoomPend.x = e.clientX;
@@ -3006,6 +3131,7 @@
         }
         return;
       }
+      if (this._gestureActive) return;
       this.data.viewport.x -= e.deltaX;
       this.data.viewport.y -= e.deltaY;
       this._applyTransform();
@@ -3013,24 +3139,30 @@
     }
 
     _onGestureStart(e) {
-      if (!this._active()) return;
+      if (!this._overCanvas(e)) return;
       e.preventDefault();
       this._gestureActive = true;
       this._gestureZoom = this.data.viewport.zoom;
+      this._armGestureTimeout();
     }
 
     _onGestureChange(e) {
-      if (!this._active()) return;
+      if (!this._overCanvas(e)) return;
       e.preventDefault();
+      this._armGestureTimeout();
+      if (this._now() < (this._pinchWheelUntil || 0)) return;
       this._gestureActive = true;
       const rect = this.els.canvas.getBoundingClientRect();
-      this._setZoomAt((this._gestureZoom || 1) * (e.scale || 1), e.clientX - rect.left, e.clientY - rect.top);
+      const sx = (typeof e.clientX === 'number' ? e.clientX : rect.left + rect.width / 2) - rect.left;
+      const sy = (typeof e.clientY === 'number' ? e.clientY : rect.top + rect.height / 2) - rect.top;
+      this._setZoomAt((this._gestureZoom || 1) * (e.scale || 1), sx, sy);
       this._scheduleVpEmit();
     }
 
     _onGestureEnd(e) {
-      e.preventDefault();
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
       this._gestureActive = false;
+      clearTimeout(this._gestureTimer);
       this._scheduleVpEmit();
     }
 
@@ -3115,6 +3247,7 @@
       if ((e.key === 'v' || e.key === 'V') && !meta) this._setTool('select');
       if ((e.key === 'c' || e.key === 'C') && !meta) this._setTool('connect');
       if (e.key === 'f' || e.key === 'F') this._setTool('frame');
+      if ((e.key === 't' || e.key === 'T') && !meta) this._setTool('shape-textbox');
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); this._deleteSelected(); }
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && this.selected.size) {
         e.preventDefault();

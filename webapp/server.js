@@ -18,13 +18,21 @@ const GIT_ENV_ARGS = ['-c', 'user.email=docviewer@local', '-c', 'user.name=JsonD
 const GIT_TIMEOUT_MS = 8000;
 let gitDisabled = false;
 
+let gitBusy = false;
 function git(args) {
-  return execFileSync('git', [...GIT_ENV_ARGS, ...args], {
-    cwd: DATA_ROOT,
-    encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: 20 * 1024 * 1024,
-  });
+  if (gitDisabled) throw new Error('git disabled');
+  if (gitBusy) throw new Error('git busy');
+  gitBusy = true;
+  try {
+    return execFileSync('git', [...GIT_ENV_ARGS, ...args], {
+      cwd: DATA_ROOT,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+  } finally {
+    gitBusy = false;
+  }
 }
 
 function gitRepoOk() {
@@ -102,6 +110,18 @@ function commitFile(relPathOrPaths, message) {
 }
 
 app.use(express.json({ limit: '40mb' }));
+// json() skips non-JSON types but still sets req.body = {} and does not
+// consume the stream. A 400 then leaves the unread POST in the socket
+// (Chrome Recv-Q megabytes, 6 connections stuck, CSS "pending").
+app.use(express.text({ type: ['text/plain', 'text/*'], limit: '40mb' }));
+app.use((req, res, next) => {
+  const drain = () => {
+    if (!req.readableEnded) req.resume();
+  };
+  res.on('finish', drain);
+  res.on('close', drain);
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
@@ -428,7 +448,14 @@ app.get('/api/events', (req, res) => {
   res.flushHeaders();
   res.write('retry: 15000\n\n');
   sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
+  const idle = setTimeout(() => {
+    sseClients.delete(res);
+    try { res.end(); } catch (e) { /* ignore */ }
+  }, 25000);
+  req.on('close', () => {
+    clearTimeout(idle);
+    sseClients.delete(res);
+  });
 });
 
 setInterval(() => {
@@ -441,9 +468,22 @@ setInterval(() => {
   }
 }, 15000).unref();
 
+let fsRev = 1;
+
 function broadcastRefresh() {
-  for (const client of sseClients) client.write('data: refresh\n\n');
+  fsRev += 1;
+  for (const client of [...sseClients]) {
+    try {
+      client.write('data: refresh\n\n');
+    } catch (e) {
+      sseClients.delete(client);
+    }
+  }
 }
+
+app.get('/api/changes', (req, res) => {
+  res.json({ rev: fsRev });
+});
 
 function listAllFiles(dir, out) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -461,27 +501,26 @@ function listAllFiles(dir, out) {
 
 let knownFiles = new Set(listAllFiles(DATA_ROOT, []));
 let watchDebounce = null;
+const writingFiles = new Set();
 
 function reconcileWatchedFiles() {
   const current = new Set(listAllFiles(DATA_ROOT, []));
   const added = [...current].filter((p) => !knownFiles.has(p));
   const removed = [...knownFiles].filter((p) => !current.has(p));
   knownFiles = current;
-
-  for (const p of added) {
-    commitFile(p, `Auto-detected new file ${p}`);
-  }
-  for (const p of removed) {
-    removeFavoritesUnder(p);
-  }
+  for (const p of removed) removeFavoritesUnder(p);
   if (added.length || removed.length) broadcastRefresh();
 }
 
 try {
   fs.watch(DATA_ROOT, { recursive: true }, (eventType, filename) => {
-    if (!filename || filename.split(path.sep).some((part) => part === '.git')) return;
+    if (!filename) return;
+    const parts = filename.split(path.sep);
+    if (parts.some((part) => part === '.git')) return;
+    const rel = parts.join('/');
+    if (writingFiles.has(rel) || writingFiles.has(filename)) return;
     clearTimeout(watchDebounce);
-    watchDebounce = setTimeout(reconcileWatchedFiles, 500);
+    watchDebounce = setTimeout(reconcileWatchedFiles, 800);
   });
 } catch (err) {
   console.error('File watching unavailable on this platform:', err.message);
@@ -808,7 +847,7 @@ app.post('/api/import', (req, res) => {
   }
 });
 
-const MAX_EDITABLE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_EDITABLE_SIZE = 40 * 1024 * 1024;
 
 app.get('/api/file', (req, res) => {
   try {
@@ -821,7 +860,7 @@ app.get('/api/file', (req, res) => {
       return res.status(400).json({ error: 'This looks like a binary file and cannot be edited here' });
     }
     if (stat.size > MAX_EDITABLE_SIZE) {
-      return res.status(400).json({ error: 'File is too large to open in the editor (limit 5MB)' });
+      return res.status(400).json({ error: 'File is too large to open in the editor (limit 40MB)' });
     }
     const content = fs.readFileSync(full, 'utf8');
     res.json({ path: req.query.path, content });
@@ -830,16 +869,52 @@ app.get('/api/file', (req, res) => {
   }
 });
 
-app.post('/api/file', (req, res) => {
+function parseFilePost(req) {
+  const body = req.body;
+  let relPath = req.query && req.query.path;
+  let content = null;
+  if (typeof body === 'string') {
+    const ct = String(req.headers['content-type'] || '');
+    if (ct.includes('application/json') || (body.charAt(0) === '{' && body.includes('"content"'))) {
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed === 'object') {
+          relPath = relPath || parsed.path;
+          if (Object.prototype.hasOwnProperty.call(parsed, 'content')) content = parsed.content;
+        }
+      } catch (e) {
+        content = body;
+      }
+    } else {
+      content = body;
+    }
+  } else if (body && typeof body === 'object' && !Buffer.isBuffer(body)) {
+    relPath = relPath || body.path;
+    if (Object.prototype.hasOwnProperty.call(body, 'content')) content = body.content;
+  } else if (Buffer.isBuffer(body)) {
+    content = body.toString('utf8');
+  }
+  return { relPath, content };
+}
+
+app.post('/api/file', async (req, res) => {
   try {
-    const { path: relPath, content } = req.body;
+    const { relPath, content } = parseFilePost(req);
     if (!relPath) return res.status(400).json({ error: 'path is required' });
+    if (content == null) return res.status(400).json({ error: 'content is required' });
     const full = resolveSafe(relPath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, 'utf8');
-    res.json({ ok: true });
+    const rel = path.relative(DATA_ROOT, full).split(path.sep).join('/');
+    writingFiles.add(rel);
+    try {
+      await fs.promises.mkdir(path.dirname(full), { recursive: true });
+      await fs.promises.writeFile(full, String(content), 'utf8');
+      knownFiles.add(rel);
+      res.json({ ok: true });
+    } finally {
+      setTimeout(() => writingFiles.delete(rel), 1200);
+    }
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    if (!res.headersSent) res.status(400).json({ error: err.message });
   }
 });
 
@@ -1024,6 +1099,12 @@ function openInBrowser(url) {
   });
 }
 
+app.use((err, req, res, next) => {
+  console.error('Request failed:', err && err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: (err && err.message) || 'Server error' });
+});
+
 const server = app.listen(PORT, () => {
   const actualPort = server.address().port;
   const url = `http://localhost:${actualPort}`;
@@ -1032,6 +1113,9 @@ const server = app.listen(PORT, () => {
   openInBrowser(url);
   setImmediate(initGitRepo);
 });
+server.requestTimeout = 60000;
+server.headersTimeout = 30000;
+server.keepAliveTimeout = 5000;
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {

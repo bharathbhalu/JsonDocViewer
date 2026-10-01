@@ -647,6 +647,8 @@ html[data-theme="dark"] .ask-kind.active { color: #10141c; }
   color: var(--ink);
   line-height: 1.45;
 }
+.ask-leave .ask-actions { justify-content: flex-end; }
+#ask-extra.hidden { display: none; }
 .ask-actions .ask-danger {
   background: #c62828;
   border-color: #c62828;

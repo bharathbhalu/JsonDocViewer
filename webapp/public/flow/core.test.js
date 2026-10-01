@@ -282,4 +282,30 @@ function testFrameCats() {
 }
 
 testFrameCats();
+
+function testTextBox() {
+  const s = FlowCore.defaultShape('textbox', 12, 20);
+  assert.equal(s.type, 'textbox');
+  assert.equal(s.text, 'Text');
+  assert.equal(s.format.align, 'left');
+  assert.equal(s.format.valign, 'top');
+  assert.equal(s.style.borderless, true);
+  assert.equal(s.style.fillAlpha, 0);
+  assert.ok(s.w >= 120);
+  assert.ok(FlowCore.shapePath('textbox', 200, 80).indexOf('M') === 0);
+  const data = FlowCore.normalize({
+    shapes: { t: { id: 't', type: 'textbox', x: 0, y: 0, w: 180, h: 60, text: 'Hello\nWorld' } },
+  });
+  assert.equal(data.shapes.t.type, 'textbox');
+  assert.equal(data.shapes.t.style.fillAlpha, 0);
+  assert.equal(data.shapes.t.format.valign, 'top');
+  assert.equal(data.shapes.t.text, 'Hello\nWorld');
+  const parsed = FlowCore.parseHtml(FlowCore.serializeToHtml(data, 'Text'));
+  assert.equal(parsed.shapes.t.type, 'textbox');
+  assert.equal(parsed.shapes.t.format.valign, 'top');
+  assert.equal(FlowCore.normValign('bottom'), 'bottom');
+  assert.equal(FlowCore.normValign('nope', 'top'), 'top');
+}
+
+testTextBox();
 console.log('flow core tests ok');

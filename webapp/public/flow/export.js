@@ -207,7 +207,13 @@
         const lines = wrapToWidth(s.text, font, Math.max(20, s.w - 24));
         const lineH = fs * 1.3;
         const block = lines.length * lineH;
-        const startY = y + Math.max(fs, (s.type === 'sticky' ? 28 + fs * 0.82 : (s.h - block) / 2 + fs * 0.82));
+        const valign = C.normValign(fmt.valign, s.type === 'textbox' ? 'top' : 'middle');
+        const startY = y + Math.max(fs, (
+          s.type === 'sticky' ? 28 + fs * 0.82
+          : valign === 'top' ? 10 + fs * 0.82
+          : valign === 'bottom' ? s.h - 10 - (lines.length - 1) * lineH - fs * 0.18
+          : (s.h - block) / 2 + fs * 0.82
+        ));
         const align = fmt.align || 'center';
         const anchor = align === 'right' ? 'end' : align === 'left' ? 'start' : 'middle';
         const tx = align === 'right' ? x + s.w - 12 : align === 'left' ? x + 12 : x + s.w / 2;

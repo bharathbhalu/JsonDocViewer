@@ -16,6 +16,7 @@
     display: { label: 'Display', w: 176, h: 76 },
     connector: { label: 'On-page', w: 48, h: 48 },
     sticky: { label: 'Sticky note', w: 176, h: 160 },
+    textbox: { label: 'Text box', w: 220, h: 88 },
   };
   const SHAPE_TYPES = Object.keys(SHAPE_META);
   const PORTS = ['n', 'e', 's', 'w'];
@@ -54,7 +55,11 @@
   }
 
   function defaultFormat() {
-    return { bold: false, italic: false, underline: false, fontSize: 14, align: 'center', fontFamily: 'sans' };
+    return { bold: false, italic: false, underline: false, fontSize: 14, align: 'center', valign: 'middle', fontFamily: 'sans' };
+  }
+
+  function normValign(v, fallback) {
+    return (v === 'top' || v === 'middle' || v === 'bottom') ? v : (fallback || 'middle');
   }
 
   const FONT_FACES = [
@@ -188,7 +193,7 @@
       y: snap(y || 0),
       w: meta.w,
       h: meta.h,
-      text: t === 'terminator' ? 'Start' : t === 'decision' ? 'Decision?' : t === 'connector' ? '' : t === 'sticky' ? 'Note' : meta.label,
+      text: t === 'terminator' ? 'Start' : t === 'decision' ? 'Decision?' : t === 'connector' ? '' : t === 'sticky' ? 'Note' : t === 'textbox' ? 'Text' : meta.label,
       src: '',
       imgAspect: meta.w / meta.h,
       z: 10,
@@ -209,6 +214,15 @@
       shape.style.border = '#D4B45A';
       shape.format.align = 'left';
       shape.format.fontFamily = 'hand';
+    }
+    if (t === 'textbox') {
+      shape.style.fill = '#ffffff';
+      shape.style.fillAlpha = 0;
+      shape.style.border = '#c5c9d1';
+      shape.style.borderless = true;
+      shape.format.align = 'left';
+      shape.format.valign = 'top';
+      shape.format.fontSize = 16;
     }
     return shape;
   }
@@ -846,7 +860,10 @@
       const type = s.type === 'image' ? 'image' : (SHAPE_META[s.type] ? s.type : 'process');
       const meta = SHAPE_META[type] || { w: 280, h: 200 };
       const style = Object.assign(defaultStyle(), s.style || {});
-      style.fillAlpha = clamp01(style.fillAlpha, 1);
+      const rawFillAlpha = s.style && s.style.fillAlpha;
+      style.fillAlpha = type === 'textbox' && (rawFillAlpha == null || rawFillAlpha === '')
+        ? 0
+        : clamp01(style.fillAlpha, type === 'textbox' ? 0 : 1);
       style.borderAlpha = clamp01(style.borderAlpha, 1);
       style.textAlpha = clamp01(style.textAlpha, 1);
       style.opacity = clamp01(style.opacity, 1);
@@ -857,6 +874,10 @@
       const collapsed = type === 'sticky' && !!s.collapsed;
       const format = Object.assign(defaultFormat(), s.format || {});
       format.fontSize = clampFontSize(format.fontSize);
+      format.valign = normValign(format.valign, type === 'textbox' ? 'top' : 'middle');
+      if (type === 'textbox' && !(s.format && (s.format.valign === 'top' || s.format.valign === 'middle' || s.format.valign === 'bottom'))) {
+        format.valign = 'top';
+      }
       const text = typeof s.text === 'string' ? s.text : '';
       const miniW = Number(s.miniW) > 0 ? Number(s.miniW) : 0;
       const collapsedSize = collapsed
@@ -942,7 +963,7 @@
   }
 
   function serializeToHtml(data, title) {
-    const json = JSON.stringify(normalize(data), null, 2).replace(/</g, '\\u003c');
+    const json = JSON.stringify(normalize(data)).replace(/</g, '\\u003c');
     const t = String(title || 'Flow').replace(/[<>]/g, '');
     return `<!DOCTYPE html>\n<html lang="en" data-docviewer="flow">\n<head><meta charset="UTF-8"><title>${t}</title></head>\n<body>\n<script type="application/json" id="flow-data">\n${json}\n</script>\n</body>\n</html>\n`;
   }
@@ -1006,6 +1027,10 @@
     if (type === 'sticky') {
       const fold = stickyFoldSize(W, H);
       return `M 0 0 H ${W - fold} L ${W} ${fold} V ${H} H 0 Z`;
+    }
+    if (type === 'textbox') {
+      const r = Math.min(8, W / 5, H / 5);
+      return `M ${r} 0 H ${W - r} Q ${W} 0 ${W} ${r} V ${H - r} Q ${W} ${H} ${W - r} ${H} H ${r} Q 0 ${H} 0 ${H - r} V ${r} Q 0 0 ${r} 0 Z`;
     }
     const r = Math.min(12, W / 4, H / 4);
     return `M ${r} 0 H ${W - r} Q ${W} 0 ${W} ${r} V ${H - r} Q ${W} ${H} ${W - r} ${H} H ${r} Q 0 ${H} 0 ${H - r} V ${r} Q 0 0 ${r} 0 Z`;
@@ -1307,6 +1332,7 @@
     defaultLine,
     clampBend,
     defaultFormat,
+    normValign,
     defaultShape,
     collapseSticky,
     expandSticky,
