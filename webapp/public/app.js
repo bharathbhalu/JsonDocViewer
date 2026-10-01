@@ -1583,8 +1583,8 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=91', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=116', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=94', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=121', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
@@ -1854,7 +1854,8 @@ async function saveCurrentFile() {
     clearTimeout(autoSaveTimer);
     setStatus('Saving…');
     await new Promise((r) => setTimeout(r, 0));
-    if (boardEngine && typeof boardEngine.commitEdit === 'function') boardEngine.commitEdit();
+    if (boardEngine && typeof boardEngine.flushEdit === 'function') boardEngine.flushEdit();
+    else if (boardEngine && typeof boardEngine.commitEdit === 'function') boardEngine.commitEdit();
     const content = getSaveContent();
     const { res, data } = await postFileContent(currentPath, content);
     if (!res.ok) {

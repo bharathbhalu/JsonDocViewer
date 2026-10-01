@@ -783,32 +783,26 @@
 }
 
 .mm-node.editing .mm-node-body {
-  outline: none;
-  user-select: text;
+  visibility: hidden;
 }
 
-.mm-node.editing textarea.mm-text-edit {
-  display: block;
-  flex: 1 1 auto;
-  align-self: stretch;
-  width: 100%;
-  height: 100%;
+.mm-text-edit-overlay {
+  position: absolute;
+  z-index: 30;
+  box-sizing: border-box;
   margin: 0;
-  border: 0;
-  border-radius: inherit;
+  border: 1.5px solid transparent;
+  border-radius: 22px;
+  padding: 7px 28px 8px;
   background: transparent;
-  color: inherit;
-  font: inherit;
-  font-weight: inherit;
-  font-style: inherit;
-  font-size: inherit;
-  font-family: inherit;
-  line-height: inherit;
-  text-align: inherit;
-  text-decoration: inherit;
+  color: #1a2130;
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 500;
+  white-space: pre-wrap;
+  overflow: hidden;
   outline: none;
   resize: none;
-  overflow: hidden;
   box-shadow: none;
   appearance: none;
   -webkit-appearance: none;
