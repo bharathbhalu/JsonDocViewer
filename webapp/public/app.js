@@ -1583,14 +1583,14 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=90', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=113', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=91', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=116', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=23', 'data-fl-css');
   return ensureScript('/flow/core.js?v=20', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=31', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=33', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function getSaveContent() {

@@ -500,6 +500,12 @@
     return escapeHtml(s).replace(/'/g, '&#39;');
   }
 
+  function readEditValue(el) {
+    if (!el) return '';
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return el.value;
+    return String(el.textContent || '').replace(/\n$/, '');
+  }
+
   function stripTags(s) {
     return String(s == null ? '' : s).replace(/<[^>]+>/g, '');
   }
@@ -4191,29 +4197,35 @@
 
     startEdit(id) {
       if (this.readOnly || this.isNodeLocked(id)) return;
+      const same = this.editingId === id;
+      const existing = this.els.world.querySelector(`.mm-node[data-id="${CSS.escape(id)}"] [data-edit]`);
       this.editingId = id;
       this.selectOnly(id);
-      this.render();
+      if (!same || !existing) this.render();
       const n = this.data.nodes[id];
       const el = this.els.world.querySelector(`.mm-node[data-id="${CSS.escape(id)}"]`);
       if (!el) return;
       const body = el.querySelector('[data-edit]');
       if (body) {
-        body.focus();
-        if (body.select) body.select();
-        else if (window.getSelection && body.childNodes.length) {
-          const range = document.createRange();
-          range.selectNodeContents(body);
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
+        if (!same || document.activeElement !== body) body.focus();
+        if (!same) {
+          if (body.select) body.select();
+          else if (window.getSelection && body.childNodes.length) {
+            const range = document.createRange();
+            range.selectNodeContents(body);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
         }
       }
       this._positionFormatBar(el);
-      if (body && n && n.type === 'text') {
+      if (body && n && n.type === 'text' && !body._mmLiveBound) {
+        body._mmLiveBound = true;
         body.addEventListener('input', () => {
-          if (this.readOnly || n.userSized) return;
-          n.content = (body.innerText || '').replace(/\n$/, '');
+          if (this.readOnly) return;
+          n.content = readEditValue(body);
+          if (n.userSized) return;
           if (this._fitAutoNode(n, true)) {
             this._paintSubtreeBoxes(n.id);
             this._renderLinks(this.els.svg);
@@ -4230,10 +4242,7 @@
       const el = this.els.world.querySelector(`.mm-node[data-id="${CSS.escape(id)}"]`);
       if (n && el) {
         const body = el.querySelector('[data-edit]');
-        if (body) {
-          if (body.tagName === 'TEXTAREA' || body.tagName === 'INPUT') n.content = body.value;
-          else n.content = body.innerText.replace(/\n$/,'');
-        }
+        if (body) n.content = readEditValue(body);
         const lang = el.querySelector('[data-lang]');
         if (lang) n.language = lang.value;
         const label = el.querySelector('[data-label]');
@@ -4534,9 +4543,10 @@
         bodyEl.style.textDecoration = 'inherit';
       }
 
+      const editing = this.editingId === n.id;
       const sig = [
-        n.type, n.content, n.label, n.language,
-        this.editingId === n.id ? 'e' : '',
+        n.type, editing ? '' : n.content, n.label, n.language,
+        editing ? 'e' : '',
         this.selectedIds.has(n.id) || this.selectedId === n.id ? 's' : '',
         fmt.fontFamily, fmt.fontSize, fmt.align, fmt.bold, fmt.italic, fmt.underline,
         n.collapsedDirs.left ? 1 : 0, n.collapsedDirs.right ? 1 : 0,
@@ -4549,11 +4559,15 @@
         n.parentId ? '' : 'root',
         global.hljs ? 'hl' : '',
       ].join('|');
-      if (this.editingId === n.id && el.querySelector('[data-edit]')) return;
+      if (editing && el.querySelector('[data-edit]')) return;
       if (el.dataset.sig === sig) return;
       el.dataset.sig = sig;
       el.innerHTML = this._nodeInner(n);
       this._bindNodeButtons(el, n);
+      const editor = el.querySelector('[data-edit]');
+      if (editor && (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT')) {
+        editor.value = n.content || '';
+      }
       const bodyAfter = el.querySelector('.mm-node-body');
       if (bodyAfter) {
         bodyAfter.style.fontSize = 'inherit';
@@ -4620,7 +4634,7 @@
         }
       } else {
         if (editing) {
-          body = `<div class="mm-node-body" data-edit contenteditable="true">${escapeHtml(n.content)}</div>`;
+          body = `<textarea class="mm-node-body mm-text-edit" data-edit rows="1">${escapeHtml(n.content || '')}</textarea>`;
         } else {
           body = `<div class="mm-node-body">${escapeHtml(n.content || '')}</div>`;
         }
@@ -7050,7 +7064,8 @@
         return;
       }
       if (typing && this.editingId) {
-        if (e.key === 'Enter' && !e.shiftKey && tag !== 'TEXTAREA') {
+        const editing = this.data.nodes[this.editingId];
+        if (e.key === 'Enter' && !e.shiftKey && !(editing && editing.type === 'code')) {
           e.preventDefault();
           this.commitEdit();
         }
