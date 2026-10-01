@@ -2483,9 +2483,8 @@
       this._clearParentGap(parent, dir, skipPlaced);
     }
 
-    _spreadAncestors(node, childDir) {
+    _spreadAncestors(node) {
       if (!node) return;
-      if (childDir) this._slideNodeOnAxis(node, childDir);
       const seen = new Set([node.id]);
       let cur = node;
       while (cur && cur.parentId) {
@@ -2494,9 +2493,26 @@
         if (!anc || !side || seen.has(anc.id)) break;
         seen.add(anc.id);
         this._packSide(anc, side, false, cur.id);
-        this._slideNodeOnAxis(anc, side);
         cur = anc;
       }
+    }
+
+    _balanceSide(parent, dir) {
+      if (!parent || !dir) return;
+      const kids = this.childrenOf(parent.id, dir).filter((k) => !k.userPlaced);
+      if (!kids.length) return;
+      const horiz = dir === 'right' || dir === 'left';
+      const specs = kids.map((k) => ({ id: k.id, b: this._subtreeBounds(k.id) }));
+      const total = specs.reduce((sum, s) => sum + (horiz ? s.b.h : s.b.w), 0)
+        + S_GAP * Math.max(0, specs.length - 1);
+      const mid = horiz ? parent.y + parent.h / 2 : parent.x + parent.w / 2;
+      let cursor = mid - total / 2;
+      specs.forEach((s) => {
+        if (horiz) this._moveSubtree(s.id, 0, cursor - s.b.y);
+        else this._moveSubtree(s.id, cursor - s.b.x, 0);
+        cursor += (horiz ? s.b.h : s.b.w) + S_GAP;
+      });
+      this._clearParentGap(parent, dir, true);
     }
 
     _slideNodeOnAxis(node, dir) {
@@ -2533,8 +2549,9 @@
 
     _layoutSide(parent, dir) {
       if (!parent || !dir) return;
+      this._balanceSide(parent, dir);
       this._packSide(parent, dir, true);
-      this._spreadAncestors(parent, dir);
+      this._spreadAncestors(parent);
       let tight = this._sideStillTight(parent, dir);
       let walk = parent;
       while (walk && walk.parentId) {
@@ -2715,19 +2732,14 @@
       }
       applyHopFill(this.data, node);
       this._placeNewChild(parent, dir, id);
-      this._packSide(parent, dir, true, id);
-      this._spreadAncestors(parent, dir);
+      this._layoutSide(parent, dir);
       this.selectOnly(id);
       this.render();
       requestAnimationFrame(() => {
         if (this._destroyed || !this.data.nodes[id]) return;
         this._syncSizes({ preserveLayout: true });
         const p = this.data.nodes[parentId];
-        if (p && this.data.nodes[id]) {
-          this._placeNewChild(p, dir, id);
-          this._packSide(p, dir, true, id);
-          this._spreadAncestors(p, dir);
-        }
+        if (p && this.data.nodes[id]) this._layoutSide(p, dir);
         this.render();
         this._emit();
       });
@@ -3756,8 +3768,7 @@
     _relayoutNode(n) {
       if (!n || !n.parentId || !this.data.nodes[n.parentId]) return;
       const parent = this.data.nodes[n.parentId];
-      if (n.dir) this._packSide(parent, n.dir, true, n.id);
-      this._spreadAncestors(parent, n.dir);
+      if (n.dir) this._layoutSide(parent, n.dir);
     }
 
     _setImageSize(n, nextW, fromCenter) {
