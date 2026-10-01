@@ -1,4 +1,28 @@
-[
-  "nvue/00-netris.yaml",
-  "nvue/vxpd-nvue-cache.json"
-]
+{
+  "categories": [
+    {
+      "id": "c_default",
+      "name": "Bookmarks",
+      "collapsed": false
+    },
+    {
+      "id": "c_munabcjge5if2",
+      "name": "Sample",
+      "collapsed": false
+    }
+  ],
+  "items": [
+    {
+      "path": "flow1.html",
+      "categoryId": "c_default"
+    },
+    {
+      "path": "idea.html",
+      "categoryId": "c_default"
+    },
+    {
+      "path": "missing",
+      "categoryId": "c_munabcjge5if2"
+    }
+  ]
+}

@@ -12,5 +12,5 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-echo "Starting JsonDocViewer at http://localhost:${PORT:-4321}"
+echo "Starting Accretion at http://localhost:${PORT:-4321}"
 exec node server.js
