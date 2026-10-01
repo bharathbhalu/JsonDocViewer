@@ -515,6 +515,24 @@ function defaultContentFor(relPath, kind) {
 
 function mindmapTemplate() {
   const id = 'n_root';
+  const bases = [210, 198, 168, 148, 38, 22, 350, 328, 268, 186, 16, 250];
+  let hue = bases[Math.floor(Math.random() * bases.length)] + Math.floor(Math.random() * 18) - 9;
+  hue = ((hue % 360) + 360) % 360;
+  let sat = 36 + Math.floor(Math.random() * 14);
+  let lit = 76 + Math.floor(Math.random() * 7);
+  if (hue >= 28 && hue <= 70) {
+    sat = 30 + Math.floor(Math.random() * 10);
+    lit = 80 + Math.floor(Math.random() * 5);
+  }
+  const s = sat / 100;
+  const l = lit / 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => {
+    const k = (n + hue / 30) % 12;
+    const c = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * c).toString(16).padStart(2, '0');
+  };
+  const fill = '#' + f(0) + f(8) + f(4);
   const data = {
     version: 1,
     viewport: { x: 0, y: 0, zoom: 1 },
@@ -528,8 +546,8 @@ function mindmapTemplate() {
         content: '',
         label: '',
         language: 'auto',
-        style: { fill: '#C5CAE9', border: '#C5CAE9', textColor: '#1a2130', linkColor: '#8AA8D4', linkWidth: 2.5 },
-        format: { bold: true, italic: false, underline: false, fontSize: 16, align: 'center' },
+        style: { fill, border: fill, textColor: '#1a2130', linkColor: '#8AA8D4', linkWidth: 2.5, fillColorManual: true },
+        format: { bold: true, italic: false, underline: false, fontSize: 18, align: 'center' },
         collapsedDirs: { left: false, right: false, up: false, down: false },
         w: 160,
         h: 52,

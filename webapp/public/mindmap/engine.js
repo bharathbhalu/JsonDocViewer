@@ -1,23 +1,34 @@
 /* DocViewer mindmap engine — pan/zoom canvas, 4-direction trees, cells, frames. */
 (function (global) {
   const DIRS = ['right', 'left', 'down', 'up'];
+  const RELINK_DIRS = ['left', 'right'];
   const OPP = { left: 'right', right: 'left', up: 'down', down: 'up' };
-  const H_GAP = 90;
-  const S_GAP = 24;
+  const H_GAP = 128;
+  const ROOT_GAP = 224;
+  const S_GAP = 18;
   const RELINK_MS = 550;
   const LOCK_HOLD_MS = 560;
   const YT_W = 360;
   const YT_H = 203;
   const IMG_W = 280;
   const IMG_H = 200;
+  const CELL_W = 208;
+  const CELL_H = 42;
+  const CELL_MIN_W = 88;
+  const CELL_MAX_H = 520;
+  const CELL_MIN_CHARS = 13;
+  const CELL_CHARS = 50;
+  const ROOT_W = 232;
+  const ROOT_H = 42;
+  const ROOT_MIN_W = 112;
   const LINK_MIN_W = 188;
   const LINK_MAX_W = 268;
   const LINK_MIN_H = 68;
   const LINK_MAX_H = 108;
   const NODE_PALETTE = [
-    '#ffffff', '#f3f4f6', '#D7E3FC', '#D8F3DC', '#FFF3C4', '#FFD6E0', '#E4D5F5', '#CFF1F5',
-    '#FFE0C2', '#E8EAF0', '#90CAF9', '#A5D6A7', '#FFE082', '#F48FB1', '#B39DDB', '#80DEEA',
-    '#1a2130', '#546e7a', '#1565c0', '#2e7d32', '#f9a825', '#c62828', '#6a1b9a', '#00838f',
+    '#ffffff', '#F3F5F8', '#E8F0FB', '#E5F3EA', '#FBF3DA', '#F8E8EE', '#EEE7F6', '#E1F3F4',
+    '#F8E9DC', '#ECEEF2', '#C9D8EE', '#C5E0CD', '#EED9A4', '#E8BFC9', '#D3C2E6', '#B5D8DE',
+    '#E5C4A8', '#C7CCD4', '#6E8CB5', '#5E9A76', '#C4A45A', '#B86B76', '#7A649E', '#4E8A93',
   ];
   const TEXT_PALETTE = [
     '#1a2130', '#4b5563', '#6b7280', '#9aa3b2', '#f4f6fa', '#ffffff', '#c62828', '#1565c0',
@@ -149,6 +160,7 @@
   ];
   const FONT_SIZE_MIN = 11;
   const FONT_SIZE_MAX = 70;
+  const FONT_SIZE_DEFAULT = 18;
   const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 70];
 
   function fontCss(id) {
@@ -162,7 +174,7 @@
   }
 
   function sizeSelectHtml(current, attr) {
-    const cur = Number(current) || 14;
+    const cur = Number(current) || FONT_SIZE_DEFAULT;
     const sizes = FONT_SIZES.slice();
     if (sizes.indexOf(cur) === -1) sizes.push(cur);
     sizes.sort((a, b) => a - b);
@@ -170,15 +182,27 @@
   }
 
   function defaultFormat() {
-    return { bold: false, italic: false, underline: false, fontSize: 14, align: 'center', fontFamily: 'sans' };
+    return { bold: false, italic: false, underline: false, fontSize: FONT_SIZE_DEFAULT, align: 'center', fontFamily: 'sans' };
   }
 
   function defaultCollapsed() {
     return { left: false, right: false, up: false, down: false };
   }
 
-  function rootStyle() {
-    return { fill: '#C5CAE9', border: '#C5CAE9', textColor: '#1a2130', textColorManual: false, fillColorManual: false, linkColor: '#8AA8D4', linkWidth: 2.5, linkStyle: 'solid', linkCurve: 50, linkColorManual: false };
+  function rootStyle(usedFills) {
+    const fill = randomRootFill(usedFills);
+    return {
+      fill,
+      border: fill,
+      textColor: contrastText(fill),
+      textColorManual: false,
+      fillColorManual: true,
+      linkColor: '#8AA8D4',
+      linkWidth: 2.5,
+      linkStyle: 'solid',
+      linkCurve: 50,
+      linkColorManual: false,
+    };
   }
 
   function nodeDepth(nodes, id) {
@@ -238,6 +262,46 @@
       if (!taken.has(hex.toLowerCase())) return hex;
     }
     return hslToHex(Math.floor(Math.random() * 360), 52, 82);
+  }
+
+  function hueOfHex(hex) {
+    const h = String(hex || '').replace('#', '');
+    if (h.length < 6) return null;
+    const r = parseInt(h.slice(0, 2), 16) / 255;
+    const g = parseInt(h.slice(2, 4), 16) / 255;
+    const b = parseInt(h.slice(4, 6), 16) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    if (d < 0.04) return null;
+    let hue;
+    if (max === r) hue = ((g - b) / d) % 6;
+    else if (max === g) hue = (b - r) / d + 2;
+    else hue = (r - g) / d + 4;
+    hue *= 60;
+    if (hue < 0) hue += 360;
+    return hue;
+  }
+
+  function randomRootFill(used) {
+    const usedHues = (used || []).map(hueOfHex).filter((h) => h != null);
+    const bases = [210, 198, 168, 148, 38, 22, 350, 328, 268, 186, 16, 250];
+    for (let i = 0; i < 48; i++) {
+      let hue = bases[Math.floor(Math.random() * bases.length)] + Math.floor(Math.random() * 18) - 9;
+      hue = ((hue % 360) + 360) % 360;
+      let sat = 36 + Math.floor(Math.random() * 14);
+      let lit = 76 + Math.floor(Math.random() * 7);
+      if (hue >= 28 && hue <= 70) {
+        sat = 30 + Math.floor(Math.random() * 10);
+        lit = 80 + Math.floor(Math.random() * 5);
+      }
+      if (i < 36 && usedHues.some((u) => {
+        const d = Math.abs(u - hue) % 360;
+        return Math.min(d, 360 - d) < 28;
+      })) continue;
+      return hslToHex(hue, sat, lit);
+    }
+    return hslToHex(bases[Math.floor(Math.random() * bases.length)], 42, 78);
   }
 
   function fillForLevel(data, depth) {
@@ -498,6 +562,33 @@
     return cats;
   }
 
+  function normalizeLinks(raw, nodes) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(raw) ? raw : []).forEach((l) => {
+      if (!l || typeof l !== 'object') return;
+      const fromId = typeof l.fromId === 'string' ? l.fromId : '';
+      const toId = typeof l.toId === 'string' ? l.toId : '';
+      if (!fromId || !toId || fromId === toId || !nodes[fromId] || !nodes[toId]) return;
+      const pair = fromId < toId ? fromId + '\0' + toId : toId + '\0' + fromId;
+      if (seen.has(pair)) return;
+      const a = nodes[fromId];
+      const b = nodes[toId];
+      if (b.parentId === fromId || a.parentId === toId) return;
+      seen.add(pair);
+      const fromDir = (l.fromDir === 'left' || l.fromDir === 'right') ? l.fromDir : 'right';
+      const toDir = (l.toDir === 'left' || l.toDir === 'right') ? l.toDir : (OPP[fromDir] || 'left');
+      out.push({
+        id: typeof l.id === 'string' && l.id.trim() ? l.id.trim() : uid('lk_'),
+        fromId,
+        toId,
+        fromDir,
+        toDir,
+      });
+    });
+    return out;
+  }
+
   function safeHttpUrl(url) {
     const s = String(url || '').trim();
     if (!s) return '';
@@ -542,6 +633,91 @@
     const perLine = Math.max(14, Math.floor((w - 44) / charW));
     const lines = clamp(Math.ceil(shown.length / perLine), 1, 3);
     const h = clamp(42 + lines * 18, LINK_MIN_H, LINK_MAX_H);
+    return { w, h };
+  }
+
+  let _textMeasureCtx = null;
+  function textMeasureCtx() {
+    if (!_textMeasureCtx) {
+      const c = document.createElement('canvas');
+      _textMeasureCtx = c.getContext('2d');
+    }
+    return _textMeasureCtx;
+  }
+
+  function countWrappedLines(ctx, text, maxInner) {
+    const paras = String(text == null ? '' : text).split('\n');
+    let total = 0;
+    paras.forEach((para) => {
+      if (!para) { total += 1; return; }
+      const tokens = para.split(/(\s+)/);
+      let lineW = 0;
+      let lines = 1;
+      tokens.forEach((tok) => {
+        const tw = ctx.measureText(tok).width;
+        if (tw > maxInner && String(tok).trim()) {
+          let acc = '';
+          for (const ch of tok) {
+            const next = acc + ch;
+            if (ctx.measureText(next).width > maxInner && acc) {
+              lines += 1;
+              acc = ch;
+            } else acc = next;
+          }
+          lineW = ctx.measureText(acc).width;
+          return;
+        }
+        if (lineW + tw > maxInner && lineW > 0) {
+          lines += 1;
+          lineW = tw;
+        } else lineW += tw;
+      });
+      total += lines;
+    });
+    return Math.max(1, total);
+  }
+
+  function measureTextCell(n, live) {
+    const text = String(n.content || '');
+    const fmt = n.format || defaultFormat();
+    const fs = clamp(Number(fmt.fontSize) || FONT_SIZE_DEFAULT, FONT_SIZE_MIN, FONT_SIZE_MAX);
+    const ctx = textMeasureCtx();
+    ctx.font = `${fmt.italic ? 'italic ' : ''}${fmt.bold ? '700' : '500'} ${fs}px ${fontCss(fmt.fontFamily)}`;
+    const padX = 64;
+    const padY = 18;
+    const minH = n.parentId ? CELL_H : ROOT_H;
+    const minInner = ctx.measureText('n'.repeat(CELL_MIN_CHARS)).width;
+    const maxInner = ctx.measureText('n'.repeat(CELL_CHARS)).width;
+    let contentW = ctx.measureText(' ').width;
+    String(text || ' ').split('\n').forEach((line) => {
+      contentW = Math.max(contentW, ctx.measureText(line || ' ').width);
+    });
+    const slack = live ? Math.ceil(ctx.measureText('M').width) + 6 : 8;
+    const minW = Math.ceil(minInner + padX);
+    const maxW = Math.ceil(maxInner + padX);
+    const w = clamp(Math.ceil(Math.min(contentW, maxInner) + padX + slack), minW, maxW);
+    const inner = Math.max(24, w - padX);
+    const atMax = w >= maxW - 1;
+    const lines = atMax ? countWrappedLines(ctx, text, inner) : Math.max(1, String(text || '').split('\n').length);
+    const h = clamp(Math.ceil(lines * fs * 1.35 + padY), minH, CELL_MAX_H);
+    return { w, h };
+  }
+
+  function measureCodeCell(n) {
+    const text = String(n.content || '');
+    const ctx = textMeasureCtx();
+    ctx.font = '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+    const padX = 28;
+    const padY = 48;
+    const maxInner = ctx.measureText('n'.repeat(CELL_CHARS)).width;
+    let contentW = ctx.measureText(' ').width;
+    String(text || ' ').split('\n').forEach((line) => {
+      contentW = Math.max(contentW, ctx.measureText(line || ' ').width);
+    });
+    const w = clamp(Math.ceil(Math.min(contentW, maxInner) + padX), 200, Math.ceil(maxInner + padX));
+    const inner = Math.max(40, w - padX);
+    const lines = countWrappedLines(ctx, text, inner);
+    const h = clamp(Math.ceil(lines * 16 + padY), 72, CELL_MAX_H);
     return { w, h };
   }
 
@@ -774,10 +950,10 @@
           label: '',
           language: 'auto',
           style: rootStyle(),
-          format: { bold: true, italic: false, underline: false, fontSize: 16, align: 'center', fontFamily: 'sans' },
+          format: { bold: true, italic: false, underline: false, fontSize: FONT_SIZE_DEFAULT, align: 'center', fontFamily: 'sans' },
           collapsedDirs: defaultCollapsed(),
-          w: 160,
-          h: 52,
+          w: ROOT_W,
+          h: ROOT_H,
           x: 0,
           y: 0,
           userSized: false,
@@ -788,6 +964,7 @@
       },
       frames: [],
       frameCats: [],
+      links: [],
       levelLinkColors: {},
       linkColorSeed: Math.floor(Math.random() * 360),
     };
@@ -846,14 +1023,15 @@
       n.format = Object.assign(defaultFormat(), n.format || {});
       if (!n.format.align) n.format.align = 'center';
       if (!n.format.fontFamily) n.format.fontFamily = 'sans';
-      n.format.fontSize = clamp(Number(n.format.fontSize) || 14, FONT_SIZE_MIN, FONT_SIZE_MAX);
+      n.format.fontSize = clamp(Number(n.format.fontSize) || FONT_SIZE_DEFAULT, FONT_SIZE_MIN, FONT_SIZE_MAX);
       if (n.style.fill) n.style.border = n.style.fill;
       n.collapsedDirs = Object.assign(defaultCollapsed(), n.collapsedDirs || {});
-      n.w = n.w || 148;
-      n.h = n.h || 48;
+      n.w = n.w || CELL_W;
+      n.h = n.h || CELL_H;
       n.x = n.x || 0;
       n.y = n.y || 0;
       n.userSized = !!n.userSized;
+      n.userPlaced = !!n.userPlaced;
       n.locked = !!n.locked;
       n.note = typeof n.note === 'string' ? n.note : '';
       n.noteOpen = !!n.noteOpen;
@@ -899,6 +1077,7 @@
       }
       applyHopFill(d, n);
     });
+    d.links = normalizeLinks(d.links, d.nodes);
     return d;
   }
 
@@ -911,6 +1090,10 @@
       this.selectedId = null;
       this.selectedIds = new Set();
       this.selectedFrameId = null;
+      this.selectedLinkId = null;
+      this._connectFrom = null;
+      this._menuLinkId = null;
+      this._ignorePortClick = false;
       this.tool = 'select';
       this.editingId = null;
       this._layoutPass = 0;
@@ -938,6 +1121,13 @@
       this._frameQuery = '';
       this._imgZoom = { scale: 1, x: 0, y: 0 };
       this._imgPan = null;
+      this._pointers = new Map();
+      this._pinch = null;
+      this._gestureActive = false;
+      this._gestureZoom = 1;
+      this._pinchWheelUntil = 0;
+      this._zoomPend = null;
+      this._zoomRaf = 0;
       this._buildDom();
       this._bind();
     }
@@ -956,6 +1146,7 @@
       root.innerHTML = `
         <div class="mm-toolbar">
           <button type="button" data-act="tool-frame" title="Draw a frame (click again to select)">Frame</button>
+          <button type="button" data-act="tool-connect" title="Connect cells (C)">Connect</button>
           <span class="mm-sep"></span>
           <button type="button" data-act="add-root" title="New topic on the canvas">New</button>
           <span class="mm-sep"></span>
@@ -1000,7 +1191,7 @@
           </div>
         </div>
         <div class="mm-format-bar"></div>
-          <div class="mm-hint">Left-drag to select · Two-finger drag to pan · Scroll or pinch to zoom · Space/right-drag to pan</div>
+          <div class="mm-hint">Left-drag to select · Connect tool to draw a line · Click a line and Delete to remove it · Two-finger drag to pan · Scroll or pinch to zoom</div>
         <div class="mm-menu"></div>
         <div class="mm-color-layer"></div>
         <div class="mm-yt-modal" hidden>
@@ -1073,6 +1264,9 @@
       this._onPointerMove = this._onPointerMove.bind(this);
       this._onPointerUp = this._onPointerUp.bind(this);
       this._onWheel = this._onWheel.bind(this);
+      this._onGestureStart = this._onGestureStart.bind(this);
+      this._onGestureChange = this._onGestureChange.bind(this);
+      this._onGestureEnd = this._onGestureEnd.bind(this);
       this._onKey = this._onKey.bind(this);
       this._onKeyUp = this._onKeyUp.bind(this);
       this._onContext = this._onContext.bind(this);
@@ -1080,10 +1274,14 @@
 
       this.els.canvas.addEventListener('pointerdown', this._onPointerDown);
       this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false });
+      this.els.canvas.addEventListener('gesturestart', this._onGestureStart, { passive: false });
+      this.els.canvas.addEventListener('gesturechange', this._onGestureChange, { passive: false });
+      this.els.canvas.addEventListener('gestureend', this._onGestureEnd, { passive: false });
       this.els.canvas.addEventListener('contextmenu', this._onContext);
       this.els.canvas.addEventListener('dblclick', this._onDblClick);
       window.addEventListener('pointermove', this._onPointerMove);
       window.addEventListener('pointerup', this._onPointerUp);
+      window.addEventListener('pointercancel', this._onPointerUp);
       window.addEventListener('keydown', this._onKey);
       window.addEventListener('keyup', this._onKeyUp);
       window.addEventListener('blur', this._onWinBlur = () => {
@@ -1217,10 +1415,15 @@
       this._clearLockHold();
       this.els.canvas.removeEventListener('pointerdown', this._onPointerDown);
       this.els.canvas.removeEventListener('wheel', this._onWheel);
+      this.els.canvas.removeEventListener('gesturestart', this._onGestureStart);
+      this.els.canvas.removeEventListener('gesturechange', this._onGestureChange);
+      this.els.canvas.removeEventListener('gestureend', this._onGestureEnd);
       this.els.canvas.removeEventListener('contextmenu', this._onContext);
       this.els.canvas.removeEventListener('dblclick', this._onDblClick);
       window.removeEventListener('pointermove', this._onPointerMove);
       window.removeEventListener('pointerup', this._onPointerUp);
+      window.removeEventListener('pointercancel', this._onPointerUp);
+      if (this._zoomRaf) cancelAnimationFrame(this._zoomRaf);
       window.removeEventListener('keydown', this._onKey);
       window.removeEventListener('keyup', this._onKeyUp);
       window.removeEventListener('blur', this._onWinBlur);
@@ -1245,6 +1448,7 @@
       this.editingId = null;
       this._suppressChange = true;
       this.render();
+      this._syncSizes();
       if (!this.data.viewport || (this.data.viewport.x === 0 && this.data.viewport.y === 0 && (this.data.viewport.zoom === 1 || this.data.viewport.zoom === 0.55))) {
         this.fitView(false);
       } else {
@@ -1374,6 +1578,7 @@
       this.selectedId = id || null;
       this.selectedIds = new Set(id ? [id] : []);
       this.selectedFrameId = null;
+      this.selectedLinkId = null;
     }
 
     selectedList() {
@@ -1484,6 +1689,11 @@
     }
 
     setZoom(next, sx, sy) {
+      this._setZoomAt(next, sx, sy);
+      this._scheduleVpEmit();
+    }
+
+    _setZoomAt(next, sx, sy) {
       const vp = this.data.viewport;
       const rect = this.els.canvas.getBoundingClientRect();
       const cx = sx == null ? rect.width / 2 : sx;
@@ -1494,7 +1704,11 @@
       vp.x = cx - wx * vp.zoom;
       vp.y = cy - wy * vp.zoom;
       this._applyTransform();
-      this._emit();
+    }
+
+    _scheduleVpEmit() {
+      clearTimeout(this._vpEmit);
+      this._vpEmit = setTimeout(() => this._emit(), 180);
     }
 
     fitView(emit) {
@@ -2057,34 +2271,31 @@
       n.x = x;
       n.y = y;
       const { sub, nw, nh } = m;
-      const extraX = Math.max(0, (Math.max(sub.up.w, sub.down.w) - nw) / 2);
-      const extraY = Math.max(0, (Math.max(sub.left.h, sub.right.h) - nh) / 2);
-
       if (sub.right.items.length) {
         let cy = y + nh / 2 - sub.right.h / 2;
         sub.right.items.forEach((cm) => {
-          this._place(cm, x + nw + extraX + H_GAP, cy + cm.nodeOffY);
+          this._place(cm, x + nw + H_GAP, cy + cm.nodeOffY);
           cy += cm.h + S_GAP;
         });
       }
       if (sub.left.items.length) {
         let cy = y + nh / 2 - sub.left.h / 2;
         sub.left.items.forEach((cm) => {
-          this._place(cm, x - extraX - H_GAP - cm.nw, cy + cm.nodeOffY);
+          this._place(cm, x - H_GAP - cm.nw, cy + cm.nodeOffY);
           cy += cm.h + S_GAP;
         });
       }
       if (sub.down.items.length) {
         let cx = x + nw / 2 - sub.down.w / 2;
         sub.down.items.forEach((cm) => {
-          this._place(cm, cx + cm.nodeOffX, y + nh + extraY + H_GAP);
+          this._place(cm, cx + cm.nodeOffX, y + nh + H_GAP);
           cx += cm.w + S_GAP;
         });
       }
       if (sub.up.items.length) {
         let cx = x + nw / 2 - sub.up.w / 2;
         sub.up.items.forEach((cm) => {
-          this._place(cm, cx + cm.nodeOffX, y - extraY - H_GAP - cm.nh);
+          this._place(cm, cx + cm.nodeOffX, y - H_GAP - cm.nh);
           cx += cm.w + S_GAP;
         });
       }
@@ -2162,65 +2373,195 @@
       });
     }
 
-    _packSide(parent, dir) {
+    _packGap(parent) {
+      return parent && !parent.parentId ? ROOT_GAP : H_GAP;
+    }
+
+    _clearParentGap(parent, dir, skipPlaced) {
+      if (!parent || !dir) return;
+      const gap = this._packGap(parent);
+      this.childrenOf(parent.id, dir).forEach((k) => {
+        if (skipPlaced && k.userPlaced) return;
+        const b = this._subtreeBounds(k.id);
+        let dx = 0;
+        let dy = 0;
+        if (dir === 'right') {
+          const need = parent.x + parent.w + gap;
+          if (b.x < need) dx = need - b.x;
+        } else if (dir === 'left') {
+          const need = parent.x - gap;
+          if (b.x + b.w > need) dx = need - (b.x + b.w);
+        } else if (dir === 'down') {
+          const need = parent.y + parent.h + gap;
+          if (b.y < need) dy = need - b.y;
+        } else if (dir === 'up') {
+          const need = parent.y - gap;
+          if (b.y + b.h > need) dy = need - (b.y + b.h);
+        }
+        this._moveSubtree(k.id, dx, dy);
+      });
+    }
+
+    _packSide(parent, dir, skipPlaced, focusId) {
       if (!parent || !dir) return;
       const kids = this.childrenOf(parent.id, dir).slice();
       if (!kids.length) return;
-      const specs = kids.map((k) => {
-        const b = this._subtreeBounds(k.id);
-        return { id: k.id, b, offX: k.x - b.x, offY: k.y - b.y };
+      const horiz = dir === 'right' || dir === 'left';
+      const specs = kids.map((k) => ({
+        id: k.id,
+        b: this._subtreeBounds(k.id),
+        skip: !!(skipPlaced && k.userPlaced),
+      }));
+      specs.sort((a, b) => {
+        const da = horiz ? a.b.y : a.b.x;
+        const db = horiz ? b.b.y : b.b.x;
+        if (da !== db) return da - db;
+        return a.id.localeCompare(b.id);
       });
-      if (dir === 'right' || dir === 'left') {
-        const totalH = specs.reduce((s, p) => s + p.b.h, 0) + S_GAP * Math.max(0, specs.length - 1);
-        let gy = parent.y + parent.h / 2 - totalH / 2;
-        specs.forEach((p) => {
-          const k = this.data.nodes[p.id];
-          const nx = dir === 'right' ? parent.x + parent.w + H_GAP : parent.x - H_GAP - k.w;
-          const ny = gy + p.offY;
-          this._moveSubtree(p.id, nx - k.x, ny - k.y);
-          gy += p.b.h + S_GAP;
+      let focus = focusId ? specs.findIndex((s) => s.id === focusId) : -1;
+      if (focus < 0) {
+        const pc = horiz ? parent.y + parent.h / 2 : parent.x + parent.w / 2;
+        let best = Infinity;
+        specs.forEach((s, i) => {
+          const c = horiz ? s.b.y + s.b.h / 2 : s.b.x + s.b.w / 2;
+          const d = Math.abs(c - pc);
+          if (d < best) { best = d; focus = i; }
         });
-      } else {
-        const totalW = specs.reduce((s, p) => s + p.b.w, 0) + S_GAP * Math.max(0, specs.length - 1);
-        let gx = parent.x + parent.w / 2 - totalW / 2;
-        specs.forEach((p) => {
-          const k = this.data.nodes[p.id];
-          const ny = dir === 'down' ? parent.y + parent.h + H_GAP : parent.y - H_GAP - k.h;
-          const nx = gx + p.offX;
-          this._moveSubtree(p.id, nx - k.x, ny - k.y);
-          gx += p.b.w + S_GAP;
-        });
+      }
+      const refresh = (s) => { s.b = this._subtreeBounds(s.id); };
+      const minP = (s) => horiz ? s.b.y : s.b.x;
+      const maxP = (s) => horiz ? s.b.y + s.b.h : s.b.x + s.b.w;
+      const shift = (s, delta) => {
+        if (!delta || s.skip) return false;
+        if (horiz) this._moveSubtree(s.id, 0, delta);
+        else this._moveSubtree(s.id, delta, 0);
+        refresh(s);
+        return true;
+      };
+      if (focus >= 0) {
+        for (let i = focus + 1; i < specs.length; i++) {
+          const d = maxP(specs[i - 1]) + S_GAP - minP(specs[i]);
+          if (d > 0) shift(specs[i], d);
+        }
+        for (let i = focus - 1; i >= 0; i--) {
+          const d = minP(specs[i + 1]) - S_GAP - maxP(specs[i]);
+          if (d < 0) shift(specs[i], d);
+        }
+      }
+      for (let pass = 0; pass < 3; pass++) {
+        let moved = false;
+        for (let i = 1; i < specs.length; i++) {
+          const d = maxP(specs[i - 1]) + S_GAP - minP(specs[i]);
+          if (d > 0 && shift(specs[i], d)) moved = true;
+        }
+        for (let i = specs.length - 2; i >= 0; i--) {
+          const d = minP(specs[i + 1]) - S_GAP - maxP(specs[i]);
+          if (d < 0 && shift(specs[i], d)) moved = true;
+        }
+        if (!moved) break;
+      }
+      this._clearParentGap(parent, dir, skipPlaced);
+    }
+
+    _spreadAncestors(node, childDir) {
+      if (!node) return;
+      if (childDir) this._slideNodeOnAxis(node, childDir);
+      const seen = new Set([node.id]);
+      let cur = node;
+      while (cur && cur.parentId) {
+        const anc = this.data.nodes[cur.parentId];
+        const side = cur.dir;
+        if (!anc || !side || seen.has(anc.id)) break;
+        seen.add(anc.id);
+        this._packSide(anc, side, false, cur.id);
+        this._slideNodeOnAxis(anc, side);
+        cur = anc;
       }
     }
 
-    _pushSideClear(parent, dir) {
-      if (!parent || !dir) return;
-      const kids = this.childrenOf(parent.id, dir);
+    _slideNodeOnAxis(node, dir) {
+      if (!node || !dir || !node.parentId || node.userPlaced) return;
+      const kids = this.childrenOf(node.id, dir);
       if (!kids.length) return;
-      const ignore = new Set([parent.id]);
-      kids.forEach((k) => this.descendants(k.id, true).forEach((n) => ignore.add(n.id)));
-      const dx0 = dir === 'right' ? 24 : dir === 'left' ? -24 : 0;
-      const dy0 = dir === 'down' ? 24 : dir === 'up' ? -24 : 0;
-      for (let i = 0; i < 70; i++) {
-        let hit = false;
-        outer: for (const k of kids) {
-          for (const n of this.descendants(k.id, true)) {
-            if (this.hiddenByCollapse(n.id)) continue;
-            for (const o of this.nodesArr()) {
-              if (ignore.has(o.id) || this.hiddenByCollapse(o.id)) continue;
-              if (this._rectsOverlap(n, o, 20)) { hit = true; break outer; }
-            }
-          }
+      const horiz = dir === 'right' || dir === 'left';
+      let min = Infinity;
+      let max = -Infinity;
+      kids.forEach((k) => {
+        const b = this._subtreeBounds(k.id);
+        if (horiz) {
+          min = Math.min(min, b.y);
+          max = Math.max(max, b.y + b.h);
+        } else {
+          min = Math.min(min, b.x);
+          max = Math.max(max, b.x + b.w);
         }
-        if (!hit) return;
-        kids.forEach((k) => this._moveSubtree(k.id, dx0, dy0));
-      }
+      });
+      if (!isFinite(min)) return;
+      const mid = (min + max) / 2;
+      let dx = 0;
+      let dy = 0;
+      if (horiz) dy = mid - (node.y + node.h / 2);
+      else dx = mid - (node.x + node.w / 2);
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      node.x += dx;
+      node.y += dy;
+      this.childrenOf(node.id).forEach((c) => {
+        if (c.dir === dir) return;
+        this._moveSubtree(c.id, dx, dy);
+      });
     }
 
     _layoutSide(parent, dir) {
-      if (!parent) return;
-      this._place(this._measure(parent), parent.x, parent.y);
-      if (dir) this._pushSideClear(parent, dir);
+      if (!parent || !dir) return;
+      this._packSide(parent, dir, true);
+      this._spreadAncestors(parent, dir);
+      let tight = this._sideStillTight(parent, dir);
+      let walk = parent;
+      while (walk && walk.parentId) {
+        const side = walk.dir;
+        walk = this.data.nodes[walk.parentId];
+        if (!walk || !side) break;
+        if (this._sideStillTight(walk, side)) tight = true;
+      }
+      const root = walk && !walk.parentId ? walk : null;
+      let packedSide = dir;
+      let n = parent;
+      while (n && n.parentId) {
+        packedSide = n.dir;
+        n = this.data.nodes[n.parentId];
+      }
+      if (!tight || !root) return;
+      this._pushSideOut(root, packedSide, 32);
+    }
+
+    _sideStillTight(parent, dir) {
+      const kids = this.childrenOf(parent.id, dir);
+      if (!kids.length) return false;
+      const groups = kids.map((k) => this.descendants(k.id, true).filter(Boolean));
+      const pad = 8;
+      for (let i = 0; i < groups.length; i++) {
+        for (const n of groups[i]) {
+          if (!n || this.hiddenByCollapse(n.id)) continue;
+          if (this._rectsOverlap(n, parent, pad)) return true;
+          for (let j = i + 1; j < groups.length; j++) {
+            for (const o of groups[j]) {
+              if (!o || this.hiddenByCollapse(o.id)) continue;
+              if (this._rectsOverlap(n, o, pad)) return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    _pushSideOut(parent, dir, extra) {
+      if (!parent || !dir || extra <= 0) return;
+      const dx = dir === 'right' ? extra : dir === 'left' ? -extra : 0;
+      const dy = dir === 'down' ? extra : dir === 'up' ? -extra : 0;
+      this.childrenOf(parent.id, dir).forEach((k) => {
+        if (k.userPlaced) return;
+        this._moveSubtree(k.id, dx, dy);
+      });
     }
 
     _snapshotSubtree(id) {
@@ -2251,6 +2592,63 @@
       return origins;
     }
 
+    _placeNewChild(parent, dir, id) {
+      const n = this.data.nodes[id];
+      if (!parent || !n || !dir) return;
+      const gap = this._packGap(parent);
+      const others = this.childrenOf(parent.id, dir).filter((s) => s.id !== id);
+      if (dir === 'right' || dir === 'left') {
+        const nx = dir === 'right' ? parent.x + parent.w + gap : parent.x - gap - n.w;
+        let ny;
+        if (!others.length) ny = parent.y + (parent.h - n.h) / 2;
+        else {
+          let bottom = -Infinity;
+          others.forEach((s) => {
+            const b = this._subtreeBounds(s.id);
+            bottom = Math.max(bottom, b.y + b.h);
+          });
+          ny = bottom + S_GAP;
+        }
+        this._moveSubtree(id, nx - n.x, ny - n.y);
+      } else {
+        const ny = dir === 'down' ? parent.y + parent.h + gap : parent.y - gap - n.h;
+        let nx;
+        if (!others.length) nx = parent.x + (parent.w - n.w) / 2;
+        else {
+          let right = -Infinity;
+          others.forEach((s) => {
+            const b = this._subtreeBounds(s.id);
+            right = Math.max(right, b.x + b.w);
+          });
+          nx = right + S_GAP;
+        }
+        this._moveSubtree(id, nx - n.x, ny - n.y);
+      }
+      this._nudgeNodeClear(parent, dir, id);
+    }
+
+    _nudgeNodeClear(parent, dir, id) {
+      const n = this.data.nodes[id];
+      if (!parent || !n || !dir) return;
+      const self = new Set(this.descendants(id, true).map((x) => x && x.id).filter(Boolean));
+      const pad = 10;
+      const step = dir === 'right' || dir === 'left' ? { dx: 0, dy: 20 } : { dx: 20, dy: 0 };
+      for (let i = 0; i < 24; i++) {
+        let hit = false;
+        outer: for (const a of this.descendants(id, true)) {
+          if (!a || this.hiddenByCollapse(a.id)) continue;
+          if (this._rectsOverlap(a, parent, pad)) { hit = true; break; }
+          for (const o of this.nodesArr()) {
+            if (!o || self.has(o.id) || this.hiddenByCollapse(o.id)) continue;
+            if (o.parentId === parent.id && o.dir && o.dir !== dir) continue;
+            if (this._rectsOverlap(a, o, pad)) { hit = true; break outer; }
+          }
+        }
+        if (!hit) return;
+        this._moveSubtree(id, step.dx, step.dy);
+      }
+    }
+
     addChild(parentId, dir, extra) {
       if (this.readOnly) return null;
       const parent = this.data.nodes[parentId];
@@ -2258,6 +2656,7 @@
       if (parent.collapsedDirs && parent.collapsedDirs[dir]) return null;
       const inh = this.inheritProps(parent, dir);
       const id = uid('n_');
+      const gap = this._packGap(parent);
       const node = Object.assign({
         id,
         parentId,
@@ -2269,10 +2668,14 @@
         style: inh.style,
         format: inh.format,
         collapsedDirs: defaultCollapsed(),
-        w: 148,
-        h: 48,
-        x: parent.x,
-        y: parent.y,
+        w: CELL_W,
+        h: CELL_H,
+        x: dir === 'right' ? parent.x + parent.w + gap
+          : dir === 'left' ? parent.x - gap - CELL_W
+          : parent.x + Math.max(0, (parent.w - CELL_W) / 2),
+        y: dir === 'down' ? parent.y + parent.h + gap
+          : dir === 'up' ? parent.y - gap - CELL_H
+          : parent.y,
         userSized: false,
         order: this.childrenOf(parentId, dir).length,
         frameId: parent.frameId || null,
@@ -2291,13 +2694,20 @@
         node.style.linkColor = colorForLevel(this.data, nodeDepth(this.data.nodes, node.id));
       }
       applyHopFill(this.data, node);
-      this._layoutSide(parent, dir);
+      this._placeNewChild(parent, dir, id);
+      this._packSide(parent, dir, true, id);
+      this._spreadAncestors(parent, dir);
       this.selectOnly(id);
       this.render();
       requestAnimationFrame(() => {
         if (this._destroyed || !this.data.nodes[id]) return;
-        this._syncSizes();
-        if (this.data.nodes[parentId]) this._layoutSide(this.data.nodes[parentId], dir);
+        this._syncSizes({ preserveLayout: true });
+        const p = this.data.nodes[parentId];
+        if (p && this.data.nodes[id]) {
+          this._placeNewChild(p, dir, id);
+          this._packSide(p, dir, true, id);
+          this._spreadAncestors(p, dir);
+        }
         this.render();
         this._emit();
       });
@@ -2316,14 +2726,18 @@
         content: '',
         label: '',
         language: 'auto',
-        style: rootStyle(),
-        format: { bold: true, italic: false, underline: false, fontSize: 16, align: 'center', fontFamily: 'sans' },
+        style: rootStyle(this.data.rootIds.map((rid) => {
+          const r = this.data.nodes[rid];
+          return r && r.style && r.style.fill;
+        }).filter(Boolean)),
+        format: { bold: true, italic: false, underline: false, fontSize: FONT_SIZE_DEFAULT, align: 'center', fontFamily: 'sans' },
         collapsedDirs: defaultCollapsed(),
-        w: 160,
-        h: 52,
+        w: ROOT_W,
+        h: ROOT_H,
         x: x || 0,
         y: y || 0,
         userSized: false,
+        userPlaced: false,
         locked: false,
         note: '',
         noteOpen: false,
@@ -2404,6 +2818,7 @@
       const ids = this.descendants(id, true).map((n) => n.id);
       ids.forEach((nid) => delete this.data.nodes[nid]);
       this.data.rootIds = this.data.rootIds.filter((rid) => !ids.includes(rid));
+      this._pruneLinksForIds(ids);
       if (!this.data.rootIds.length && !Object.keys(this.data.nodes).length) {
         const empty = createEmpty();
         this.data.nodes = empty.nodes;
@@ -2514,6 +2929,7 @@
       const oldDir = node.dir;
       node.parentId = newParentId;
       node.dir = dir;
+      node.userPlaced = false;
       if (wasRoot) this.data.rootIds = this.data.rootIds.filter((rid) => rid !== id);
       const siblings = this.childrenOf(newParentId, dir).filter((s) => s.id !== id);
       const i = index == null ? siblings.length : clamp(index, 0, siblings.length);
@@ -2543,8 +2959,8 @@
         n.w = IMG_W;
         n.h = IMG_H;
       } else if ((prev === 'youtube' || prev === 'image') && type !== 'youtube' && type !== 'image') {
-        n.w = 160;
-        n.h = 52;
+        n.w = CELL_W;
+        n.h = CELL_H;
         n.userSized = false;
       }
       if (type === 'link') {
@@ -2604,10 +3020,39 @@
     _fitLinkNode(n) {
       if (!n || n.type !== 'link' || n.userSized) return false;
       const size = measureLinkSize(n);
-      if (n.w === size.w && n.h === size.h) return false;
-      n.w = size.w;
-      n.h = size.h;
+      return this._setNodeSize(n, size.w, size.h);
+    }
+
+    _fitAutoNode(n, live) {
+      if (!n || n.userSized) return false;
+      if (n.type === 'youtube' || n.type === 'image' || n.type === 'link') return false;
+      const size = n.type === 'code' ? measureCodeCell(n) : measureTextCell(n, live);
+      return this._setNodeSize(n, size.w, size.h);
+    }
+
+    _setNodeSize(n, w, h) {
+      if (!n) return false;
+      const ow = n.w || 0;
+      const oh = n.h || 0;
+      if (Math.abs(ow - w) <= 1 && Math.abs(oh - h) <= 1) return false;
+      n.w = w;
+      n.h = h;
+      this._nudgeChildrenForSize(n, ow, oh, w, h);
       return true;
+    }
+
+    _nudgeChildrenForSize(n, ow, oh, nw, nh) {
+      const dw = (nw || 0) - (ow || 0);
+      const dh = (nh || 0) - (oh || 0);
+      if (!dw && !dh) return;
+      this.childrenOf(n.id, 'right').forEach((k) => this._moveSubtree(k.id, dw, dh / 2));
+      this.childrenOf(n.id, 'left').forEach((k) => this._moveSubtree(k.id, 0, dh / 2));
+      this.childrenOf(n.id, 'down').forEach((k) => this._moveSubtree(k.id, dw / 2, dh));
+      this.childrenOf(n.id, 'up').forEach((k) => this._moveSubtree(k.id, dw / 2, 0));
+    }
+
+    _paintSubtreeBoxes(id) {
+      this.descendants(id, true).forEach((node) => this._paintNodeBox(node));
     }
 
     _openLink(content) {
@@ -2627,13 +3072,18 @@
       if (this.els.ytTitle) this.els.ytTitle.textContent = title;
       this.els.ytStage.classList.toggle('is-image', !!image);
       if (this.els.ytStageWrap) this.els.ytStageWrap.classList.toggle('is-image', !!image);
-      if (this.els.ytModal) this.els.ytModal.classList.toggle('is-image', !!image);
+      this.els.ytModal.classList.toggle('is-image', !!image);
+      const box = this.els.ytModal.querySelector('.mm-yt-modal-box');
+      if (box) box.setAttribute('aria-label', image ? 'Image' : 'YouTube video');
       this.els.ytStage.innerHTML = html;
       const showStamps = !image;
       const livePlayer = showStamps && !ytEmbedBlocked();
       if (this.els.ytMark) this.els.ytMark.hidden = !livePlayer || this.readOnly;
       if (this.els.ytStampBtn) this.els.ytStampBtn.hidden = !livePlayer || this.readOnly;
-      if (this.els.ytStamps) this.els.ytStamps.hidden = !showStamps;
+      if (this.els.ytStamps) {
+        this.els.ytStamps.hidden = !showStamps;
+        if (!showStamps) this.els.ytStamps.innerHTML = '';
+      }
       this._syncYtExt(image ? '' : this._ytVideoId);
       if (this.els.mediaNote) {
         this.els.mediaNote.value = (node && node.note) || '';
@@ -2642,7 +3092,7 @@
           ? 'Write a note. Click ＋ to add 1:23, then click a time to jump.'
           : 'Write a note…';
       }
-      this._renderYtStamps();
+      if (showStamps) this._renderYtStamps();
       this.els.ytModal.hidden = false;
       this.els.ytModal.classList.add('is-open');
       this.els.root.classList.add('is-yt-open');
@@ -2997,7 +3447,7 @@
       if (!n || this.readOnly || this.isNodeLocked(n)) return;
       if (!n.format) n.format = defaultFormat();
       const next = Object.assign({}, patch);
-      if (next.fontSize != null) next.fontSize = clamp(Number(next.fontSize) || 14, FONT_SIZE_MIN, FONT_SIZE_MAX);
+      if (next.fontSize != null) next.fontSize = clamp(Number(next.fontSize) || FONT_SIZE_DEFAULT, FONT_SIZE_MIN, FONT_SIZE_MAX);
       Object.assign(n.format, next);
       if (this._batching) return;
       this.render();
@@ -3010,6 +3460,7 @@
       if (!node) return null;
       const payload = { v: 1, nodes: {}, rootId: id, dir: node.dir };
       this.descendants(id, true).forEach((n) => { payload.nodes[n.id] = clone(n); });
+      payload.links = this._linksInSet(new Set(Object.keys(payload.nodes)));
       const text = CLIP_PREFIX + JSON.stringify(payload);
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).catch(() => {});
@@ -3026,6 +3477,7 @@
         const node = this.data.nodes[id];
         const tree = { v: 1, nodes: {}, rootId: id, dir: node.dir };
         this.descendants(id, true).forEach((n) => { tree.nodes[n.id] = clone(n); });
+        tree.links = this._linksInSet(new Set(Object.keys(tree.nodes)));
         return tree;
       });
       const payload = { v: 2, trees };
@@ -3070,20 +3522,119 @@
       this._emit();
     }
 
+    detachNode(id, silent) {
+      const n = this.data.nodes[id];
+      if (!n || !n.parentId || this.readOnly || this.isNodeLocked(n)) return false;
+      const parent = this.data.nodes[n.parentId];
+      const dir = n.dir;
+      n.parentId = null;
+      n.dir = null;
+      n.userPlaced = true;
+      if (!this.data.rootIds.includes(id)) this.data.rootIds.push(id);
+      if (parent && dir) {
+        this.childrenOf(parent.id, dir).forEach((s, idx) => { s.order = idx; });
+        this._layoutSide(parent, dir);
+      }
+      if (this.selectedLinkId === id) this.selectedLinkId = null;
+      if (!silent) {
+        this.render();
+        this._emit();
+      }
+      return true;
+    }
+
     detachSelected() {
       if (this.readOnly) return;
-      this._applyToSelected((id, n) => {
-        if (!n.parentId || this.isNodeLocked(n)) return;
-        const parent = this.data.nodes[n.parentId];
-        const dir = n.dir;
-        n.parentId = null;
-        n.dir = null;
-        if (!this.data.rootIds.includes(id)) this.data.rootIds.push(id);
-        if (parent && dir) {
-          this.childrenOf(parent.id, dir).forEach((s, idx) => { s.order = idx; });
-          this._layoutSide(parent, dir);
-        }
+      this._applyToSelected((id) => this.detachNode(id, true));
+      this.render();
+      this._emit();
+    }
+
+    deleteSelectedLink() {
+      if (this.readOnly || !this.selectedLinkId) return false;
+      if (this._extraLinkById(this.selectedLinkId)) return this._deleteExtraLink(this.selectedLinkId);
+      return this.detachNode(this.selectedLinkId);
+    }
+
+    _extraLinkById(id) {
+      return (this.data.links || []).find((l) => l.id === id) || null;
+    }
+
+    _linksInSet(ids) {
+      return (this.data.links || []).filter((l) => ids.has(l.fromId) && ids.has(l.toId)).map(clone);
+    }
+
+    _remapLinks(links, idMap) {
+      (Array.isArray(links) ? links : []).forEach((l) => {
+        const fromId = idMap[l.fromId];
+        const toId = idMap[l.toId];
+        if (!fromId || !toId || fromId === toId) return;
+        if (this._hasConnection(fromId, toId)) return;
+        this.data.links = this.data.links || [];
+        this.data.links.push({
+          id: uid('lk_'),
+          fromId,
+          toId,
+          fromDir: (l.fromDir === 'left' || l.fromDir === 'right') ? l.fromDir : 'right',
+          toDir: (l.toDir === 'left' || l.toDir === 'right') ? l.toDir : 'left',
+        });
       });
+    }
+
+    _pruneLinksForIds(ids) {
+      const gone = ids instanceof Set ? ids : new Set(ids || []);
+      if (!gone.size) return;
+      this.data.links = (this.data.links || []).filter((l) => !gone.has(l.fromId) && !gone.has(l.toId));
+      if (this.selectedLinkId && this._extraLinkById(this.selectedLinkId) == null && !this.data.nodes[this.selectedLinkId]) {
+        this.selectedLinkId = null;
+      }
+    }
+
+    _hasConnection(fromId, toId) {
+      if (!fromId || !toId || fromId === toId) return true;
+      const a = this.data.nodes[fromId];
+      const b = this.data.nodes[toId];
+      if (!a || !b) return true;
+      if (b.parentId === fromId || a.parentId === toId) return true;
+      return (this.data.links || []).some((l) =>
+        (l.fromId === fromId && l.toId === toId) || (l.fromId === toId && l.toId === fromId)
+      );
+    }
+
+    _deleteExtraLink(id, silent) {
+      if (this.readOnly || !id) return false;
+      const before = (this.data.links || []).length;
+      this.data.links = (this.data.links || []).filter((l) => l.id !== id);
+      if (this.data.links.length === before) return false;
+      if (this.selectedLinkId === id) this.selectedLinkId = null;
+      if (this._menuLinkId === id) this._menuLinkId = null;
+      if (!silent) {
+        this.render();
+        this._emit();
+      }
+      return true;
+    }
+
+    _connectNodes(fromId, toId, dir) {
+      const parent = this.data.nodes[fromId];
+      const child = this.data.nodes[toId];
+      if (!parent || !child || fromId === toId) return false;
+      if (this.readOnly || this.isNodeLocked(parent) || this.isNodeLocked(child)) return false;
+      if (this._hasConnection(fromId, toId)) return false;
+      const cx = child.x + child.w / 2;
+      const cy = child.y + child.h / 2;
+      const fromDir = (dir === 'left' || dir === 'right') ? dir : this.nearestSide(parent, cx, cy);
+      const toDir = OPP[fromDir] || 'left';
+      this.data.links = this.data.links || [];
+      const link = { id: uid('lk_'), fromId, toId, fromDir, toDir };
+      this.data.links.push(link);
+      this.selectedLinkId = link.id;
+      this.selectedIds = new Set();
+      this.selectedId = null;
+      this.selectedFrameId = null;
+      this.render();
+      this._emit();
+      return true;
     }
 
     _groupToggleFormat(key) {
@@ -3161,6 +3712,7 @@
         created.forEach((nn) => { nn.x += dx; nn.y += dy; });
         this.data.rootIds.push(newRoot.id);
       }
+      this._remapLinks(payload.links, idMap);
       return newRoot.id;
     }
 
@@ -3182,7 +3734,10 @@
     }
 
     _relayoutNode(n) {
-      if (n && n.parentId && this.data.nodes[n.parentId]) this._layoutSide(this.data.nodes[n.parentId], n.dir);
+      if (!n || !n.parentId || !this.data.nodes[n.parentId]) return;
+      const parent = this.data.nodes[n.parentId];
+      if (n.dir) this._packSide(parent, n.dir, true, n.id);
+      this._spreadAncestors(parent, n.dir);
     }
 
     _setImageSize(n, nextW, fromCenter) {
@@ -3215,9 +3770,28 @@
       if (!el) return null;
       el.style.left = n.x + 'px';
       el.style.top = n.y + 'px';
-      el.style.width = (n.w || 148) + 'px';
-      el.style.height = (n.h || 48) + 'px';
+      el.style.width = (n.w || CELL_W) + 'px';
+      el.style.height = (n.h || CELL_H) + 'px';
+      el.classList.toggle('is-maxw', n.type === 'text' && String(n.content || '').split('\n').some((line) => line.length >= CELL_CHARS));
       return el;
+    }
+
+    _paintMovingNodes() {
+      const d = this._drag;
+      const ids = new Set();
+      (d && d.origins ? d.origins : []).forEach((o) => { if (o && o.id) ids.add(o.id); });
+      if (d && d.id) ids.add(d.id);
+      this.els.world.querySelectorAll('.mm-node.is-dragging').forEach((el) => {
+        if (!ids.has(el.dataset.id)) el.classList.remove('is-dragging');
+      });
+      ids.forEach((id) => {
+        const n = this.data.nodes[id];
+        if (!n || this.hiddenByCollapse(id)) return;
+        const el = this._paintNodeBox(n);
+        if (el) el.classList.add('is-dragging');
+      });
+      this._renderLinks(this.els.svg);
+      this._syncDropUi();
     }
 
     _beginNodeResize(e, n, corner) {
@@ -3285,22 +3859,16 @@
     }
 
     nearestSide(node, wx, wy) {
-      const dx = (wx - (node.x + node.w / 2)) / Math.max(node.w / 2, 1);
-      const dy = (wy - (node.y + node.h / 2)) / Math.max(node.h / 2, 1);
-      if (Math.abs(dx) > Math.abs(dy) + 0.16) return dx > 0 ? 'right' : 'left';
-      if (Math.abs(dy) > Math.abs(dx) + 0.16) return dy > 0 ? 'down' : 'up';
-      if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
-      return dy >= 0 ? 'down' : 'up';
+      const cx = node.x + node.w / 2;
+      return wx < cx ? 'left' : 'right';
     }
 
     _stickySide(node, wx, wy, prevParentId, prevSide) {
       const next = this.nearestSide(node, wx, wy);
       if (!prevSide || prevParentId !== node.id) return next;
+      if (prevSide !== 'left' && prevSide !== 'right') return next;
       const dx = (wx - (node.x + node.w / 2)) / Math.max(node.w / 2, 1);
-      const dy = (wy - (node.y + node.h / 2)) / Math.max(node.h / 2, 1);
-      const along = (prevSide === 'left' || prevSide === 'right') ? Math.abs(dx) : Math.abs(dy);
-      const across = (prevSide === 'left' || prevSide === 'right') ? Math.abs(dy) : Math.abs(dx);
-      if (along + 0.42 >= across) return prevSide;
+      if (Math.abs(dx) < 0.12) return prevSide;
       return next;
     }
 
@@ -3326,7 +3894,14 @@
         return d >= 0 ? d : Infinity;
       }
       if (dir === 'left') {
-        if (wy < node.y - slack || wy > node.y + node.h + slack) return Infinity;
+        const kids = this.childrenOf(node.id, 'left');
+        let y0 = node.y - slack;
+        let y1 = node.y + node.h + slack;
+        kids.forEach((k) => {
+          y0 = Math.min(y0, k.y - slack);
+          y1 = Math.max(y1, k.y + k.h + slack);
+        });
+        if (wy < y0 || wy > y1) return Infinity;
         const d = node.x - wx;
         return d >= 0 ? d : Infinity;
       }
@@ -3374,20 +3949,22 @@
       if (over && !skip.has(over.id) && !this.isNodeLocked(over)) {
         const prev = this._drag || {};
         const dir = this._stickySide(over, wx, wy, prev.dropParentId, prev.dropSide);
-        if (this._drag) {
-          this._drag.dropParentId = over.id;
-          this._drag.dropSide = dir;
+        if (dir === 'left' || dir === 'right') {
+          if (this._drag) {
+            this._drag.dropParentId = over.id;
+            this._drag.dropSide = dir;
+          }
+          const kids = this.childrenOf(over.id, dir).filter((k) => !skip.has(k.id));
+          const index = this._insertIndex(kids, dir, wx, wy);
+          return this._makeDrop(over, dir, index, kids, 'child');
         }
-        const kids = this.childrenOf(over.id, dir).filter((k) => !skip.has(k.id));
-        const index = this._insertIndex(kids, dir, wx, wy);
-        return this._makeDrop(over, dir, index, kids, 'child');
       }
 
       let best = null;
       let bestD = 36;
       this.nodesArr().forEach((parent) => {
         if (skip.has(parent.id) || this.hiddenByCollapse(parent.id) || this.isNodeLocked(parent)) return;
-        DIRS.forEach((dir) => {
+        RELINK_DIRS.forEach((dir) => {
           if (parent.collapsedDirs && parent.collapsedDirs[dir]) return;
           const kids = this.childrenOf(parent.id, dir).filter((k) => !skip.has(k.id));
           for (let i = 1; i < kids.length; i++) {
@@ -3424,7 +4001,10 @@
       const t = 9;
       const inset = 10;
       if (dir === 'right') return { x: parent.x + parent.w - t / 2, y: parent.y + inset, w: t, h: Math.max(parent.h - inset * 2, 18) };
-      if (dir === 'left') return { x: parent.x - t / 2, y: parent.y + inset, w: t, h: Math.max(parent.h - inset * 2, 18) };
+      if (dir === 'left') {
+        const gap = Math.max(24, Math.min(40, this._packGap(parent)));
+        return { x: parent.x - gap - t, y: parent.y + inset, w: t, h: Math.max(parent.h - inset * 2, 18) };
+      }
       if (dir === 'down') return { x: parent.x + inset, y: parent.y + parent.h - t / 2, w: Math.max(parent.w - inset * 2, 18), h: t };
       return { x: parent.x + inset, y: parent.y - t / 2, w: Math.max(parent.w - inset * 2, 18), h: t };
     }
@@ -3549,11 +4129,41 @@
       return best;
     }
 
+    _connectTargetAt(clientX, clientY, fromId) {
+      const skip = new Set(fromId ? [fromId] : []);
+      const stack = document.elementsFromPoint(clientX, clientY) || [];
+      for (let i = 0; i < stack.length; i++) {
+        const el = stack[i];
+        if (!el || !el.closest) continue;
+        const nodeEl = el.classList && el.classList.contains('mm-node') ? el : el.closest('.mm-node');
+        if (!nodeEl || !this.els.world.contains(nodeEl)) continue;
+        if (skip.has(nodeEl.dataset.id)) continue;
+        const n = this.data.nodes[nodeEl.dataset.id];
+        if (n && !this.hiddenByCollapse(n.id) && !this.isNodeLocked(n)) return n;
+      }
+      const w = this.screenToWorld(clientX, clientY);
+      const PAD = 40;
+      let best = null;
+      let bestD = Infinity;
+      this.nodesArr().forEach((n) => {
+        if (skip.has(n.id) || this.hiddenByCollapse(n.id) || this.isNodeLocked(n)) return;
+        const nx = clamp(w.x, n.x, n.x + n.w);
+        const ny = clamp(w.y, n.y, n.y + n.h);
+        const dist = Math.hypot(w.x - nx, w.y - ny);
+        if (dist <= PAD && dist < bestD) {
+          bestD = dist;
+          best = n;
+        }
+      });
+      return best;
+    }
+
     startEdit(id) {
       if (this.readOnly || this.isNodeLocked(id)) return;
       this.editingId = id;
       this.selectOnly(id);
       this.render();
+      const n = this.data.nodes[id];
       const el = this.els.world.querySelector(`.mm-node[data-id="${CSS.escape(id)}"]`);
       if (!el) return;
       const body = el.querySelector('[data-edit]');
@@ -3569,6 +4179,17 @@
         }
       }
       this._positionFormatBar(el);
+      if (body && n && n.type === 'text') {
+        body.addEventListener('input', () => {
+          if (this.readOnly || n.userSized) return;
+          n.content = (body.innerText || '').replace(/\n$/, '');
+          if (this._fitAutoNode(n, true)) {
+            this._paintSubtreeBoxes(n.id);
+            this._renderLinks(this.els.svg);
+            this._positionFormatBar(el);
+          }
+        });
+      }
     }
 
     commitEdit() {
@@ -3599,6 +4220,8 @@
           if (href) n.content = href;
           if (!n.label || n.label === 'Link') n.label = prettyLinkLabel(n.content);
           this._fitLinkNode(n);
+        } else if (n.type === 'text' || n.type === 'code') {
+          this._fitAutoNode(n);
         }
       }
       this.editingId = null;
@@ -3606,10 +4229,6 @@
       if (el) delete el.dataset.sig;
       this.render();
       this._measureDomThenLayout();
-      if (n && n.parentId && this.data.nodes[n.parentId] && isMediaType(n.type)) {
-        this._layoutSide(this.data.nodes[n.parentId], n.dir);
-        this.render();
-      }
       this._emit();
     }
 
@@ -3742,7 +4361,26 @@
         const color = resolveVisibleLinkColor(this.data, child, parent, a, b, (x, y) => this._frameAtWorld(x, y));
         const w = child.style.linkWidth || 2.25;
         const dash = linkDash(child.style.linkStyle || parent.style.linkStyle);
-        parts.push(`<path d="${this._bezier(a, b, child.dir, child.style.linkCurve)}" fill="none" stroke="${escapeAttr(color)}" stroke-width="${w}" stroke-linecap="round"${dash ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
+        const d = this._bezier(a, b, child.dir, child.style.linkCurve);
+        const selected = this.selectedLinkId === child.id;
+        parts.push(`<path class="mm-link-hit" data-link="${escapeAttr(child.id)}" d="${d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round"/>`);
+        parts.push(`<path class="mm-link-draw${selected ? ' is-selected' : ''}" data-link="${escapeAttr(child.id)}" d="${d}" fill="none" stroke="${escapeAttr(selected ? '#5ea882' : color)}" stroke-width="${selected ? Math.max(w, 3.2) : w}" stroke-linecap="round"${dash && !selected ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
+      });
+      (this.data.links || []).forEach((l) => {
+        const from = this.data.nodes[l.fromId];
+        const to = this.data.nodes[l.toId];
+        if (!from || !to) return;
+        if (this.hiddenByCollapse(from.id) || this.hiddenByCollapse(to.id)) return;
+        const dir = l.fromDir || 'right';
+        const a = this._edgePoint(from, dir);
+        const b = this._edgePoint(to, l.toDir || OPP[dir] || 'left');
+        const color = resolveVisibleLinkColor(this.data, from, to, a, b, (x, y) => this._frameAtWorld(x, y));
+        const w = (from.style && from.style.linkWidth) || 2.25;
+        const dash = linkDash((from.style && from.style.linkStyle) || (to.style && to.style.linkStyle));
+        const d = this._bezier(a, b, dir, from.style && from.style.linkCurve);
+        const selected = this.selectedLinkId === l.id;
+        parts.push(`<path class="mm-link-hit" data-link="${escapeAttr(l.id)}" d="${d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round"/>`);
+        parts.push(`<path class="mm-link-draw${selected ? ' is-selected' : ''}" data-link="${escapeAttr(l.id)}" d="${d}" fill="none" stroke="${escapeAttr(selected ? '#5ea882' : color)}" stroke-width="${selected ? Math.max(w, 3.2) : w}" stroke-linecap="round"${dash && !selected ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
       });
       if (this._drag && this._drag.moved && this._drag.drop) {
         const slot = this._drag.drop;
@@ -3750,6 +4388,16 @@
         const child = this.data.nodes[this._drag.id];
         if (parent && child) {
           parts.push(`<path d="${this._dropLinkPath(parent, child, slot.dir)}" fill="none" stroke="#5ea882" stroke-width="2.4" stroke-dasharray="6 5" stroke-linecap="round"/>`);
+        }
+      }
+      if (this._drag && this._drag.kind === 'connect' && this._drag.fromId) {
+        const from = this.data.nodes[this._drag.fromId];
+        if (from) {
+          const dir = this._drag.fromDir || this.nearestSide(from, this._drag.wx, this._drag.wy);
+          const a = this._edgePoint(from, dir);
+          const to = this._drag.toId && this.data.nodes[this._drag.toId];
+          const b = to ? this._edgePoint(to, OPP[dir] || 'left') : { x: this._drag.wx, y: this._drag.wy };
+          parts.push(`<path d="${this._bezier(a, b, dir)}" fill="none" stroke="#5ea882" stroke-width="2.4" stroke-linecap="round"/>`);
         }
       }
       svg.innerHTML = parts.join('');
@@ -3789,15 +4437,20 @@
 
     _bezier(a, b, dir, curve) {
       const t = clamp(curve == null ? 50 : Number(curve), 0, 100) / 100;
-      const factor = 0.1 + t * 0.75;
       if (dir === 'right' || dir === 'left') {
         const s = dir === 'right' ? 1 : -1;
-        const c = Math.max(8, Math.abs(b.x - a.x) * factor);
-        return `M ${a.x} ${a.y} C ${a.x + s * c} ${a.y}, ${b.x - s * c} ${b.y}, ${b.x} ${b.y}`;
+        const dx = Math.abs(b.x - a.x);
+        const dy = Math.abs(b.y - a.y);
+        const c = Math.max(52, dx * (0.22 + t * 0.5), Math.min(dy * 0.42, Math.max(dx * 0.85, 52)));
+        const e = Math.max(28, Math.min(c, dx * 0.55));
+        return `M ${a.x} ${a.y} C ${a.x + s * c} ${a.y}, ${b.x - s * e} ${b.y}, ${b.x} ${b.y}`;
       }
       const s = dir === 'down' ? 1 : -1;
-      const c = Math.max(8, Math.abs(b.y - a.y) * factor);
-      return `M ${a.x} ${a.y} C ${a.x} ${a.y + s * c}, ${b.x} ${b.y - s * c}, ${b.x} ${b.y}`;
+      const dy = Math.abs(b.y - a.y);
+      const dx = Math.abs(b.x - a.x);
+      const c = Math.max(52, dy * (0.22 + t * 0.5), Math.min(dx * 0.42, Math.max(dy * 0.85, 52)));
+      const e = Math.max(28, Math.min(c, dy * 0.55));
+      return `M ${a.x} ${a.y} C ${a.x} ${a.y + s * c}, ${b.x} ${b.y - s * e}, ${b.x} ${b.y}`;
     }
 
     _renderNode(n) {
@@ -3827,8 +4480,9 @@
       el.title = locked ? 'Locked · press and hold to unlock' : '';
       el.style.left = n.x + 'px';
       el.style.top = n.y + 'px';
-      el.style.width = (n.w || 148) + 'px';
-      el.style.height = (n.h || 48) + 'px';
+      el.style.width = (n.w || CELL_W) + 'px';
+      el.style.height = (n.h || CELL_H) + 'px';
+      el.classList.toggle('is-maxw', n.type === 'text' && String(n.content || '').split('\n').some((line) => line.length >= CELL_CHARS));
       el.style.background = isTransparent(n.style.fill) ? 'transparent' : n.style.fill;
       el.style.borderColor = isTransparent(n.style.border) ? 'transparent' : (n.style.border || n.style.fill);
       el.style.color = n.style.textColor || '#1a2130';
@@ -3836,7 +4490,7 @@
       el.style.fontWeight = fmt.bold ? '700' : '500';
       el.style.fontStyle = fmt.italic ? 'italic' : 'normal';
       el.style.textDecoration = fmt.underline ? 'underline' : 'none';
-      el.style.fontSize = (fmt.fontSize || 14) + 'px';
+      el.style.fontSize = (fmt.fontSize || FONT_SIZE_DEFAULT) + 'px';
       el.style.fontFamily = fontCss(fmt.fontFamily);
       el.style.textAlign = fmt.align || 'center';
       const bodyEl = el.querySelector('.mm-node-body');
@@ -3861,6 +4515,7 @@
         locked ? 'L' : '',
         n.noteOpen ? 'no' : '',
         (n.note || '').length,
+        n.parentId ? '' : 'root',
         global.hljs ? 'hl' : '',
       ].join('|');
       if (this.editingId === n.id && el.querySelector('[data-edit]')) return;
@@ -3896,7 +4551,7 @@
         }
         if (vid) {
           body += `<button type="button" class="mm-yt-play" data-play-yt="${escapeAttr(vid)}" title="Play video">
-            <img class="mm-yt-thumb" alt="" src="https://i.ytimg.com/vi/${encodeURIComponent(vid)}/hqdefault.jpg" draggable="false"/>
+            <img class="mm-yt-thumb" alt="" src="https://i.ytimg.com/vi/${encodeURIComponent(vid)}/hqdefault.jpg" draggable="false" decoding="async"/>
             <span class="mm-yt-play-btn" aria-hidden="true"></span>
           </button>`;
         }
@@ -3933,33 +4588,82 @@
           body += `<button type="button" class="mm-link-open" data-open-link title="Open in new tab">↗</button></div>`;
         }
       } else {
-        const chrome = n.parentId ? '' : `<div class="mm-node-chrome"><span class="mm-root-pill"><span class="mm-root-dot"></span>Root</span></div>`;
         if (editing) {
-          body = chrome + `<div class="mm-node-body" data-edit contenteditable="true">${escapeHtml(n.content)}</div>`;
+          body = `<div class="mm-node-body" data-edit contenteditable="true">${escapeHtml(n.content)}</div>`;
         } else {
-          body = chrome + `<div class="mm-node-body">${escapeHtml(n.content || '')}</div>`;
+          body = `<div class="mm-node-body">${escapeHtml(n.content || '')}</div>`;
         }
       }
 
-      const handles = locked ? '' : DIRS.map((d) => {
-        if (n.collapsedDirs && n.collapsedDirs[d]) return '';
-        return `<button type="button" class="mm-handle mm-handle-${d}" data-add="${d}" title="Add ${d}">+</button>`;
-      }).join('');
-      const badges = DIRS.map((d) => {
+      const ports = DIRS.map((d) => {
         const count = this.immediateCount(n.id, d);
-        if (!count) return '';
         const collapsed = !!(n.collapsedDirs && n.collapsedDirs[d]);
-        if (collapsed) {
-          return `<button type="button" class="mm-badge mm-badge-${d} is-collapsed" data-toggle="${d}" title="Expand ${d}">${count}</button>`;
+        const hoverAdd = d === 'left' || d === 'right';
+        const add = (!locked && !collapsed && hoverAdd)
+          ? `<button type="button" class="mm-handle" data-add="${d}" title="Add ${d}">+</button>`
+          : '';
+        let badge = '';
+        if (count) {
+          if (collapsed) {
+            badge = `<button type="button" class="mm-badge is-collapsed" data-toggle="${d}" title="Expand ${d}">${count}</button>`;
+          } else if (hoverAdd) {
+            badge = `<button type="button" class="mm-handle mm-collapse" data-toggle="${d}" title="Collapse ${d}">−</button>`;
+          }
         }
-        return `<button type="button" class="mm-badge mm-badge-${d}" data-toggle="${d}" title="Collapse ${d}">−</button>`;
+        if (!add && !badge) return '';
+        return `<div class="mm-ports mm-ports-${d}${collapsed ? ' has-collapsed' : ''}">${add}${badge}</div>`;
       }).join('');
-      return body + handles + badges + this._noteChromeHtml(n) + (locked ? '<span class="mm-node-lock" title="Locked · press and hold to unlock"></span>' : '<div class="mm-resize" data-resize title="Resize"></div>');
+      const dots = locked ? '' : RELINK_DIRS.map((d) => (
+        `<button type="button" class="mm-edge-dot mm-edge-dot-${d}" data-connect="${d}" title="Drag to connect ${d}"></button>`
+      )).join('');
+      return body + ports + dots + this._noteChromeHtml(n) + (locked ? '<span class="mm-node-lock" title="Locked · press and hold to unlock"></span>' : '<div class="mm-resize" data-resize title="Resize"></div>');
+    }
+
+    _portSideAt(el, clientX, clientY) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      const x = clientX - r.left;
+      return x < r.width / 2 ? 'left' : 'right';
+    }
+
+    _setNodePortSide(el, side) {
+      DIRS.forEach((d) => {
+        el.classList.toggle('ports-side-' + d, d === side);
+        const p = el.querySelector('.mm-ports-' + d);
+        if (p) p.classList.toggle('is-hot', d === side);
+      });
+      el.classList.toggle('ports-hot', !!side);
     }
 
     _bindNodeButtons(el, n) {
+      const setSide = (side) => {
+        clearTimeout(el._portsHide);
+        this._setNodePortSide(el, side);
+      };
+      const fromEvent = (e) => {
+        if (this._ignorePortClick || this.els.root.classList.contains('is-linking') || (this._drag && this._drag.kind === 'connect')) return;
+        setSide(this._portSideAt(el, e.clientX, e.clientY));
+      };
+      const releasePorts = () => {
+        clearTimeout(el._portsHide);
+        el._portsHide = setTimeout(() => this._setNodePortSide(el, null), 420);
+      };
+      el.addEventListener('pointerenter', fromEvent);
+      el.addEventListener('pointermove', fromEvent);
+      el.addEventListener('pointerleave', releasePorts);
+      el.querySelectorAll('.mm-ports').forEach((p) => {
+        const d = DIRS.find((s) => p.classList.contains('mm-ports-' + s));
+        p.addEventListener('pointerenter', () => setSide(d));
+        p.addEventListener('pointermove', () => setSide(d));
+        p.addEventListener('pointerleave', releasePorts);
+      });
       el.querySelectorAll('[data-add]').forEach((btn) => {
         btn.addEventListener('pointerdown', (e) => {
+          if (this._ignorePortClick || this.els.root.classList.contains('is-linking') || (this._drag && this._drag.kind === 'connect')) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           e.stopPropagation();
           e.preventDefault();
           this.commitEdit();
@@ -3983,27 +4687,15 @@
         });
       });
       el.querySelectorAll('[data-play-yt]').forEach((btn) => {
-        btn.addEventListener('pointerdown', (e) => e.stopPropagation());
         btn.addEventListener('dblclick', (e) => {
           e.preventDefault();
           e.stopPropagation();
-        });
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this._openYoutube(btn.getAttribute('data-play-yt') || n.content, n);
         });
       });
       el.querySelectorAll('[data-open-img]').forEach((btn) => {
-        btn.addEventListener('pointerdown', (e) => e.stopPropagation());
         btn.addEventListener('dblclick', (e) => {
           e.preventDefault();
           e.stopPropagation();
-        });
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this._openImage(btn.getAttribute('data-open-img') || n.content, n);
         });
       });
       el.querySelectorAll('[data-note-toggle]').forEach((btn) => {
@@ -4177,7 +4869,7 @@
       });
     }
 
-    _syncSizes() {
+    _syncSizes(opts) {
       if (this._destroyed || this.editingId || this._drag) return;
       let changed = false;
       const grown = [];
@@ -4185,18 +4877,14 @@
         const n = this.data.nodes[el.dataset.id];
         if (!n || n.userSized || this.hiddenByCollapse(n.id)) return;
         if (n.type === 'youtube') {
-          if (n.w !== YT_W || n.h !== YT_H) {
-            n.w = YT_W;
-            n.h = YT_H;
+          if (this._setNodeSize(n, YT_W, YT_H)) {
             changed = true;
             grown.push(n);
           }
           return;
         }
         if (n.type === 'image') {
-          if (!n.userSized && (n.w !== IMG_W || n.h !== IMG_H)) {
-            n.w = IMG_W;
-            n.h = IMG_H;
+          if (!n.userSized && this._setNodeSize(n, IMG_W, IMG_H)) {
             changed = true;
             grown.push(n);
           }
@@ -4209,25 +4897,12 @@
           }
           return;
         }
-        const body = el.querySelector('.mm-node-body, .mm-code, .mm-code-edit, .mm-link-row');
-        if (!body) return;
-        const extra = n.type === 'code' ? 52 : n.type === 'link' ? 36 : 28;
-        const h = Math.ceil(body.scrollHeight + extra);
-        if (h && h > n.h + 2) {
-          n.h = h;
+        if (this._fitAutoNode(n)) {
           changed = true;
           grown.push(n);
         }
       });
       if (changed) {
-        const seen = new Set();
-        grown.forEach((n) => {
-          const p = n.parentId && this.data.nodes[n.parentId];
-          if (p && !seen.has(p.id)) {
-            seen.add(p.id);
-            this._layoutSide(p, n.dir);
-          }
-        });
         this._measuring = true;
         this.render();
         this._measuring = false;
@@ -4615,8 +5290,8 @@
           if (act === 'bold') this.applyFormat(n.id, { bold: !n.format.bold });
           if (act === 'italic') this.applyFormat(n.id, { italic: !n.format.italic });
           if (act === 'underline') this.applyFormat(n.id, { underline: !n.format.underline });
-          if (act === 'smaller') this.applyFormat(n.id, { fontSize: clamp((n.format.fontSize || 14) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
-          if (act === 'larger') this.applyFormat(n.id, { fontSize: clamp((n.format.fontSize || 14) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+          if (act === 'smaller') this.applyFormat(n.id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+          if (act === 'larger') this.applyFormat(n.id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
           if (act === 'align-left') this.applyFormat(n.id, { align: 'left' });
           if (act === 'align-center') this.applyFormat(n.id, { align: 'center' });
           if (act === 'align-right') this.applyFormat(n.id, { align: 'right' });
@@ -4641,6 +5316,7 @@
       if (!btn) return;
       const act = btn.getAttribute('data-act');
       if (act === 'tool-frame') this._setTool(this.tool === 'frame' ? 'select' : 'frame');
+      if (act === 'tool-connect') this._setTool(this.tool === 'connect' ? 'select' : 'connect');
       if (act === 'add-root') this.addNewRoot();
       if (act === 'undo') this.undo();
       if (act === 'redo') this.redo();
@@ -4656,10 +5332,16 @@
 
     _setTool(tool) {
       this.tool = tool;
+      this._connectFrom = null;
       this.els.root.dataset.tool = tool;
-      this.els.toolbar.querySelectorAll('[data-act="tool-select"],[data-act="tool-frame"]').forEach((b) => {
+      this.els.toolbar.querySelectorAll('[data-act="tool-select"],[data-act="tool-frame"],[data-act="tool-connect"]').forEach((b) => {
         b.classList.toggle('active', b.getAttribute('data-act') === 'tool-' + tool);
       });
+      if (this.els.hint) {
+        this.els.hint.textContent = tool === 'connect'
+          ? 'Drag from a cell onto another to connect · Click a line and press Delete to remove it'
+          : 'Left-drag to select · Connect tool to draw a line · Click a line and Delete to remove it · Two-finger drag to pan';
+      }
     }
 
     async _onExportClick(e) {
@@ -4734,21 +5416,49 @@
           dash: linkDash(child.style.linkStyle || parent.style.linkStyle),
         });
       });
+      (this.data.links || []).forEach((l) => {
+        const from = this.data.nodes[l.fromId];
+        const to = this.data.nodes[l.toId];
+        if (!from || !to) return;
+        if (this.hiddenByCollapse(from.id) || this.hiddenByCollapse(to.id)) return;
+        const dir = l.fromDir || 'right';
+        const a = this._edgePoint(from, dir);
+        const b = this._edgePoint(to, l.toDir || OPP[dir] || 'left');
+        links.push({
+          a,
+          b,
+          dir,
+          color: resolveVisibleLinkColor(this.data, from, to, a, b, (x, y) => this._frameAtWorld(x, y)),
+          width: (from.style && from.style.linkWidth) || 2.25,
+          dash: linkDash((from.style && from.style.linkStyle) || (to.style && to.style.linkStyle)),
+        });
+      });
       return { nodes: this.nodesArr().filter((n) => !this.hiddenByCollapse(n.id)).map(clone), frames: clone(this.data.frames || []), links };
     }
 
-    _zoomAtClient(clientX, clientY, deltaY) {
-      const rect = this.els.canvas.getBoundingClientRect();
-      const factor = Math.exp(-deltaY * 0.0025);
-      this.setZoom(this.data.viewport.zoom * factor, clientX - rect.left, clientY - rect.top);
+    _zoomAtClient(clientX, clientY, deltaY, intensity) {
+      this._zoomPend = this._zoomPend || { dy: 0, x: clientX, y: clientY, k: intensity || 0.01 };
+      this._zoomPend.dy += deltaY;
+      this._zoomPend.x = clientX;
+      this._zoomPend.y = clientY;
+      if (intensity) this._zoomPend.k = intensity;
+      if (this._zoomRaf) return;
+      this._zoomRaf = requestAnimationFrame(() => {
+        this._zoomRaf = 0;
+        const p = this._zoomPend;
+        this._zoomPend = null;
+        if (!p || this._destroyed) return;
+        const rect = this.els.canvas.getBoundingClientRect();
+        const factor = Math.exp(-p.dy * (p.k || 0.01));
+        this._setZoomAt(this.data.viewport.zoom * factor, p.x - rect.left, p.y - rect.top);
+        this._scheduleVpEmit();
+      });
     }
 
     _wheelShouldZoom(e) {
       if (e.ctrlKey || e.metaKey) return true;
+      if (e.deltaZ && e.deltaZ !== 0) return true;
       if (e.deltaMode === 1 || e.deltaMode === 2) return true;
-      const ax = Math.abs(e.deltaX);
-      const ay = Math.abs(e.deltaY);
-      if (ax < 0.5 && ay >= 40 && Number.isInteger(e.deltaY)) return true;
       return false;
     }
 
@@ -4759,8 +5469,16 @@
         return;
       }
       e.preventDefault();
-      if (this._wheelShouldZoom(e)) {
-        this._zoomAtClient(e.clientX, e.clientY, e.deltaY);
+      if (this._gestureActive || this._pinch) return;
+      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      const pinch = e.ctrlKey || e.metaKey || (e.deltaZ && e.deltaZ !== 0);
+      if (pinch) this._pinchWheelUntil = now + 320;
+      if (pinch || now < (this._pinchWheelUntil || 0) || this._wheelShouldZoom(e)) {
+        let dy = e.deltaY;
+        if (!dy && e.deltaZ) dy = e.deltaZ;
+        if (e.deltaMode === 1) dy *= 16;
+        else if (e.deltaMode === 2) dy *= 160;
+        this._zoomAtClient(e.clientX, e.clientY, dy, pinch || now < (this._pinchWheelUntil || 0) ? 0.01 : 0.003);
         return;
       }
       let dx = e.deltaX;
@@ -4772,8 +5490,66 @@
       this.data.viewport.x -= dx;
       this.data.viewport.y -= dy;
       this._applyTransform();
-      clearTimeout(this._vpEmit);
-      this._vpEmit = setTimeout(() => this._emit(), 200);
+      this._scheduleVpEmit();
+    }
+
+    _onGestureStart(e) {
+      if (this._ytOpen) return;
+      e.preventDefault();
+      this._gestureActive = true;
+      this._gestureZoom = this.data.viewport.zoom;
+    }
+
+    _onGestureChange(e) {
+      if (this._ytOpen) return;
+      e.preventDefault();
+      this._gestureActive = true;
+      const rect = this.els.canvas.getBoundingClientRect();
+      this._setZoomAt((this._gestureZoom || 1) * (e.scale || 1), e.clientX - rect.left, e.clientY - rect.top);
+      this._scheduleVpEmit();
+    }
+
+    _onGestureEnd(e) {
+      e.preventDefault();
+      this._gestureActive = false;
+      this._scheduleVpEmit();
+    }
+
+    _beginPinch() {
+      const pts = [...this._pointers.values()];
+      if (pts.length < 2) return;
+      this._hideMarquee();
+      this.els.root.classList.remove('is-panning', 'is-moving', 'is-relink', 'is-selecting');
+      this._drag = null;
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+      this._pinch = {
+        dist,
+        zoom: this.data.viewport.zoom,
+        mx: (pts[0].x + pts[1].x) / 2,
+        my: (pts[0].y + pts[1].y) / 2,
+      };
+    }
+
+    _updatePinch() {
+      if (!this._pinch) return;
+      const pts = [...this._pointers.values()];
+      if (pts.length < 2) return;
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+      const mx = (pts[0].x + pts[1].x) / 2;
+      const my = (pts[0].y + pts[1].y) / 2;
+      const rect = this.els.canvas.getBoundingClientRect();
+      this._setZoomAt(this._pinch.zoom * (dist / this._pinch.dist), mx - rect.left, my - rect.top);
+      this.data.viewport.x += mx - this._pinch.mx;
+      this.data.viewport.y += my - this._pinch.my;
+      this._pinch.mx = mx;
+      this._pinch.my = my;
+      this._applyTransform();
+      this._scheduleVpEmit();
+    }
+
+    _endPinch() {
+      this._pinch = null;
+      this._scheduleVpEmit();
     }
 
     _onDblClick(e) {
@@ -4819,6 +5595,11 @@
     _openCanvasContext(clientX, clientY, target) {
       const t = target && target.closest ? target : (target && target.parentElement);
       if (t && t.closest && (t.closest('.mm-toolbar') || t.closest('.mm-frames-dock') || t.closest('.mm-menu') || t.closest('.mm-format-bar') || t.closest('.mm-frames-menu'))) return;
+      const linkEl = t && t.closest && t.closest('[data-link]');
+      if (linkEl) {
+        this._openLinkMenu(linkEl.getAttribute('data-link'), clientX, clientY);
+        return;
+      }
       const nodeEl = t && t.closest && t.closest('.mm-node');
       const frameEl = t && t.closest && t.closest('.mm-frame');
       this.commitEdit();
@@ -4865,6 +5646,41 @@
         return;
       }
       this._closeMenu();
+    }
+
+    _openLinkMenu(id, x, y) {
+      const extra = this._extraLinkById(id);
+      if (extra) {
+        this._menuLinkId = extra.id;
+        this._menuNodeId = null;
+        this._menuMode = 'link';
+        this.selectedLinkId = extra.id;
+        this.selectedIds = new Set();
+        this.selectedId = null;
+        this.selectedFrameId = null;
+        this.render();
+        this.els.menu.innerHTML = `
+          <div class="mm-menu-label">Connection</div>
+          <button type="button" data-m="disconnect">Delete connection</button>
+        `;
+        this._placeMenu(x, y);
+        return;
+      }
+      const n = this.data.nodes[id];
+      if (!n || !n.parentId) return;
+      this._menuLinkId = null;
+      this._menuNodeId = id;
+      this._menuMode = 'link';
+      this.selectedLinkId = id;
+      this.selectedIds = new Set();
+      this.selectedId = null;
+      this.selectedFrameId = null;
+      this.render();
+      this.els.menu.innerHTML = `
+        <div class="mm-menu-label">Connection</div>
+        <button type="button" data-m="disconnect">Delete connection</button>
+      `;
+      this._placeMenu(x, y);
     }
 
     _placeMenu(x, y) {
@@ -4963,6 +5779,7 @@
       menu.innerHTML = `
         ${addInner ? subMenuHtml('Add child', addInner) : '<div class="mm-menu-label">Expand a side to add there</div>'}
         ${subMenuHtml('Collapse / Expand', collapseInner)}
+        ${n.parentId ? '<button type="button" data-m="disconnect">Delete connection</button>' : ''}
         ${n.parentId ? '<button type="button" data-m="root">Set as root</button>' : '<div class="mm-menu-label">This is a root · drag to move tree</div>'}
         ${subMenuHtml('Type', typeInner)}
         ${subMenuHtml('Fill', menuColorRow('fill', NODE_PALETTE, n.style.fill, true))}
@@ -5212,7 +6029,7 @@
 
     _beginNodeLockHold(n, e) {
       if (!n) return false;
-      if (e && e.target && e.target.closest && (e.target.closest('[data-play-yt]') || e.target.closest('[data-open-img]') || e.target.closest('[data-note-toggle]') || e.target.closest('.mm-note-card'))) return false;
+      if (e && e.target && e.target.closest && (e.target.closest('[data-note-toggle]') || e.target.closest('.mm-note-card'))) return false;
       const frame = this._lockingFrame(n);
       if (frame) {
         e.preventDefault();
@@ -5272,6 +6089,7 @@
         nn.locked = false;
         this.data.nodes[nn.id] = nn;
       });
+      this._remapLinks(this._linksInSet(new Set(carried.map((o) => o.id))), idMap);
       const copy = Object.assign({}, clone(f), {
         id: copyId,
         x: f.x + dx,
@@ -5344,6 +6162,7 @@
       });
       this._menuNodeId = null;
       this._menuFrameId = null;
+      this._menuLinkId = null;
       this._menuMode = 'node';
     }
 
@@ -5367,6 +6186,14 @@
       }
       const btn = e.target.closest('[data-m]');
       if (!btn) return;
+      if (this._menuMode === 'link') {
+        if (btn.getAttribute('data-m') === 'disconnect') {
+          if (this._menuLinkId) this._deleteExtraLink(this._menuLinkId);
+          else this.detachNode(this._menuNodeId);
+        }
+        this._closeMenu();
+        return;
+      }
       if (this._menuMode === 'frame') {
         this._onFrameMenuClick(btn);
         return;
@@ -5386,6 +6213,7 @@
         return;
       }
       if (m === 'toggle') this.toggleCollapse(id, btn.getAttribute('data-dir'));
+      if (m === 'disconnect') { this.detachNode(id); this._closeMenu(); return; }
       if (m === 'root') this.setAsRoot(id);
       if (m === 'type') this.setNodeType(id, btn.getAttribute('data-type'));
       if (btn.tagName === 'INPUT') {
@@ -5407,8 +6235,8 @@
       if (m === 'bold') this.applyFormat(id, { bold: !n.format.bold });
       if (m === 'italic') this.applyFormat(id, { italic: !n.format.italic });
       if (m === 'underline') this.applyFormat(id, { underline: !n.format.underline });
-      if (m === 'size-up') this.applyFormat(id, { fontSize: clamp((n.format.fontSize || 14) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
-      if (m === 'size-down') this.applyFormat(id, { fontSize: clamp((n.format.fontSize || 14) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+      if (m === 'size-up') this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+      if (m === 'size-down') this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
       if (m === 'link-w-up') this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) + 0.5, 1, 6) });
       if (m === 'link-w-down') this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) - 0.5, 1, 6) });
       if (m === 'copy') this.copySubtree(id);
@@ -5464,8 +6292,8 @@
       if (m === 'bold') { this._groupToggleFormat('bold'); this._closeMenu(); return; }
       if (m === 'italic') { this._groupToggleFormat('italic'); this._closeMenu(); return; }
       if (m === 'underline') { this._groupToggleFormat('underline'); this._closeMenu(); return; }
-      if (m === 'size-up') each((id, n) => this.applyFormat(id, { fontSize: clamp((n.format.fontSize || 14) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
-      if (m === 'size-down') each((id, n) => this.applyFormat(id, { fontSize: clamp((n.format.fontSize || 14) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
+      if (m === 'size-up') each((id, n) => this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
+      if (m === 'size-down') each((id, n) => this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
       if (m === 'link-w-up') each((id, n) => this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) + 0.5, 1, 6) }));
       if (m === 'link-w-down') each((id, n) => this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) - 0.5, 1, 6) }));
       if (m === 'type') each((id) => this.setNodeType(id, btn.getAttribute('data-type')));
@@ -5562,19 +6390,23 @@
       }).map((n) => n.id);
     }
 
-    _updateMarqueeEl(x0, y0, x1, y1) {
-      const vp = this.data.viewport;
-      const x = Math.min(x0, x1);
-      const y = Math.min(y0, y1);
-      const w = Math.abs(x1 - x0);
-      const h = Math.abs(y1 - y0);
+    _updateMarqueeEl(cx0, cy0, cx1, cy1) {
       const el = this.els.marquee;
       if (!el) return;
+      const rect = this.els.canvas.getBoundingClientRect();
+      const x = Math.min(cx0, cx1) - rect.left;
+      const y = Math.min(cy0, cy1) - rect.top;
       el.classList.add('show');
-      el.style.left = (x * vp.zoom + vp.x) + 'px';
-      el.style.top = (y * vp.zoom + vp.y) + 'px';
-      el.style.width = (w * vp.zoom) + 'px';
-      el.style.height = (h * vp.zoom) + 'px';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.style.width = Math.abs(cx1 - cx0) + 'px';
+      el.style.height = Math.abs(cy1 - cy0) + 'px';
+    }
+
+    _paintSelection() {
+      this.els.world.querySelectorAll('.mm-node').forEach((el) => {
+        el.classList.toggle('selected', this.selectedIds.has(el.dataset.id) || this.selectedId === el.dataset.id);
+      });
     }
 
     _hideMarquee() {
@@ -5601,23 +6433,36 @@
       const t = e.target && e.target.closest ? e.target : (e.target && e.target.parentElement);
       if (!t || !t.closest) return;
       if (t.closest('.mm-toolbar') || t.closest('.mm-frames-dock') || t.closest('.mm-menu') || t.closest('.mm-format-bar') || t.closest('.mm-frames-menu')) return;
-      if (t.closest('[data-add]') || t.closest('[data-toggle]') || t.closest('[data-open-link]') || t.closest('.mm-yt-modal') || t.closest('[data-note-toggle]') || t.closest('.mm-note-card')) return;
-      const playYt = t.closest('[data-play-yt]');
-      if (playYt) {
-        e.preventDefault();
-        const host = playYt.closest('.mm-node');
-        const n = host && this.data.nodes[host.dataset.id];
-        this._openYoutube(playYt.getAttribute('data-play-yt'), n);
-        return;
+      if (t.closest('.mm-yt-modal')) return;
+
+      if (e.pointerType === 'touch') {
+        this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this._pointers.size >= 2) {
+          e.preventDefault();
+          this._beginPinch();
+          return;
+        }
       }
-      const openImg = t.closest('[data-open-img]');
-      if (openImg) {
-        e.preventDefault();
-        const host = openImg.closest('.mm-node');
+
+      if (t.closest('[data-connect]') && e.button === 0 && !this.readOnly) {
+        const host = t.closest('.mm-node');
         const n = host && this.data.nodes[host.dataset.id];
-        this._openImage(openImg.getAttribute('data-open-img'), n);
-        return;
+        if (n && !this.isNodeLocked(n)) {
+          e.preventDefault();
+          this.commitEdit();
+          this._closeMenu();
+          const dir = t.closest('[data-connect]').getAttribute('data-connect');
+          const w = this.screenToWorld(e.clientX, e.clientY);
+          this._connectFrom = n.id;
+          this.selectOnly(n.id);
+          this.els.root.classList.add('is-linking');
+          this.render();
+          this._drag = { kind: 'connect', fromId: n.id, fromDir: dir, toId: null, x0: w.x, y0: w.y, wx: w.x, wy: w.y, moved: false };
+          try { this.els.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+          return;
+        }
       }
+      if (t.closest('[data-add]') || t.closest('[data-toggle]') || t.closest('.mm-ports') || t.closest('[data-open-link]') || t.closest('[data-note-toggle]') || t.closest('.mm-note-card')) return;
       if (t.closest('[data-edit]') || t.closest('input') || t.closest('textarea') || t.closest('select') || t.isContentEditable) return;
 
       if (e.button === 1 || e.button === 2 || (e.button === 0 && this._spaceDown)) {
@@ -5634,6 +6479,39 @@
       const frameEl = t.closest('.mm-frame');
       const nodeEl = t.closest('.mm-node');
       const w = this.screenToWorld(e.clientX, e.clientY);
+
+      const linkEl = t.closest('[data-link]');
+      if (linkEl) {
+        e.preventDefault();
+        const cid = linkEl.getAttribute('data-link');
+        this.selectedLinkId = cid;
+        this.selectedIds = new Set();
+        this.selectedId = null;
+        this.selectedFrameId = null;
+        this._connectFrom = null;
+        this.render();
+        return;
+      }
+
+      if (this.tool === 'connect' && nodeEl && !this.readOnly) {
+        const id = nodeEl.dataset.id;
+        const n = this.data.nodes[id];
+        if (!n || this.isNodeLocked(n)) return;
+        e.preventDefault();
+        if (this._connectFrom && this._connectFrom !== id) {
+          this._connectNodes(this._connectFrom, id);
+          this._connectFrom = null;
+          this.render();
+          return;
+        }
+        this._connectFrom = id;
+        this.selectOnly(id);
+        this.els.root.classList.add('is-linking');
+        this.render();
+        this._drag = { kind: 'connect', fromId: id, fromDir: this.nearestSide(n, w.x, w.y), toId: null, x0: w.x, y0: w.y, wx: w.x, wy: w.y, moved: false };
+        try { this.els.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        return;
+      }
 
       if (this.editingId && (!nodeEl || nodeEl.dataset.id !== this.editingId)) this.commitEdit();
       this._closeMenu();
@@ -5761,6 +6639,12 @@
       }
 
       if (!nodeEl && !this.readOnly) {
+        if (this.tool === 'connect') {
+          this._connectFrom = null;
+          this.selectOnly(null);
+          this.render();
+          return;
+        }
         const locked = this._frameAtWorld(w.x, w.y);
         if (locked && locked.locked) {
           e.preventDefault();
@@ -5788,6 +6672,12 @@
       if (this._lockHold && (this._lockHold.pointerId == null || e.pointerId === this._lockHold.pointerId)) {
         if (Math.hypot(e.clientX - this._lockHold.x, e.clientY - this._lockHold.y) > 10) this._clearLockHold();
       }
+      if (this._pointers.has(e.pointerId)) this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this._pointers.size >= 2) {
+        if (!this._pinch) this._beginPinch();
+        this._updatePinch();
+        return;
+      }
       const d = this._drag;
       if (!d) return;
       const w = this.screenToWorld(e.clientX, e.clientY);
@@ -5804,12 +6694,14 @@
         if (dist <= 4 && !d.moved) return;
         d.moved = true;
         this.els.root.classList.add('is-selecting');
-        this._updateMarqueeEl(d.x0, d.y0, w.x, w.y);
-        const hits = this._nodesInRect(d.x0, d.y0, w.x, w.y);
+        this._updateMarqueeEl(d.cx0, d.cy0, e.clientX, e.clientY);
+        const a = this.screenToWorld(d.cx0, d.cy0);
+        const b = this.screenToWorld(e.clientX, e.clientY);
+        const hits = this._nodesInRect(a.x, a.y, b.x, b.y);
         this.selectedIds = new Set(d.additive ? d.base.concat(hits) : hits);
         this.selectedId = hits[hits.length - 1] || (d.additive ? d.base[d.base.length - 1] : null) || this.selectedList()[0] || null;
         this.selectedFrameId = null;
-        this.render();
+        this._paintSelection();
         return;
       }
       if (d.kind === 'group-drag') {
@@ -5819,7 +6711,7 @@
           this.els.root.classList.add('is-moving');
         }
         this._applySnapshotDelta(d.origins, w.x - d.x0, w.y - d.y0);
-        this.render();
+        this._paintMovingNodes();
         return;
       }
       if (d.kind === 'node-drag' || d.kind === 'move-subtree' || d.kind === 'move-tree') {
@@ -5835,7 +6727,7 @@
           d.drop = this._findDropSlot(w.x, w.y, d.id, e.clientX, e.clientY);
           this.els.root.classList.toggle('is-relink', !!d.drop);
         }
-        this.render();
+        this._paintMovingNodes();
         return;
       }
       if (d.kind === 'relink') {
@@ -5843,6 +6735,19 @@
         this.els.world.querySelectorAll('.mm-node').forEach((el) => {
           el.classList.toggle('drop-target', !!(target && el.dataset.id === target.id));
         });
+        return;
+      }
+      if (d.kind === 'connect') {
+        d.wx = w.x;
+        d.wy = w.y;
+        if (!d.moved && Math.hypot(e.clientX - (d.cx0 || e.clientX), e.clientY - (d.cy0 || e.clientY)) > 6) d.moved = true;
+        if (Math.hypot(w.x - d.x0, w.y - d.y0) > 4) d.moved = true;
+        const target = this._connectTargetAt(e.clientX, e.clientY, d.fromId);
+        d.toId = target ? target.id : null;
+        this.els.world.querySelectorAll('.mm-node').forEach((el) => {
+          el.classList.toggle('drop-target', !!(target && el.dataset.id === target.id));
+        });
+        this._renderLinks(this.els.svg);
         return;
       }
       if (d.kind === 'draw-frame') {
@@ -5903,18 +6808,46 @@
       if (this._lockHold && (this._lockHold.pointerId == null || this._lockHold.pointerId === e.pointerId)) {
         this._clearLockHold();
       }
+      this._pointers.delete(e.pointerId);
+      if (this._pinch) {
+        if (this._pointers.size < 2) this._endPinch();
+        return;
+      }
       const d = this._drag;
       clearTimeout(this._relinkTimer);
       this.els.root.classList.remove('is-panning', 'is-relink', 'is-moving');
       this._hideMarquee();
       this._drag = null;
       this._syncDropUi();
-      if (!d) return;
+      if (!d) {
+        this.els.root.classList.remove('is-linking');
+        return;
+      }
+
+      if (d.kind === 'connect') {
+        this._ignorePortClick = true;
+        setTimeout(() => { this._ignorePortClick = false; }, 400);
+        this.els.world.querySelectorAll('.mm-node').forEach((el) => el.classList.remove('drop-target'));
+        const fromId = d.fromId;
+        if (d.moved) {
+          const target = this._connectTargetAt(e.clientX, e.clientY, fromId);
+          this._connectFrom = null;
+          if (target) this._connectNodes(fromId, target.id, d.fromDir);
+          else this.render();
+        } else {
+          this._connectFrom = fromId;
+          this.render();
+        }
+        this.els.root.classList.remove('is-linking');
+        return;
+      }
+      this.els.root.classList.remove('is-linking');
 
       if (d.kind === 'marquee') {
         if (!d.moved && !d.additive) {
           this.selectOnly(null);
-          const f = this._frameAtWorld(d.x0, d.y0);
+          const at = this.screenToWorld(d.cx0, d.cy0);
+          const f = this._frameAtWorld(at.x, at.y);
           this.selectedFrameId = f ? f.id : null;
           this.render();
         } else {
@@ -5924,16 +6857,31 @@
       }
       if (d.kind === 'group-drag') {
         if (d.moved) {
+          this.selectedList().forEach((id) => {
+            const n = this.data.nodes[id];
+            if (n) n.userPlaced = true;
+          });
           (d.origins || []).forEach((o) => this._assignNodeFrame(this.data.nodes[o.id]));
           this._emit();
         } else this.render();
         return;
       }
       if (d.kind === 'node-drag') {
-        if (d.moved) (d.origins || []).forEach((o) => this._assignNodeFrame(this.data.nodes[o.id]));
+        if (d.moved) {
+          const dragged = this.data.nodes[d.id];
+          if (dragged) dragged.userPlaced = true;
+          (d.origins || []).forEach((o) => this._assignNodeFrame(this.data.nodes[o.id]));
+        }
         if (d.moved && d.drop) {
+          const dragged = this.data.nodes[d.id];
+          if (dragged) dragged.userPlaced = true;
           this.relinkNode(d.id, d.drop.parentId, d.drop.dir, d.drop.index);
         } else {
+          if (!d.moved) {
+            const n = this.data.nodes[d.id];
+            if (n && n.type === 'youtube' && youtubeId(n.content)) this._openYoutube(n.content, n);
+            else if (n && n.type === 'image' && safeImageSrc(n.content)) this._openImage(n.content, n);
+          }
           this.render();
           this._emit();
         }
@@ -6016,6 +6964,7 @@
         this._closeColorDrops();
         this._closeMenu();
         this._hideMarquee();
+        this._connectFrom = null;
         this.selectOnly(null);
         this._setTool('select');
         this.render();
@@ -6041,11 +6990,21 @@
         return;
       }
       if (this.readOnly) return;
+      if (!typing && !inChrome && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        this._setTool(this.tool === 'connect' ? 'select' : 'connect');
+        return;
+      }
       if (typing && this.editingId) {
         if (e.key === 'Enter' && !e.shiftKey && tag !== 'TEXTAREA') {
           e.preventDefault();
           this.commitEdit();
         }
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedLinkId && !this.selectedList().length && !typing) {
+        e.preventDefault();
+        this.deleteSelectedLink();
         return;
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedFrameId && !this.selectedList().length && !typing) {

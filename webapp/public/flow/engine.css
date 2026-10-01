@@ -25,6 +25,7 @@
   overflow: hidden;
   cursor: default;
   touch-action: none;
+  overscroll-behavior: none;
   background-color: #eef1f5;
   background-image:
     linear-gradient(to right, rgba(70, 82, 102, 0.16) 1px, transparent 1px),

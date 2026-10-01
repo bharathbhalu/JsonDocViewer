@@ -1542,6 +1542,7 @@ function ensureScript(src, flag, ready) {
     existing.remove();
     if (flag === 'data-fl-core') window.FlowCore = undefined;
     if (flag === 'data-fl-js') window.FlowEngine = undefined;
+    if (flag === 'data-mm-js') window.MindmapEngine = undefined;
   } else if (ready()) {
     return Promise.resolve();
   }
@@ -1574,14 +1575,14 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=68', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=72', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=90', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=109', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
-  ensureStylesheet('/flow/engine.css?v=19', 'data-fl-css');
+  ensureStylesheet('/flow/engine.css?v=20', 'data-fl-css');
   return ensureScript('/flow/core.js?v=17', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=24', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=26', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function getSaveContent() {

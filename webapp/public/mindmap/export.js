@@ -307,7 +307,7 @@
       border = isTransparent(border) ? 'none' : cssColor(border, fill === 'none' ? '#c5c9d1' : fill);
       color = cssColor(color, '#1a2130');
       const fmt = (node && node.format) || {};
-      const fs = Number(fmt.fontSize) || (el ? parseFloat(getComputedStyle(el).fontSize) : 14) || 14;
+      const fs = Number(fmt.fontSize) || (el ? parseFloat(getComputedStyle(el).fontSize) : 18) || 18;
       const weight = fmt.bold ? '700' : (el && getComputedStyle(el).fontWeight) || '500';
       const italic = fmt.italic ? 'italic' : 'normal';
       const deco = fmt.underline ? 'underline' : 'none';

@@ -74,6 +74,13 @@
       this._edit = null;
       this._imageAt = null;
       this._clip = null;
+      this._pointers = new Map();
+      this._pinch = null;
+      this._gestureActive = false;
+      this._gestureZoom = 1;
+      this._pinchWheelUntil = 0;
+      this._zoomPend = null;
+      this._zoomRaf = 0;
       this._buildDom();
       this._bind();
       this.render();
@@ -322,6 +329,9 @@
       this._onPointerMove = this._onPointerMove.bind(this);
       this._onPointerUp = this._onPointerUp.bind(this);
       this._onWheel = this._onWheel.bind(this);
+      this._onGestureStart = this._onGestureStart.bind(this);
+      this._onGestureChange = this._onGestureChange.bind(this);
+      this._onGestureEnd = this._onGestureEnd.bind(this);
       this._onKey = this._onKey.bind(this);
       this._onKeyUp = this._onKeyUp.bind(this);
       this._onDblClick = this._onDblClick.bind(this);
@@ -330,12 +340,16 @@
       this._onDrop = this._onDrop.bind(this);
       this.els.canvas.addEventListener('pointerdown', this._onPointerDown);
       this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false });
+      this.els.canvas.addEventListener('gesturestart', this._onGestureStart, { passive: false });
+      this.els.canvas.addEventListener('gesturechange', this._onGestureChange, { passive: false });
+      this.els.canvas.addEventListener('gestureend', this._onGestureEnd, { passive: false });
       this.els.canvas.addEventListener('dblclick', this._onDblClick);
       this.els.canvas.addEventListener('contextmenu', this._onContext);
       this.els.canvas.addEventListener('dragover', (e) => { e.preventDefault(); });
       this.els.canvas.addEventListener('drop', this._onDrop);
       window.addEventListener('pointermove', this._onPointerMove);
       window.addEventListener('pointerup', this._onPointerUp);
+      window.addEventListener('pointercancel', this._onPointerUp);
       window.addEventListener('keydown', this._onKey);
       window.addEventListener('keyup', this._onKeyUp);
       window.addEventListener('paste', this._onPaste);
@@ -399,11 +413,16 @@
     _unbind() {
       this.els.canvas.removeEventListener('pointerdown', this._onPointerDown);
       this.els.canvas.removeEventListener('wheel', this._onWheel);
+      this.els.canvas.removeEventListener('gesturestart', this._onGestureStart);
+      this.els.canvas.removeEventListener('gesturechange', this._onGestureChange);
+      this.els.canvas.removeEventListener('gestureend', this._onGestureEnd);
       this.els.canvas.removeEventListener('dblclick', this._onDblClick);
       this.els.canvas.removeEventListener('contextmenu', this._onContext);
       this.els.canvas.removeEventListener('drop', this._onDrop);
       window.removeEventListener('pointermove', this._onPointerMove);
       window.removeEventListener('pointerup', this._onPointerUp);
+      window.removeEventListener('pointercancel', this._onPointerUp);
+      if (this._zoomRaf) cancelAnimationFrame(this._zoomRaf);
       window.removeEventListener('keydown', this._onKey);
       window.removeEventListener('keyup', this._onKeyUp);
       window.removeEventListener('paste', this._onPaste);
@@ -463,6 +482,11 @@
     }
 
     setZoom(next, sx, sy) {
+      this._setZoomAt(next, sx, sy);
+      this._scheduleVpEmit();
+    }
+
+    _setZoomAt(next, sx, sy) {
       const vp = this.data.viewport;
       const rect = this.els.canvas.getBoundingClientRect();
       const cx = sx == null ? rect.width / 2 : sx;
@@ -473,7 +497,11 @@
       vp.x = cx - wx * vp.zoom;
       vp.y = cy - wy * vp.zoom;
       this._applyTransform();
-      this._emit();
+    }
+
+    _scheduleVpEmit() {
+      clearTimeout(this._vpEmit);
+      this._vpEmit = setTimeout(() => this._emit(), 180);
     }
 
     _setTool(tool) {
@@ -2461,6 +2489,14 @@
       if (e.target.closest('.fl-toolbar') || e.target.closest('.fl-inspector') || e.target.closest('.fl-edit') || e.target.closest('.fl-frames-dock') || e.target.closest('.fl-menu') || e.target.closest('.fl-note-card') || e.target.closest('[data-note-toggle]') || e.target.closest('[data-sticky-toggle]')) return;
       this._endEdit(true);
       this.els.menu.classList.remove('open');
+      if (e.pointerType === 'touch') {
+        this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this._pointers.size >= 2) {
+          e.preventDefault();
+          this._beginPinch();
+          return;
+        }
+      }
       const w = this._clientToWorld(e.clientX, e.clientY);
       if (e.button === 1 || e.button === 2 || (e.button === 0 && this._spaceDown)) {
         this._drag = { kind: 'pan', x: e.clientX, y: e.clientY, vx: this.data.viewport.x, vy: this.data.viewport.y, pointerId: e.pointerId, button: e.button, moved: false, target: e.target };
@@ -2608,14 +2644,19 @@
         this.selected.clear();
         this.selectedLink = null;
         this.selectedFrameId = null;
-        this.render();
       }
-      this._drag = { kind: 'marquee', x0: w.x, y0: w.y };
+      this._drag = { kind: 'marquee', x0: w.x, y0: w.y, cx0: e.clientX, cy0: e.clientY };
     }
 
     _onPointerMove(e) {
       if (this._lockHold && (this._lockHold.pointerId == null || e.pointerId === this._lockHold.pointerId)) {
         if (Math.hypot(e.clientX - this._lockHold.x, e.clientY - this._lockHold.y) > 10) this._clearLockHold();
+      }
+      if (this._pointers.has(e.pointerId)) this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this._pointers.size >= 2) {
+        if (!this._pinch) this._beginPinch();
+        this._updatePinch();
+        return;
       }
       const d = this._drag;
       if (!d) return;
@@ -2737,13 +2778,22 @@
         const y = Math.min(d.y0, w.y);
         const rw = Math.abs(w.x - d.x0);
         const rh = Math.abs(w.y - d.y0);
-        const vp = this.data.viewport;
+        const rect = this.els.canvas.getBoundingClientRect();
+        const cx0 = d.cx0 != null ? d.cx0 : e.clientX;
+        const cy0 = d.cy0 != null ? d.cy0 : e.clientY;
         this.els.marquee.classList.add('show');
-        this.els.marquee.style.left = (x * vp.zoom + vp.x) + 'px';
-        this.els.marquee.style.top = (y * vp.zoom + vp.y) + 'px';
-        this.els.marquee.style.width = (rw * vp.zoom) + 'px';
-        this.els.marquee.style.height = (rh * vp.zoom) + 'px';
-        d.box = { x, y, w: rw, h: rh };
+        this.els.marquee.style.left = (Math.min(cx0, e.clientX) - rect.left) + 'px';
+        this.els.marquee.style.top = (Math.min(cy0, e.clientY) - rect.top) + 'px';
+        this.els.marquee.style.width = Math.abs(e.clientX - cx0) + 'px';
+        this.els.marquee.style.height = Math.abs(e.clientY - cy0) + 'px';
+        const a = this._clientToWorld(cx0, cy0);
+        const b = this._clientToWorld(e.clientX, e.clientY);
+        d.box = {
+          x: Math.min(a.x, b.x),
+          y: Math.min(a.y, b.y),
+          w: Math.abs(b.x - a.x),
+          h: Math.abs(b.y - a.y),
+        };
       }
     }
 
@@ -2826,6 +2876,14 @@
       if (this._lockHold && (this._lockHold.pointerId == null || this._lockHold.pointerId === e.pointerId)) {
         this._clearLockHold();
       }
+      this._pointers.delete(e.pointerId);
+      if (this._pinch) {
+        if (this._pointers.size < 2) {
+          this._pinch = null;
+          this._scheduleVpEmit();
+        }
+        return;
+      }
       const d = this._drag;
       if (!d) return;
       this._drag = null;
@@ -2905,13 +2963,15 @@
         this._emit();
         return;
       }
-      if (d.kind === 'marquee' && d.box) {
-        Object.keys(this.data.shapes).forEach((id) => {
-          const s = this.data.shapes[id];
-          if (this.isShapeLocked(s)) return;
-          if (s.x < d.box.x + d.box.w && s.x + s.w > d.box.x && s.y < d.box.y + d.box.h && s.y + s.h > d.box.y) this.selected.add(id);
-        });
-        this.selectedLink = null;
+      if (d.kind === 'marquee') {
+        if (d.box) {
+          Object.keys(this.data.shapes).forEach((id) => {
+            const s = this.data.shapes[id];
+            if (this.isShapeLocked(s)) return;
+            if (s.x < d.box.x + d.box.w && s.x + s.w > d.box.x && s.y < d.box.y + d.box.h && s.y + s.h > d.box.y) this.selected.add(id);
+          });
+          this.selectedLink = null;
+        }
         this.render();
       }
     }
@@ -2919,15 +2979,91 @@
     _onWheel(e) {
       if (!this._active()) return;
       e.preventDefault();
-      if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= 40) {
-        const factor = Math.exp(-e.deltaY * 0.0025);
-        const rect = this.els.canvas.getBoundingClientRect();
-        this.setZoom(this.data.viewport.zoom * factor, e.clientX - rect.left, e.clientY - rect.top);
+      if (this._gestureActive || this._pinch) return;
+      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      const pinch = e.ctrlKey || e.metaKey || (e.deltaZ && e.deltaZ !== 0);
+      if (pinch) this._pinchWheelUntil = now + 320;
+      if (pinch || now < (this._pinchWheelUntil || 0) || e.deltaMode === 1 || e.deltaMode === 2) {
+        let dy = e.deltaY;
+        if (!dy && e.deltaZ) dy = e.deltaZ;
+        if (e.deltaMode === 1) dy *= 16;
+        else if (e.deltaMode === 2) dy *= 160;
+        this._zoomPend = this._zoomPend || { dy: 0, x: e.clientX, y: e.clientY, k: 0.01 };
+        this._zoomPend.dy += dy;
+        this._zoomPend.x = e.clientX;
+        this._zoomPend.y = e.clientY;
+        this._zoomPend.k = pinch || now < (this._pinchWheelUntil || 0) ? 0.01 : 0.003;
+        if (!this._zoomRaf) {
+          this._zoomRaf = requestAnimationFrame(() => {
+            this._zoomRaf = 0;
+            const p = this._zoomPend;
+            this._zoomPend = null;
+            if (!p) return;
+            const rect = this.els.canvas.getBoundingClientRect();
+            this._setZoomAt(this.data.viewport.zoom * Math.exp(-p.dy * (p.k || 0.01)), p.x - rect.left, p.y - rect.top);
+            this._scheduleVpEmit();
+          });
+        }
         return;
       }
       this.data.viewport.x -= e.deltaX;
       this.data.viewport.y -= e.deltaY;
       this._applyTransform();
+      this._scheduleVpEmit();
+    }
+
+    _onGestureStart(e) {
+      if (!this._active()) return;
+      e.preventDefault();
+      this._gestureActive = true;
+      this._gestureZoom = this.data.viewport.zoom;
+    }
+
+    _onGestureChange(e) {
+      if (!this._active()) return;
+      e.preventDefault();
+      this._gestureActive = true;
+      const rect = this.els.canvas.getBoundingClientRect();
+      this._setZoomAt((this._gestureZoom || 1) * (e.scale || 1), e.clientX - rect.left, e.clientY - rect.top);
+      this._scheduleVpEmit();
+    }
+
+    _onGestureEnd(e) {
+      e.preventDefault();
+      this._gestureActive = false;
+      this._scheduleVpEmit();
+    }
+
+    _beginPinch() {
+      const pts = [...this._pointers.values()];
+      if (pts.length < 2) return;
+      this.els.marquee && this.els.marquee.classList.remove('show');
+      this.els.root.classList.remove('is-panning', 'is-linking');
+      this._drag = null;
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+      this._pinch = {
+        dist,
+        zoom: this.data.viewport.zoom,
+        mx: (pts[0].x + pts[1].x) / 2,
+        my: (pts[0].y + pts[1].y) / 2,
+      };
+    }
+
+    _updatePinch() {
+      if (!this._pinch) return;
+      const pts = [...this._pointers.values()];
+      if (pts.length < 2) return;
+      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+      const mx = (pts[0].x + pts[1].x) / 2;
+      const my = (pts[0].y + pts[1].y) / 2;
+      const rect = this.els.canvas.getBoundingClientRect();
+      this._setZoomAt(this._pinch.zoom * (dist / this._pinch.dist), mx - rect.left, my - rect.top);
+      this.data.viewport.x += mx - this._pinch.mx;
+      this.data.viewport.y += my - this._pinch.my;
+      this._pinch.mx = mx;
+      this._pinch.my = my;
+      this._applyTransform();
+      this._scheduleVpEmit();
     }
 
     _onKey(e) {

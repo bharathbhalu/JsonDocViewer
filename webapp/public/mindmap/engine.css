@@ -19,6 +19,7 @@
   overflow: hidden;
   cursor: default;
   touch-action: none;
+  overscroll-behavior: none;
   background-color: #e8eaee;
   background-image:
     linear-gradient(to right, rgba(70, 78, 92, 0.18) 1px, transparent 1px),
@@ -48,10 +49,26 @@
 .mm-root.is-moving .mm-frame-bar,
 .mm-root.is-moving .mm-frame-title,
 .mm-root.is-moving .mm-frame-top,
+.mm-root.is-moving .mm-yt-play,
+.mm-root.is-moving .mm-img-box,
 .mm-root.is-relink .mm-canvas,
 .mm-root.is-relink .mm-node { cursor: grabbing; }
 .mm-root.is-selecting .mm-canvas { cursor: default; }
 .mm-root[data-tool="frame"] .mm-canvas { cursor: crosshair; }
+
+.mm-root[data-tool="connect"] .mm-canvas { cursor: crosshair; }
+.mm-root.is-linking .mm-canvas,
+.mm-root.is-linking .mm-node { cursor: crosshair; }
+.mm-root.is-linking .mm-ports,
+.mm-root.is-linking .mm-handle,
+.mm-root.is-linking .mm-badge {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden;
+}
+.mm-root.is-linking .mm-edge-dot {
+  pointer-events: none;
+}
 
 .mm-marquee {
   position: absolute;
@@ -290,6 +307,8 @@
 .mm-export-shot .mm-frames-dock,
 .mm-export-shot .mm-handle,
 .mm-export-shot .mm-badge,
+.mm-export-shot .mm-ports,
+.mm-export-shot .mm-edge-dot,
 .mm-export-shot .mm-resize,
 .mm-export-shot .mm-img-rh,
 .mm-export-shot .mm-drop-slot,
@@ -311,6 +330,16 @@
   width: 1px;
   height: 1px;
   z-index: 3;
+}
+.mm-link-hit {
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.mm-link-draw {
+  pointer-events: none;
+}
+.mm-link-draw.is-selected {
+  stroke: #5ea882;
 }
 
 .mm-frame {
@@ -561,20 +590,19 @@
 .mm-node {
   position: absolute;
   z-index: 5;
-  min-width: 132px;
+  min-width: 48px;
+  min-height: 40px;
   max-width: none;
   overflow: visible;
   box-sizing: border-box;
-  border-radius: 18px;
+  border-radius: 22px;
   background: #D7E3FC;
   border: 1.5px solid #D7E3FC;
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.22),
-    0 1px 0 rgba(255, 255, 255, 0.35) inset;
+  box-shadow: none;
   color: #1a2130;
   text-align: center;
   cursor: default;
-  transition: box-shadow 0.18s ease, transform 0.12s ease, outline 0.12s ease;
+  transition: transform 0.12s ease, outline 0.12s ease;
 }
 
 .mm-node[data-type="text"] {
@@ -584,16 +612,17 @@
 }
 
 .mm-node.is-root {
-  min-width: 156px;
-  box-shadow:
-    0 14px 36px rgba(0, 0, 0, 0.28),
-    0 1px 0 rgba(255, 255, 255, 0.4) inset;
+  min-width: 56px;
+  border-width: 5px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 45%, transparent);
+}
+.mm-node.is-root.is-clear {
+  box-shadow: 0 0 0 4px #8AA8D4;
 }
 
 .mm-node.selected {
-  box-shadow:
-    0 0 0 3px rgba(138, 168, 212, 0.45),
-    0 16px 40px rgba(0, 0, 0, 0.28);
+  outline: 3px solid rgba(138, 168, 212, 0.7);
+  outline-offset: 2px;
   z-index: 5;
 }
 .mm-node.has-note-open { z-index: 8; }
@@ -609,9 +638,6 @@
 .mm-node.drop-parent {
   outline: 3px solid #5ea882;
   outline-offset: 4px;
-  box-shadow:
-    0 0 0 6px rgba(94, 168, 130, 0.2),
-    0 10px 28px rgba(0, 0, 0, 0.18);
   z-index: 6;
 }
 
@@ -619,9 +645,6 @@
   z-index: 20;
   opacity: 0.9;
   pointer-events: none;
-  box-shadow:
-    0 0 0 3px rgba(138, 168, 212, 0.4),
-    0 22px 48px rgba(0, 0, 0, 0.28);
 }
 
 .mm-drop-slot {
@@ -680,33 +703,24 @@
   opacity: 0.48;
 }
 
-.mm-root-pill {
-  display: none;
-  align-items: center;
-  gap: 4px;
-}
-
-.mm-node.is-root .mm-root-pill { display: inline-flex; }
-
-.mm-root-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #8AA8D4;
-  box-shadow: 0 0 8px #8AA8D4;
-}
-
 .mm-node-body {
-  padding: 12px 16px 14px;
-  font-size: 14px;
-  line-height: 1.4;
-  word-wrap: break-word;
+  padding: 7px 28px 8px;
+  font-size: 18px;
+  line-height: 1.35;
+  overflow-wrap: normal;
+  word-break: normal;
+  word-wrap: normal;
   white-space: pre-wrap;
-  min-height: 1.4em;
+  min-height: 1.35em;
   max-height: 100%;
-  overflow: auto;
+  overflow: hidden;
   text-align: inherit;
   width: 100%;
+  box-sizing: border-box;
+}
+.mm-node.is-maxw .mm-node-body {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mm-resize {
@@ -725,6 +739,8 @@
 .mm-node.selected .mm-resize,
 .mm-node:hover .mm-resize { opacity: 0.55; }
 .mm-node.selected .mm-resize:hover { opacity: 1; }
+.mm-node.is-locked .mm-ports,
+.mm-node.is-locked .mm-edge-dot,
 .mm-node.is-locked .mm-handle,
 .mm-node.is-locked .mm-badge,
 .mm-node.is-locked .mm-resize,
@@ -771,18 +787,24 @@
   user-select: text;
 }
 
-.mm-node[data-type="code"] { max-width: 440px; min-width: 240px; }
+.mm-node[data-type="code"] {
+  max-width: 440px;
+  min-width: 240px;
+  border-radius: 24px;
+}
 .mm-node[data-type="youtube"] {
   min-width: 360px;
   width: 360px;
   min-height: 203px;
   padding: 0;
+  border-radius: 24px;
 }
 .mm-node[data-type="image"] {
   min-width: 120px;
   min-height: 90px;
   padding: 0;
   overflow: visible;
+  border-radius: 24px;
 }
 .mm-node[data-type="image"] .mm-resize { display: none; }
 .mm-img-box {
@@ -794,7 +816,7 @@
   contain: layout paint;
   padding: 0;
   border: 0;
-  cursor: pointer;
+  cursor: grab;
   display: block;
   width: 100%;
   height: 100%;
@@ -911,11 +933,12 @@
   max-width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 18px;
+  border-radius: inherit;
   margin: 0;
   background: #111;
-  cursor: pointer;
+  cursor: grab;
   overflow: hidden;
+  contain: layout paint;
 }
 .mm-yt-thumb {
   display: block;
@@ -923,6 +946,8 @@
   height: 100%;
   object-fit: cover;
   pointer-events: none;
+  backface-visibility: hidden;
+  transform: translateZ(0);
 }
 .mm-yt-play-btn {
   position: absolute;
@@ -1025,6 +1050,18 @@
   display: inline-flex;
   align-items: center;
   cursor: pointer;
+}
+.mm-yt-modal-ext[hidden],
+.mm-yt-mark[hidden],
+.mm-yt-stamp-btn[hidden],
+.mm-yt-stamps[hidden] {
+  display: none !important;
+}
+.mm-yt-modal.is-image .mm-yt-modal-ext,
+.mm-yt-modal.is-image .mm-yt-mark,
+.mm-yt-modal.is-image .mm-yt-stamp-btn,
+.mm-yt-modal.is-image .mm-yt-stamps {
+  display: none !important;
 }
 .mm-yt-modal-ext:hover { background: rgba(255, 255, 255, 0.22); }
 .mm-yt-local {
@@ -1417,78 +1454,174 @@
   cursor: pointer;
 }
 
-.mm-handle, .mm-badge {
+.mm-ports {
   position: absolute;
-  width: 20px;
-  height: 20px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease 0.45s;
+}
+.mm-ports-right {
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+  padding: 10px 8px 10px 28px;
+  margin-left: 10px;
+}
+.mm-ports-left {
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+  padding: 10px 28px 10px 8px;
+  margin-right: 10px;
+}
+.mm-ports-up {
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: row;
+  padding: 8px 10px 16px;
+  margin-bottom: -8px;
+}
+.mm-ports-down {
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: row;
+  padding: 16px 10px 8px;
+  margin-top: -8px;
+}
+
+.mm-edge-dot {
+  position: absolute;
+  z-index: 12;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 2px solid #f4f6fa;
+  border-radius: 50%;
+  background: #8AA8D4;
+  box-sizing: content-box;
+  cursor: crosshair;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: 0 0 0 5px transparent;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.mm-edge-dot::after {
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 50%;
+}
+.mm-edge-dot-right {
+  left: 100%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.mm-edge-dot-left {
+  left: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.mm-node.ports-side-right .mm-edge-dot-right,
+.mm-node.ports-side-left .mm-edge-dot-left {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mm-root.is-linking .mm-node.selected .mm-edge-dot {
+  opacity: 1;
+  pointer-events: none;
+}
+.mm-node:has(.mm-edge-dot:hover) .mm-ports {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.mm-edge-dot:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+  background: #C5CAE9;
+}
+
+.mm-handle, .mm-badge {
+  position: relative;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: none;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 22px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease, transform 0.12s ease;
-  z-index: 3;
+  transition: transform 0.12s ease, background 0.12s ease;
+  flex-shrink: 0;
 }
 
-.mm-node.selected .mm-handle,
-.mm-node:hover .mm-handle,
-.mm-node.selected .mm-badge,
-.mm-node:hover .mm-badge,
-.mm-badge.is-collapsed {
+.mm-node.ports-side-right .mm-ports-right,
+.mm-node.ports-side-left .mm-ports-left,
+.mm-node.ports-side-up .mm-ports-up,
+.mm-node.ports-side-down .mm-ports-down,
+.mm-ports.has-collapsed,
+.mm-ports:hover,
+.mm-ports.is-hot {
   opacity: 1;
   pointer-events: auto;
+  transition-delay: 0s;
 }
 
-.mm-badge.is-collapsed { opacity: 1; pointer-events: auto; }
+.mm-node.ports-side-right .mm-ports-right .mm-handle,
+.mm-node.ports-side-right .mm-ports-right .mm-badge,
+.mm-node.ports-side-left .mm-ports-left .mm-handle,
+.mm-node.ports-side-left .mm-ports-left .mm-badge,
+.mm-node.ports-side-up .mm-ports-up .mm-handle,
+.mm-node.ports-side-up .mm-ports-up .mm-badge,
+.mm-node.ports-side-down .mm-ports-down .mm-handle,
+.mm-node.ports-side-down .mm-ports-down .mm-badge,
+.mm-ports.is-hot .mm-handle,
+.mm-ports.is-hot .mm-badge,
+.mm-ports:hover .mm-handle,
+.mm-ports:hover .mm-badge,
+.mm-badge.is-collapsed {
+  pointer-events: auto;
+}
 
 .mm-handle {
   background: #8AA8D4;
   color: #0b1220;
   font-weight: 700;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
 }
 
 .mm-handle:hover { transform: scale(1.12); background: #C5CAE9; }
 
 .mm-badge {
-  min-width: 22px;
+  min-width: 32px;
   width: auto;
-  padding: 0 6px;
+  height: 32px;
+  padding: 0 10px;
+  gap: 4px;
   border-radius: 999px;
   background: #1b2433;
   color: #C5CAE9;
   border: 1px solid #8AA8D4;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
 }
-
-.mm-handle-right { right: -10px; top: 50%; transform: translateY(-50%); }
-.mm-handle-left { left: -10px; top: 50%; transform: translateY(-50%); }
-.mm-handle-up { top: -10px; left: 50%; transform: translateX(-50%); }
-.mm-handle-down { bottom: -10px; left: 50%; transform: translateX(-50%); }
-.mm-badge-right { right: -12px; top: calc(50% + 16px); transform: none; }
-.mm-badge-left { left: -12px; top: calc(50% + 16px); transform: none; }
-.mm-badge-up { top: -12px; left: calc(50% + 16px); transform: none; }
-.mm-badge-down { bottom: -12px; left: calc(50% + 16px); transform: none; }
-.mm-badge-right.is-collapsed { right: -10px; top: 50%; left: auto; bottom: auto; transform: translateY(-50%); }
-.mm-badge-left.is-collapsed { left: -10px; top: 50%; right: auto; bottom: auto; transform: translateY(-50%); }
-.mm-badge-up.is-collapsed { top: -10px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-.mm-badge-down.is-collapsed { bottom: -10px; left: 50%; top: auto; right: auto; transform: translateX(-50%); }
-.mm-handle-right:hover { transform: translateY(-50%) scale(1.12); }
-.mm-handle-left:hover { transform: translateY(-50%) scale(1.12); }
-.mm-handle-up:hover { transform: translateX(-50%) scale(1.12); }
-.mm-handle-down:hover { transform: translateX(-50%) scale(1.12); }
-.mm-badge-right:hover, .mm-badge-left:hover, .mm-badge-up:hover, .mm-badge-down:hover { transform: scale(1.08); }
-.mm-badge-right.is-collapsed:hover { transform: translateY(-50%) scale(1.12); }
-.mm-badge-left.is-collapsed:hover { transform: translateY(-50%) scale(1.12); }
-.mm-badge-up.is-collapsed:hover { transform: translateX(-50%) scale(1.12); }
-.mm-badge-down.is-collapsed:hover { transform: translateX(-50%) scale(1.12); }
+.mm-badge-mark {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+.mm-badge-n { font-variant-numeric: tabular-nums; }
+.mm-badge:hover { transform: scale(1.12); }
 
 .mm-toolbar {
   position: absolute;
@@ -1949,12 +2082,15 @@ html[data-theme="light"] .mm-format-bar select {
   white-space: nowrap;
 }
 
+.mm-root.is-readonly .mm-ports,
 .mm-root.is-readonly .mm-handle,
 .mm-root.is-readonly .mm-badge,
+.mm-root.is-readonly .mm-edge-dot,
 .mm-root.is-readonly .mm-resize,
 .mm-root.is-readonly .mm-img-rh,
 .mm-root.is-readonly .mm-toolbar [data-act="add-root"],
-.mm-root.is-readonly .mm-toolbar [data-act="tool-frame"] {
+.mm-root.is-readonly .mm-toolbar [data-act="tool-frame"],
+.mm-root.is-readonly .mm-toolbar [data-act="tool-connect"] {
   display: none !important;
 }
 
