@@ -248,6 +248,27 @@ test('analyze reports progress, kinds, and overdue work', () => {
   assert.equal(risk.progress, 50);
 });
 
+test('custom labels and colours survive normalize', () => {
+  const data = GanttCore.createEmpty();
+  const a = GanttCore.addTask(data, { title: 'Paint', start: '2026-10-01', end: '2026-10-03' });
+  GanttCore.setTaskColor(data, a.id, '#12b76a');
+  const lab = GanttCore.addLabel(data, { name: 'Ops', color: '#f79009' });
+  assert.ok(GanttCore.toggleTaskLabel(data, a.id, lab.id));
+  const parsed = GanttCore.parseHtml(GanttCore.serializeToHtml(data, 'Tagged'));
+  const task = Object.values(parsed.tasks)[0];
+  assert.equal(task.color, '#12b76a');
+  const tags = GanttCore.taskLabels(parsed, task);
+  assert.equal(tags.length, 1);
+  assert.equal(tags[0].name, 'Ops');
+  assert.equal(tags[0].color, '#f79009');
+  parsed.view.filters = GanttCore.defaultFilters();
+  parsed.view.filters.label = tags[0].id;
+  assert.equal(GanttCore.filteredTasks(parsed).length, 1);
+  assert.ok(GanttCore.deleteLabel(parsed, tags[0].id));
+  assert.deepEqual(Object.values(parsed.tasks)[0].labelIds, []);
+  assert.equal(GanttCore.labelsList(parsed).length, 0);
+});
+
 test('blank template is a single task', () => {
   const data = GanttCore.buildTemplate('blank');
   assert.equal(Object.keys(data.tasks).length, 1);

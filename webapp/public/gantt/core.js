@@ -6,6 +6,9 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const TITLE_MAX = 200;
   const NOTES_MAX = 20000;
+  const LABEL_NAME_MAX = 32;
+  const LABEL_MAX = 48;
+  const TASK_LABEL_MAX = 8;
   const DAY = 86400000;
   const ZOOMS = ['day', 'week', 'month'];
   const MODES = ['chart', 'sheet', 'analytics'];
@@ -90,7 +93,7 @@
   }
 
   function defaultFilters() {
-    return { text: '', priority: '', kind: '', progress: '', assignee: '' };
+    return { text: '', priority: '', kind: '', progress: '', assignee: '', label: '' };
   }
 
   function normalizeFilters(raw) {
@@ -101,11 +104,125 @@
     if (['', 'task', 'summary', 'milestone'].indexOf(raw.kind) >= 0) f.kind = raw.kind;
     if (['', 'todo', 'doing', 'done'].indexOf(raw.progress) >= 0) f.progress = raw.progress;
     f.assignee = str(raw.assignee, 80);
+    f.label = str(raw.label, 80);
     return f;
   }
 
   function hasActiveFilter(f) {
-    return !!(f && (f.text || f.priority || f.kind || f.progress || f.assignee));
+    return !!(f && (f.text || f.priority || f.kind || f.progress || f.assignee || f.label));
+  }
+
+  function labelsList(data) {
+    return Object.keys((data && data.labels) || {}).map((id) => data.labels[id]).filter(Boolean)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.id).localeCompare(String(b.id)));
+  }
+
+  function normalizeLabels(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    Object.keys(raw).forEach((key) => {
+      if (Object.keys(out).length >= LABEL_MAX) return;
+      const src = raw[key];
+      if (!src || typeof src !== 'object') return;
+      const id = str(src.id || key, 80);
+      if (!id || out[id]) return;
+      const name = str(src.name, LABEL_NAME_MAX).trim();
+      if (!name) return;
+      out[id] = {
+        id,
+        name,
+        color: isHex(src.color) ? src.color : COLORS[Object.keys(out).length % COLORS.length],
+      };
+    });
+    return out;
+  }
+
+  function normalizeLabelIds(raw, catalog) {
+    const seen = {};
+    const out = [];
+    (Array.isArray(raw) ? raw : []).forEach((id) => {
+      const key = str(id, 80);
+      if (!key || !catalog || !catalog[key] || seen[key] || out.length >= TASK_LABEL_MAX) return;
+      seen[key] = true;
+      out.push(key);
+    });
+    return out;
+  }
+
+  function taskLabelIds(task) {
+    return Array.isArray(task && task.labelIds) ? task.labelIds.filter(Boolean) : [];
+  }
+
+  function taskLabels(data, task) {
+    return taskLabelIds(task).map((id) => data && data.labels && data.labels[id]).filter(Boolean);
+  }
+
+  function addLabel(data, props) {
+    if (!data.labels) data.labels = {};
+    const o = props || {};
+    const name = str(o.name, LABEL_NAME_MAX).trim();
+    if (!name) return null;
+    const existing = labelsList(data).find((l) => l.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      if (isHex(o.color)) existing.color = o.color;
+      return existing;
+    }
+    if (Object.keys(data.labels).length >= LABEL_MAX) return null;
+    const label = {
+      id: str(o.id, 80) && !data.labels[o.id] ? str(o.id, 80) : uid('lab_'),
+      name,
+      color: isHex(o.color) ? o.color : COLORS[Object.keys(data.labels).length % COLORS.length],
+    };
+    data.labels[label.id] = label;
+    return label;
+  }
+
+  function setLabelColor(data, id, color) {
+    const label = data.labels && data.labels[id];
+    if (!label || !isHex(color)) return false;
+    label.color = color;
+    return true;
+  }
+
+  function renameLabel(data, id, name) {
+    const label = data.labels && data.labels[id];
+    const next = str(name, LABEL_NAME_MAX).trim();
+    if (!label || !next) return false;
+    label.name = next;
+    return true;
+  }
+
+  function deleteLabel(data, id) {
+    if (!data.labels || !data.labels[id]) return false;
+    delete data.labels[id];
+    taskValues(data).forEach((t) => {
+      t.labelIds = (t.labelIds || []).filter((x) => x !== id);
+    });
+    return true;
+  }
+
+  function toggleTaskLabel(data, taskId, labelId) {
+    const task = data.tasks[taskId];
+    const label = data.labels && data.labels[labelId];
+    if (!task || !label) return false;
+    const ids = taskLabelIds(task).slice();
+    const at = ids.indexOf(labelId);
+    if (at >= 0) ids.splice(at, 1);
+    else {
+      if (ids.length >= TASK_LABEL_MAX) return false;
+      ids.push(labelId);
+    }
+    task.labelIds = ids;
+    touch(task);
+    return true;
+  }
+
+  function setTaskColor(data, taskId, color) {
+    const task = data.tasks[taskId];
+    if (!task) return false;
+    task.color = isHex(color) ? color : null;
+    touch(task);
+    return true;
   }
 
   function taskKind(data, task) {
@@ -133,10 +250,14 @@
         if (who) return false;
       } else if (who.toLowerCase() !== f.assignee.toLowerCase()) return false;
     }
+    if (f.label === '__none__') {
+      if (taskLabelIds(task).length) return false;
+    } else if (f.label && taskLabelIds(task).indexOf(f.label) < 0) return false;
     if (f.text) {
       const q = f.text.toLowerCase();
       const deps = (task.deps || []).map((id) => data.tasks[id] && data.tasks[id].title).filter(Boolean).join(' ');
-      const blob = [task.title, task.assignee, task.notes, task.priority, deps].join(' ').toLowerCase();
+      const tags = taskLabels(data, task).map((l) => l.name).join(' ');
+      const blob = [task.title, task.assignee, task.notes, task.priority, deps, tags].join(' ').toLowerCase();
       if (blob.indexOf(q) < 0) return false;
     }
     return true;
@@ -175,8 +296,8 @@
     return all.filter((t) => keep.has(t.id));
   }
 
-  function matchingTasks(data) {
-    const f = data && data.view && data.view.filters;
+  function matchingTasks(data, filters) {
+    const f = filters || (data && data.view && data.view.filters);
     const all = allTasksInOrder(data);
     if (!hasActiveFilter(f)) return all;
     return all.filter((t) => taskMatches(data, t, f));
@@ -269,6 +390,12 @@
         remaining = diffDays(today, spanEnd);
       }
     }
+    const labels = labelsList(data).map((lab) => ({
+      id: lab.id,
+      name: lab.name,
+      color: lab.color,
+      count: tasks.filter((t) => taskLabelIds(t).indexOf(lab.id) >= 0).length,
+    })).filter((l) => l.count);
     const assignees = Object.keys(people).sort((a, b) => a.localeCompare(b)).map((name) => {
       const row = people[name];
       return {
@@ -290,6 +417,7 @@
       priority,
       health,
       assignees,
+      labels,
       lists,
     };
   }
@@ -323,6 +451,7 @@
       priority: '',
       notes: '',
       deps: [],
+      labelIds: [],
       createdAt: ts,
       updatedAt: ts,
     };
@@ -334,6 +463,7 @@
       version: 1,
       title: 'Gantt',
       tasks: {},
+      labels: {},
       view: defaultView(),
       createdAt: ts,
       updatedAt: ts,
@@ -525,6 +655,7 @@
     if (!raw || typeof raw !== 'object') return data;
     data.title = str(raw.title, 120) || 'Gantt';
     data.view = normalizeView(raw.view);
+    data.labels = normalizeLabels(raw.labels);
     data.createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : nowIso();
     data.updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : data.createdAt;
     const src = raw.tasks && typeof raw.tasks === 'object' ? raw.tasks : {};
@@ -551,6 +682,7 @@
       task.priority = normPriority(t.priority);
       task.notes = str(t.notes, NOTES_MAX);
       task.deps = Array.isArray(t.deps) ? t.deps.filter((d) => typeof d === 'string').slice(0, 40) : [];
+      task.labelIds = normalizeLabelIds(t.labelIds, data.labels);
       task.createdAt = typeof t.createdAt === 'string' ? t.createdAt : data.createdAt;
       task.updatedAt = typeof t.updatedAt === 'string' ? t.updatedAt : task.createdAt;
       if (task.milestone) task.end = task.start;
@@ -590,6 +722,7 @@
     if (isHex(o.color)) task.color = o.color;
     if (o.assignee) task.assignee = str(o.assignee, 80);
     if (o.priority) task.priority = normPriority(o.priority);
+    if (o.labelIds) task.labelIds = normalizeLabelIds(o.labelIds, data.labels);
     const sibs = childrenOf(data, parentId);
     if (o.afterId) {
       const after = sibs.find((s) => s.id === o.afterId);
@@ -847,6 +980,10 @@
     const impl = add('Implement', 11, 6, build, { deps: [design.id] });
     const review = add('Review', 17, 2, build, { deps: [impl.id] });
     add('Launch', 19, 1, null, { milestone: true, color: COLORS[3], deps: [review.id] });
+    const brand = addLabel(data, { name: 'Brand', color: '#a855f7' });
+    const risk = addLabel(data, { name: 'Risk', color: '#f04438' });
+    if (brand) design.labelIds = [brand.id];
+    if (risk) research.labelIds = [risk.id];
     return normalize(data);
   }
 
@@ -898,7 +1035,7 @@
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
-  const CSV_HEADERS = ['Title', 'Start', 'End', 'Progress', 'Milestone', 'Parent', 'Predecessors', 'Assignee', 'Priority', 'Notes'];
+  const CSV_HEADERS = ['Title', 'Start', 'End', 'Progress', 'Milestone', 'Parent', 'Predecessors', 'Assignee', 'Priority', 'Labels', 'Color', 'Notes'];
 
   function toCsv(data) {
     const rows = [CSV_HEADERS.join(',')];
@@ -916,6 +1053,8 @@
         preds,
         task.assignee || '',
         task.priority || '',
+        taskLabels(data, task).map((l) => l.name).join('; '),
+        task.color || '',
         task.notes || '',
       ].map(csvCell).join(','));
     });
@@ -979,6 +1118,8 @@
       preds: at('predecessors'),
       assignee: at('assignee'),
       priority: at('priority'),
+      labels: at('labels'),
+      color: at('color'),
       notes: at('notes'),
     };
     const body = idx.title >= 0 ? rows.slice(1) : rows;
@@ -1007,6 +1148,13 @@
       });
       if (idx.notes >= 0) task.notes = str(r[idx.notes], NOTES_MAX);
       if (idx.progress >= 0) task.progress = clamp(Math.round(Number(r[idx.progress]) || 0), 0, 100);
+      if (idx.color >= 0 && isHex(String(r[idx.color] || '').trim())) task.color = String(r[idx.color]).trim();
+      if (idx.labels >= 0) {
+        String(r[idx.labels] || '').split(/[;|,]/).map((x) => x.trim()).filter(Boolean).forEach((name) => {
+          const lab = addLabel(data, { name });
+          if (lab) toggleTaskLabel(data, task.id, lab.id);
+        });
+      }
       byTitle[title.toLowerCase()] = task;
       const preds = idx.preds >= 0 ? String(r[idx.preds] || '') : '';
       pending.push({ task, preds });
@@ -1060,6 +1208,15 @@
     hasActiveFilter,
     taskMatches,
     taskKind,
+    labelsList,
+    taskLabels,
+    taskLabelIds,
+    addLabel,
+    setLabelColor,
+    renameLabel,
+    deleteLabel,
+    toggleTaskLabel,
+    setTaskColor,
     addTask,
     deleteTask,
     duplicateTask,

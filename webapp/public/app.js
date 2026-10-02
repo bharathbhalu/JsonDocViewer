@@ -1624,9 +1624,9 @@ function ensureKanbanAssets() {
 }
 
 function ensureGanttAssets() {
-  ensureStylesheet('/gantt/engine.css?v=16', 'data-gt-css');
-  return ensureScript('/gantt/core.js?v=5', 'data-gt-core', () => !!window.GanttCore)
-    .then(() => ensureScript('/gantt/engine.js?v=21', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
+  ensureStylesheet('/gantt/engine.css?v=18', 'data-gt-css');
+  return ensureScript('/gantt/core.js?v=7', 'data-gt-core', () => !!window.GanttCore)
+    .then(() => ensureScript('/gantt/engine.js?v=23', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
 }
 
 const BOARD_TYPES = {

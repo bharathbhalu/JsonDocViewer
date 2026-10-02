@@ -16,7 +16,18 @@
     diamond: 'M12 3l8 9-8 9-8-9 8-9z',
   };
   const PRIORITY_LABEL = { '': 'None', low: 'Low', medium: 'Medium', high: 'High' };
-  const SHEET_HEADS = ['Task', 'Type', 'Assignee', 'Priority', '%', 'Start', 'End', 'Days', 'Depends', 'Notes'];
+  const SHEET_HEADS = ['Task', 'Type', 'Assignee', 'Priority', 'Labels', '%', 'Start', 'End', 'Days', 'Depends', 'Notes'];
+
+  function chipInk(hex) {
+    const s = String(hex || '').replace('#', '');
+    if (s.length !== 6) return '#fff';
+    const n = parseInt(s, 16);
+    if (!Number.isFinite(n)) return '#fff';
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return (r * 299 + g * 587 + b * 114) / 1000 > 158 ? '#1c2330' : '#fff';
+  }
 
   function el(tag, cls, text) {
     const node = document.createElement(tag);
@@ -374,8 +385,9 @@
       const priSel = filterSelect('priority', 'Priority', [['', 'All priorities'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low'], ['none', 'No priority']]);
       const progSel = filterSelect('progress', 'Progress', [['', 'Any progress'], ['todo', 'Not started'], ['doing', 'In progress'], ['done', 'Done']]);
       const whoSel = filterSelect('assignee', 'Assignee', [['', 'Anyone']]);
+      const labelSel = filterSelect('label', 'Label', [['', 'All labels']]);
       const clearBtn = btn('gt-ghost', 'Clear', null, 'Clear search and filters');
-      filterbar.append(search, kindSel, priSel, progSel, whoSel, clearBtn);
+      filterbar.append(search, kindSel, priSel, progSel, whoSel, labelSel, clearBtn);
 
       const main = el('div', 'gt-main');
       const list = el('div', 'gt-list');
@@ -403,7 +415,7 @@
       const help = el('div', 'gt-help');
       const panel = el('div', 'gt-help-panel');
       panel.appendChild(el('h3', null, 'Gantt shortcuts'));
-      ['N new task', 'M milestone', 'Enter rename', 'E details', 'Sheet lists every field', 'Analytics shows progress and risk', '/ search', 'Drag a row to nest or reorder', 'Tab indent', 'Shift+Tab outdent', 'Arrows select', '⌘← → move a day', '⌘D duplicate', 'Delete remove task or selected link', 'T today', '⌘Z undo', '? help'].forEach((line) => {
+      ['N new task', 'M milestone', 'Enter rename', 'E details', 'Sheet lists every field', 'Analytics shows progress and risk', 'Labels and custom colours live in details', '/ search', 'Drag a row to nest or reorder', 'Tab indent', 'Shift+Tab outdent', 'Arrows select', '⌘← → move a day', '⌘D duplicate', 'Delete remove task or selected link', 'T today', '⌘Z undo', '? help'].forEach((line) => {
         panel.appendChild(el('p', null, line));
       });
       const helpClose = btn('gt-ghost', 'Close');
@@ -416,7 +428,7 @@
       this.container.appendChild(root);
       this.els = {
         root, title, stats, mode, zoom, todayBtn, addBtn, subBtn, mileBtn, undoBtn, redoBtn, exportBtn, helpBtn,
-        filterbar, search, kindSel, priSel, progSel, whoSel, clearBtn,
+        filterbar, search, kindSel, priSel, progSel, whoSel, labelSel, clearBtn,
         list, listPane, listHead, listRows, time, headClip, timeHead, timeClip, timeBody, analytics, scrim, menu, toast, help,
       };
       this.drawer = drawer;
@@ -476,6 +488,26 @@
       });
       const priField = el('label', 'gt-field');
       priField.append(el('span', null, 'Priority'), priority);
+      const labels = el('div', 'gt-label-box');
+      const labelApplied = el('div', 'gt-label-applied');
+      const labelCatalog = el('div', 'gt-label-catalog');
+      const labelNew = el('div', 'gt-label-new');
+      const labelName = document.createElement('input');
+      labelName.className = 'gt-input';
+      labelName.type = 'text';
+      labelName.maxLength = 32;
+      labelName.placeholder = 'New label';
+      labelName.setAttribute('aria-label', 'New label name');
+      const labelColor = document.createElement('input');
+      labelColor.className = 'gt-color-input';
+      labelColor.type = 'color';
+      labelColor.value = C.COLORS[0];
+      labelColor.setAttribute('aria-label', 'New label colour');
+      const labelAdd = btn('gt-ghost', 'Add');
+      labelNew.append(labelName, labelColor, labelAdd);
+      labels.append(labelApplied, labelCatalog, labelNew);
+      const labelsField = el('div', 'gt-field');
+      labelsField.append(el('span', null, 'Labels'), labels);
       const notes = document.createElement('textarea');
       notes.placeholder = 'Notes';
       const notesField = el('label', 'gt-field');
@@ -486,13 +518,16 @@
       const deps = el('div', 'gt-deps-list');
       const depsField = el('div', 'gt-field');
       depsField.append(el('span', null, 'Depends on'), deps);
-      body.append(title, dates, progressField, mileField, whoField, priField, colorField, depsField, notesField);
+      body.append(title, dates, progressField, mileField, whoField, priField, labelsField, colorField, depsField, notesField);
       const foot = el('div', 'gt-drawer-foot');
       const dupBtn = btn('gt-ghost', 'Duplicate');
       const delBtn = btn('gt-ghost gt-danger', 'Delete');
       foot.append(dupBtn, delBtn);
       wrap.append(head, body, foot);
-      return { el: wrap, closeBtn, headTitle, title, start, end, progress, progressLabel, milestone, assignee, priority, notes, swatches, deps, dupBtn, delBtn };
+      return {
+        el: wrap, closeBtn, headTitle, title, start, end, progress, progressLabel, milestone, assignee, priority,
+        notes, swatches, deps, dupBtn, delBtn, labelApplied, labelCatalog, labelName, labelColor, labelAdd,
+      };
     }
 
     _bind() {
@@ -540,7 +575,7 @@
           this._applyFilters({ text: e.search.value.slice(0, 120) });
         }, 80);
       });
-      [e.kindSel, e.priSel, e.progSel, e.whoSel].forEach((sel) => {
+      [e.kindSel, e.priSel, e.progSel, e.whoSel, e.labelSel].forEach((sel) => {
         sel.addEventListener('change', () => {
           const patch = {};
           patch[sel.dataset.filter] = sel.value;
@@ -594,6 +629,13 @@
           task.priority = C.PRIORITIES.indexOf(d.priority.value) >= 0 ? d.priority.value : '';
           task.updatedAt = C.nowIso();
         });
+      });
+      d.labelAdd.addEventListener('click', () => this._addDrawerLabel());
+      d.labelName.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          this._addDrawerLabel();
+        }
       });
       d.dupBtn.addEventListener('click', () => {
         if (this.detailId) this.duplicateTask(this.detailId);
@@ -675,6 +717,17 @@
       e.kindSel.value = f.kind || '';
       e.priSel.value = f.priority || '';
       e.progSel.value = f.progress || '';
+      const labs = C.labelsList(this.data);
+      const keepLab = e.labelSel.value;
+      e.labelSel.innerHTML = '';
+      [['', 'All labels'], ['__none__', 'No labels']].concat(labs.map((l) => [l.id, l.name])).forEach((pair) => {
+        const opt = document.createElement('option');
+        opt.value = pair[0];
+        opt.textContent = pair[1];
+        e.labelSel.appendChild(opt);
+      });
+      e.labelSel.value = f.label || keepLab || '';
+      if (![...e.labelSel.options].some((o) => o.value === e.labelSel.value)) e.labelSel.value = '';
       const people = [];
       Object.keys(this.data.tasks || {}).forEach((id) => {
         const who = String(this.data.tasks[id].assignee || '').trim();
@@ -1062,8 +1115,50 @@
     _onAnalyticsClick(ev) {
       const target = eventEl(ev.target);
       if (!target) return;
+      const chip = target.closest('[data-label]');
+      if (chip) {
+        this._setLabelFilter(chip.dataset.label);
+        return;
+      }
       const row = target.closest('[data-id]');
       if (row && row.dataset.id) this.openTask(row.dataset.id);
+    }
+
+    _setLabelFilter(id) {
+      const next = id == null ? '' : String(id);
+      const cur = this._filters().label || '';
+      this._applyFilters({ label: cur === next ? '' : next });
+    }
+
+    _anLabelFilter() {
+      const labs = C.labelsList(this.data);
+      if (!labs.length) return null;
+      const cur = this._filters().label || '';
+      const base = Object.assign({}, this._filters(), { label: '' });
+      const pool = C.matchingTasks(this.data, base);
+      const none = pool.filter((t) => !C.taskLabelIds(t).length).length;
+      const bar = el('div', 'gt-an-labels');
+      bar.setAttribute('aria-label', 'Filter by label');
+      function chip(id, name, count, color) {
+        const b = el('button', 'gt-an-label' + (cur === id ? ' is-on' : ''));
+        b.type = 'button';
+        b.dataset.label = id;
+        if (color) {
+          const dot = el('span', 'gt-an-label-dot');
+          dot.style.background = color;
+          b.appendChild(dot);
+        }
+        b.appendChild(el('span', null, name));
+        b.appendChild(el('em', null, String(count)));
+        return b;
+      }
+      bar.appendChild(chip('', 'All', pool.length, ''));
+      labs.forEach((lab) => {
+        const count = pool.filter((t) => C.taskLabelIds(t).indexOf(lab.id) >= 0).length;
+        bar.appendChild(chip(lab.id, lab.name, count, lab.color));
+      });
+      bar.appendChild(chip('__none__', 'No labels', none, ''));
+      return bar;
     }
 
     _anRing(pct) {
@@ -1136,6 +1231,8 @@
     _renderAnalytics() {
       const pane = this.els.analytics;
       pane.innerHTML = '';
+      const labelBar = this._anLabelFilter();
+      if (labelBar) pane.appendChild(labelBar);
       const stats = C.analyze(this.data);
       const work = stats.work || stats.total;
       if (!stats.total) {
@@ -1241,6 +1338,29 @@
       }
       grid.appendChild(people);
 
+      if (stats.labels && stats.labels.length) {
+        const labs = el('div', 'gt-an-card');
+        labs.appendChild(el('h3', null, 'Labels'));
+        stats.labels.forEach((lab) => {
+          const row = el('button', 'gt-an-who is-btn');
+          row.type = 'button';
+          row.dataset.label = lab.id;
+          row.title = 'Filter by ' + lab.name;
+          row.appendChild(this._labelChip(lab));
+          const body = el('div', 'gt-an-who-body');
+          body.append(el('strong', null, lab.name), el('span', null, lab.count + ' item' + (lab.count === 1 ? '' : 's')));
+          const track = el('div', 'gt-an-bar-track');
+          const fill = el('div', 'gt-an-bar-fill');
+          fill.style.background = lab.color;
+          fill.style.width = (work ? Math.round((lab.count / work) * 100) : 0) + '%';
+          track.appendChild(fill);
+          body.appendChild(track);
+          row.appendChild(body);
+          labs.appendChild(row);
+        });
+        grid.appendChild(labs);
+      }
+
       grid.append(
         this._anList('Overdue', 'red', stats.lists.overdue),
         this._anList('Due in 3 days', 'orange', stats.lists.atRisk),
@@ -1271,6 +1391,45 @@
 
     _depNames(task) {
       return (task.deps || []).map((id) => this.data.tasks[id] && this.data.tasks[id].title).filter(Boolean).join(', ');
+    }
+
+    _labelChip(label, opts) {
+      const o = opts || {};
+      const chip = el(o.tag || 'span', 'gt-label-chip' + (o.on ? ' is-on' : '') + (o.button ? ' is-btn' : ''), label.name);
+      if (o.button) {
+        chip.type = 'button';
+      }
+      chip.style.background = label.color;
+      chip.style.color = chipInk(label.color);
+      chip.title = label.name;
+      if (o.onClick) chip.addEventListener('click', o.onClick);
+      return chip;
+    }
+
+    _appendLabelChips(host, task, max) {
+      const tags = C.taskLabels(this.data, task);
+      const shown = max ? tags.slice(0, max) : tags;
+      shown.forEach((lab) => host.appendChild(this._labelChip(lab)));
+      if (max && tags.length > max) host.appendChild(el('span', 'gt-label-more', '+' + (tags.length - max)));
+      return tags;
+    }
+
+    _addDrawerLabel() {
+      if (this.readOnly || !this.detailId) return;
+      const d = this.drawer;
+      const name = String(d.labelName.value || '').trim();
+      if (!name) {
+        d.labelName.focus();
+        return;
+      }
+      const color = d.labelColor.value;
+      this._mutate(() => {
+        const lab = C.addLabel(this.data, { name, color });
+        if (!lab) return false;
+        const ids = C.taskLabelIds(this.data.tasks[this.detailId]);
+        if (ids.indexOf(lab.id) < 0) C.toggleTaskLabel(this.data, this.detailId, lab.id);
+      });
+      d.labelName.value = '';
     }
 
     _sheetField(tag, field, id, value) {
@@ -1312,6 +1471,7 @@
       dot.style.background = this._taskColor(task);
       const name = el('div', 'gt-name' + (C.hasChildren(this.data, task.id) ? ' is-group' : ''), task.title || 'Untitled');
       cluster.append(grip, twist, dot, name);
+      if (!sheet) this._appendLabelChips(cluster, task, 2);
       if (task.priority === 'high') cluster.appendChild(el('span', 'gt-flag', 'High'));
       row.appendChild(cluster);
       if (sheet) {
@@ -1361,6 +1521,17 @@
         });
       });
       row.appendChild(pri);
+      const tags = el('div', 'gt-label-cell');
+      this._appendLabelChips(tags, task, 4);
+      const addLab = el('button', 'gt-label-add', '+');
+      addLab.type = 'button';
+      addLab.title = 'Edit labels';
+      addLab.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        this.openTask(task.id);
+      });
+      tags.appendChild(addLab);
+      row.appendChild(tags);
       const pctWrap = el('div', 'gt-pct-cell');
       const pctVal = Math.round(Number(task.progress) || 0);
       const track = el('div', 'gt-pct-track');
@@ -1957,20 +2128,71 @@
       d.assignee.readOnly = this.readOnly;
       d.priority.disabled = this.readOnly;
       d.notes.readOnly = this.readOnly;
+      d.labelName.readOnly = this.readOnly;
+      d.labelColor.disabled = this.readOnly;
+      d.labelAdd.disabled = this.readOnly;
+      d.labelApplied.innerHTML = '';
+      d.labelCatalog.innerHTML = '';
+      const applied = C.taskLabelIds(task);
+      C.labelsList(this.data).forEach((lab) => {
+        const on = applied.indexOf(lab.id) >= 0;
+        const wrap = el('span', 'gt-label-edit');
+        const chip = this._labelChip(lab, {
+          tag: 'button',
+          button: true,
+          on,
+          onClick: () => {
+            if (this.readOnly) return;
+            this._mutate(() => C.toggleTaskLabel(this.data, task.id, lab.id));
+          },
+        });
+        chip.disabled = this.readOnly;
+        const kill = el('button', 'gt-label-x', '×');
+        kill.type = 'button';
+        kill.title = 'Delete label';
+        kill.disabled = this.readOnly;
+        kill.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (this.readOnly) return;
+          this._ask('Delete label', 'Remove "' + lab.name + '" from the board?', 'Delete').then((ok) => {
+            if (ok) this._mutate(() => C.deleteLabel(this.data, lab.id));
+          });
+        });
+        wrap.append(chip, kill);
+        (on ? d.labelApplied : d.labelCatalog).appendChild(wrap);
+      });
+      if (!C.labelsList(this.data).length) d.labelCatalog.appendChild(el('p', 'gt-an-empty', 'No labels yet'));
       d.swatches.innerHTML = '';
+      const clear = el('button', 'gt-swatch is-clear' + (!task.color ? ' is-on' : ''));
+      clear.type = 'button';
+      clear.title = 'Default colour';
+      clear.disabled = this.readOnly;
+      clear.addEventListener('click', () => {
+        this._mutate(() => C.setTaskColor(this.data, task.id, null));
+      });
+      d.swatches.appendChild(clear);
       C.COLORS.forEach((hex) => {
         const b = el('button', 'gt-swatch' + (task.color === hex ? ' is-on' : ''));
         b.type = 'button';
         b.style.background = hex;
         b.disabled = this.readOnly;
         b.addEventListener('click', () => {
-          this._mutate(() => {
-            task.color = hex;
-            task.updatedAt = C.nowIso();
-          });
+          this._mutate(() => C.setTaskColor(this.data, task.id, hex));
         });
         d.swatches.appendChild(b);
       });
+      const custom = document.createElement('input');
+      custom.type = 'color';
+      custom.className = 'gt-color-input';
+      custom.value = task.color || this._taskColor(task);
+      custom.title = 'Custom colour';
+      custom.disabled = this.readOnly;
+      custom.setAttribute('aria-label', 'Custom colour');
+      if (task.color && C.COLORS.indexOf(task.color) < 0) custom.classList.add('is-on');
+      custom.addEventListener('change', () => {
+        this._mutate(() => C.setTaskColor(this.data, task.id, custom.value));
+      });
+      d.swatches.appendChild(custom);
       d.deps.innerHTML = '';
       C.visibleTasks(this.data).forEach((other) => {
         if (other.id === task.id) return;
