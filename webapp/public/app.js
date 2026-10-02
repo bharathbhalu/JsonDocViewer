@@ -137,7 +137,7 @@ function isPdfPath(p) {
 }
 
 function applyFileIcon(el, p, kind) {
-  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-json', 'icon-yaml', 'icon-pdf');
+  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-json', 'icon-yaml', 'icon-pdf');
   if (kind === 'pdf' || isPdfPath(p)) {
     el.classList.add('icon-pdf');
     el.textContent = 'PDF';
@@ -154,6 +154,18 @@ function applyFileIcon(el, p, kind) {
     el.classList.add('icon-flow');
     el.textContent = 'FL';
     el.title = 'Flow';
+    return;
+  }
+  if (kind === 'kanban') {
+    el.classList.add('icon-kanban');
+    el.textContent = 'KB';
+    el.title = 'Kanban';
+    return;
+  }
+  if (kind === 'gantt') {
+    el.classList.add('icon-gantt');
+    el.textContent = 'GT';
+    el.title = 'Gantt';
     return;
   }
   const fmt = langForPath(p);
@@ -861,7 +873,7 @@ async function createBoardFile(parentPath, name, kind) {
   if (!trimmed) return;
   if (!/\.html?$/i.test(trimmed)) trimmed += '.html';
   const fullPath = parentPath ? `${parentPath}/${trimmed}` : trimmed;
-  const label = kind === 'flow' ? 'flow' : 'mindmap';
+  const label = BOARD_LABELS[kind] || 'board';
 
   const res = await fetch('/api/file/create', {
     method: 'POST',
@@ -875,14 +887,18 @@ async function createBoardFile(parentPath, name, kind) {
   }
   if (parentPath) expandedFolders.add(parentPath);
   await loadTree();
-  setStatus(kind === 'flow' ? 'Flow created and committed' : 'Mindmap created and committed', 'ok');
+  setStatus(label.charAt(0).toUpperCase() + label.slice(1) + ' created and committed', 'ok');
   await openFile(fullPath);
 }
+
+const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt' };
 
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
   { id: 'mindmap', label: 'Mindmap', hint: 'Tree board. .html is added if you omit it', placeholder: 'ideas' },
   { id: 'flow', label: 'Flow', hint: 'Flowchart board. .html is added if you omit it', placeholder: 'process' },
+  { id: 'kanban', label: 'Kanban', hint: 'Task board with columns. .html is added if you omit it', placeholder: 'sprint' },
+  { id: 'gantt', label: 'Gantt', hint: 'Timeline of tasks and dependencies. .html is added if you omit it', placeholder: 'roadmap' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
 ];
 
@@ -1050,6 +1066,8 @@ async function openCreateDialog(parentPath) {
   if (result.kind === 'folder') return createFolder(parentPath, result.name);
   if (result.kind === 'mindmap') return createBoardFile(parentPath, result.name, 'mindmap');
   if (result.kind === 'flow') return createBoardFile(parentPath, result.name, 'flow');
+  if (result.kind === 'kanban') return createBoardFile(parentPath, result.name, 'kanban');
+  if (result.kind === 'gantt') return createBoardFile(parentPath, result.name, 'gantt');
   return createFile(parentPath, result.name);
 }
 
@@ -1528,6 +1546,8 @@ function boardKindFromHtml(content) {
   if (typeof content !== 'string') return null;
   if (/data-docviewer\s*=\s*["']mindmap["']/.test(content)) return 'mindmap';
   if (/data-docviewer\s*=\s*["']flow["']/.test(content)) return 'flow';
+  if (/data-docviewer\s*=\s*["']kanban["']/.test(content)) return 'kanban';
+  if (/data-docviewer\s*=\s*["']gantt["']/.test(content)) return 'gantt';
   return null;
 }
 
@@ -1551,6 +1571,10 @@ function ensureScript(src, flag, ready) {
     if (flag === 'data-fl-core') window.FlowCore = undefined;
     if (flag === 'data-fl-js') window.FlowEngine = undefined;
     if (flag === 'data-mm-js') window.MindmapEngine = undefined;
+    if (flag === 'data-kb-core') window.KanbanCore = undefined;
+    if (flag === 'data-kb-js') window.KanbanEngine = undefined;
+    if (flag === 'data-gt-core') window.GanttCore = undefined;
+    if (flag === 'data-gt-js') window.GanttEngine = undefined;
   } else if (ready()) {
     return Promise.resolve();
   }
@@ -1584,14 +1608,33 @@ function ensureStylesheet(href, flag) {
 
 function ensureMindmapAssets() {
   ensureStylesheet('/mindmap/engine.css?v=94', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=121', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  return ensureScript('/mindmap/engine.js?v=122', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=23', 'data-fl-css');
   return ensureScript('/flow/core.js?v=20', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=33', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=34', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
+
+function ensureKanbanAssets() {
+  ensureStylesheet('/kanban/engine.css?v=2', 'data-kb-css');
+  return ensureScript('/kanban/core.js?v=1', 'data-kb-core', () => !!window.KanbanCore)
+    .then(() => ensureScript('/kanban/engine.js?v=4', 'data-kb-js', () => typeof window.KanbanEngine === 'function'));
+}
+
+function ensureGanttAssets() {
+  ensureStylesheet('/gantt/engine.css?v=16', 'data-gt-css');
+  return ensureScript('/gantt/core.js?v=5', 'data-gt-core', () => !!window.GanttCore)
+    .then(() => ensureScript('/gantt/engine.js?v=21', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
+}
+
+const BOARD_TYPES = {
+  mindmap: { engine: 'MindmapEngine', ensure: ensureMindmapAssets },
+  flow: { engine: 'FlowEngine', ensure: ensureFlowAssets },
+  kanban: { engine: 'KanbanEngine', ensure: ensureKanbanAssets },
+  gantt: { engine: 'GanttEngine', ensure: ensureGanttAssets },
+};
 
 function getSaveContent() {
   if (boardEngine && viewMode === 'board') {
@@ -1776,6 +1819,34 @@ async function openFile(relPath, lineToReveal, opts) {
       alert('Flow failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
+  } else if (boardKind === 'kanban') {
+    viewToggleBtn.classList.remove('hidden');
+    try {
+      await ensureKanbanAssets();
+      if (token !== openToken) return;
+      boardEngine = new window.KanbanEngine(mindmapStage, { onChange: onBoardChange });
+      boardEngine.loadFromHtml(data.content);
+      setViewMode('board');
+    } catch (err) {
+      if (token !== openToken) return;
+      console.error(err);
+      alert('Kanban failed to load: ' + ((err && err.message) || err));
+      setViewMode('code');
+    }
+  } else if (boardKind === 'gantt') {
+    viewToggleBtn.classList.remove('hidden');
+    try {
+      await ensureGanttAssets();
+      if (token !== openToken) return;
+      boardEngine = new window.GanttEngine(mindmapStage, { onChange: onBoardChange });
+      boardEngine.loadFromHtml(data.content);
+      setViewMode('board');
+    } catch (err) {
+      if (token !== openToken) return;
+      console.error(err);
+      alert('Gantt failed to load: ' + ((err && err.message) || err));
+      setViewMode('code');
+    }
   } else if (isHtml) {
     viewToggleBtn.classList.remove('hidden');
     setViewMode('render');
@@ -1783,7 +1854,7 @@ async function openFile(relPath, lineToReveal, opts) {
     viewToggleBtn.classList.add('hidden');
     setViewMode('code');
   }
-  setStandaloneVisible(boardKind === 'mindmap' || boardKind === 'flow');
+  setStandaloneVisible(!!boardKind);
   if (token !== openToken) return;
   markClean();
 }
@@ -1814,7 +1885,7 @@ function setViewMode(mode) {
   } else {
     if (boardEngine) syncBoardIntoEditor();
     document.getElementById('editor').classList.remove('hidden');
-    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : 'View Rendered';
+    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : 'View Rendered';
     findInFileBtn.disabled = !currentPath;
     if (boardEngine && editor) {
       editor.layout();
@@ -2016,6 +2087,8 @@ async function runSearch(q, type) {
       const bits = [];
       if (r.kind === 'mindmap') bits.push('Mindmap');
       else if (r.kind === 'flow') bits.push('Flow');
+      else if (r.kind === 'kanban') bits.push('Kanban');
+      else if (r.kind === 'gantt') bits.push('Gantt');
       else if (r.kind === 'json') bits.push('JSON');
       else if (r.kind === 'yaml') bits.push('YAML');
       else if (r.kind === 'pdf') bits.push('PDF');
@@ -2104,23 +2177,15 @@ async function viewVersion(hash) {
   saveBtn.disabled = true;
   setStatus('Viewing old version', 'dirty');
   backToLatestBtn.classList.remove('hidden');
-  if (boardKindFromHtml(data.content) === 'mindmap') {
-    await ensureMindmapAssets();
-    if (!boardEngine || boardKind !== 'mindmap') {
+  const previewKind = boardKindFromHtml(data.content);
+  const board = BOARD_TYPES[previewKind];
+  if (board) {
+    await board.ensure();
+    if (!boardEngine || boardKind !== previewKind) {
       if (boardEngine) boardEngine.destroy();
-      boardEngine = new window.MindmapEngine(mindmapStage, { onChange: onBoardChange, readOnly: true });
+      boardEngine = new window[board.engine](mindmapStage, { onChange: onBoardChange, readOnly: true });
     }
-    boardKind = 'mindmap';
-    boardEngine.setReadOnly(true);
-    boardEngine.loadFromHtml(data.content);
-    setViewMode('board');
-  } else if (boardKindFromHtml(data.content) === 'flow') {
-    await ensureFlowAssets();
-    if (!boardEngine || boardKind !== 'flow') {
-      if (boardEngine) boardEngine.destroy();
-      boardEngine = new window.FlowEngine(mindmapStage, { onChange: onBoardChange, readOnly: true });
-    }
-    boardKind = 'flow';
+    boardKind = previewKind;
     boardEngine.setReadOnly(true);
     boardEngine.loadFromHtml(data.content);
     setViewMode('board');

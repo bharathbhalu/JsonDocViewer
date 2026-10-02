@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const FlowCore = require(path.join(__dirname, 'public', 'flow', 'core.js'));
+const KanbanCore = require(path.join(__dirname, 'public', 'kanban', 'core.js'));
+const GanttCore = require(path.join(__dirname, 'public', 'gantt', 'core.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
@@ -331,6 +333,22 @@ function safeDownloadName(name) {
   return String(name || 'download').replace(/["\\/]/g, '');
 }
 
+const transientDownloads = new Map();
+const TRANSIENT_MAX = 8;
+const TRANSIENT_TTL_MS = 120000;
+
+function pruneTransientDownloads() {
+  const now = Date.now();
+  for (const [id, item] of transientDownloads) {
+    if (!item || now - item.at > TRANSIENT_TTL_MS) transientDownloads.delete(id);
+  }
+  while (transientDownloads.size > TRANSIENT_MAX) {
+    const first = transientDownloads.keys().next().value;
+    if (first == null) break;
+    transientDownloads.delete(first);
+  }
+}
+
 function contentTypeFor(name) {
   if (/\.pdf$/i.test(name)) return 'application/pdf';
   if (/\.html?$/i.test(name)) return 'text/html; charset=utf-8';
@@ -398,6 +416,8 @@ function peekFileKind(full, name) {
     const head = buf.toString('utf8', 0, n);
     if (head.includes('data-docviewer="mindmap"')) return 'mindmap';
     if (head.includes('data-docviewer="flow"')) return 'flow';
+    if (head.includes('data-docviewer="kanban"')) return 'kanban';
+    if (head.includes('data-docviewer="gantt"')) return 'gantt';
   } catch (e) {
     return undefined;
   }
@@ -544,9 +564,11 @@ app.post('/api/folder', (req, res) => {
   }
 });
 
-function defaultContentFor(relPath, kind) {
+function defaultContentFor(relPath, kind, template) {
   if (kind === 'mindmap') return mindmapTemplate();
   if (kind === 'flow') return flowTemplate();
+  if (kind === 'kanban') return kanbanTemplate(template);
+  if (kind === 'gantt') return ganttTemplate();
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
   return '';
@@ -605,16 +627,26 @@ function flowTemplate() {
   return FlowCore.serializeToHtml(FlowCore.createStarter(), 'Flow');
 }
 
+function kanbanTemplate(template) {
+  const data = template ? KanbanCore.buildTemplate(template) : KanbanCore.createStarter();
+  return KanbanCore.serializeToHtml(data, data.title || 'Kanban');
+}
+
+function ganttTemplate() {
+  const data = GanttCore.createStarter();
+  return GanttCore.serializeToHtml(data, data.title || 'Gantt');
+}
+
 app.post('/api/file/create', (req, res) => {
   try {
-    const { path: relPath, kind } = req.body;
+    const { path: relPath, kind, template } = req.body;
     if (!relPath) return res.status(400).json({ error: 'path is required' });
     const full = resolveSafe(relPath);
     if (fs.existsSync(full)) {
       return res.status(400).json({ error: 'A file already exists at that path' });
     }
     fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, defaultContentFor(relPath, kind), 'utf8');
+    fs.writeFileSync(full, defaultContentFor(relPath, kind, template), 'utf8');
     const commit = commitFile(relPath, `Create ${relPath}`);
     res.json({ ok: true, commit });
   } catch (err) {
@@ -762,6 +794,40 @@ app.get('/api/raw', (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="' + path.basename(full).replace(/"/g, '') + '"');
     fs.createReadStream(full).pipe(res);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/transient-download', (req, res) => {
+  try {
+    const name = safeDownloadName(String((req.body && req.body.name) || 'download')).slice(0, 120);
+    const type = String((req.body && req.body.type) || 'application/octet-stream').slice(0, 80);
+    const data = String((req.body && req.body.data) || '');
+    if (!data) return res.status(400).json({ error: 'No file' });
+    const body = Buffer.from(data, 'base64');
+    if (!body.length || body.length > 25 * 1024 * 1024) return res.status(400).json({ error: 'Bad file' });
+    pruneTransientDownloads();
+    const id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    transientDownloads.set(id, { body, type, name, at: Date.now() });
+    res.json({ id });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/transient-download/:id', (req, res) => {
+  try {
+    const id = String(req.params.id || '');
+    if (!/^[a-z0-9-]+$/i.test(id)) return res.status(404).json({ error: 'Not found' });
+    const item = transientDownloads.get(id);
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    transientDownloads.delete(id);
+    const name = safeDownloadName(String(req.query.name || item.name || 'download')).slice(0, 120);
+    res.setHeader('Content-Type', item.type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + name + '"');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(item.body);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -1004,6 +1070,8 @@ function fileKind(full, name) {
 function kindLabel(kind) {
   if (kind === 'mindmap') return 'Mindmap';
   if (kind === 'flow') return 'Flow';
+  if (kind === 'kanban') return 'Kanban';
+  if (kind === 'gantt') return 'Gantt';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
   if (kind === 'pdf') return 'PDF';

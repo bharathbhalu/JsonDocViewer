@@ -128,7 +128,7 @@
         dataId: 'flow-data',
         json,
         cssUrls: ['/flow/engine.css'],
-        jsUrls: ['/flow/core.js', '/flow/engine.js'],
+        jsUrls: ['/flow/core.js', '/flow/engine.js', '/flow/export.js'],
       });
       downloadStandalone(html, filename || safeStandaloneName(title, 'flow'));
     }
@@ -217,6 +217,7 @@
           document.body.appendChild(s);
         });
       }
+      if (!global.FlowExport) throw new Error('Export module failed to load');
       return global.FlowExport.run(format, rect, this.data);
     }
 

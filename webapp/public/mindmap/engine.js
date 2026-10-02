@@ -25,6 +25,7 @@
   const LINK_MAX_W = 268;
   const LINK_MIN_H = 68;
   const LINK_MAX_H = 108;
+  const EXPORT_V = 17; // must match MindmapExport._v in export.js
   const NODE_PALETTE = [
     '#ffffff', '#F3F5F8', '#E8F0FB', '#E5F3EA', '#FBF3DA', '#F8E8EE', '#EEE7F6', '#E1F3F4',
     '#F8E9DC', '#ECEEF2', '#C9D8EE', '#C5E0CD', '#EED9A4', '#E8BFC9', '#D3C2E6', '#B5D8DE',
@@ -1497,7 +1498,7 @@
         dataId: 'mindmap-data',
         json,
         cssUrls: ['/mindmap/engine.css'],
-        jsUrls: ['/mindmap/engine.js'],
+        jsUrls: ['/mindmap/engine.js', '/mindmap/export.js'],
       });
       const name = filename || safeStandaloneName(title, 'mindmap');
       downloadStandalone(html, name);
@@ -5575,9 +5576,10 @@
     }
 
     async _doExport(format, rect) {
-      if (!global.MindmapExport || global.MindmapExport._v !== 17) {
-        await loadScript('/mindmap/export.js?v=23');
-      }
+      // A standalone file has export.js inlined and no server to fetch from.
+      const stale = !isStandaloneDoc() && global.MindmapExport && global.MindmapExport._v !== EXPORT_V;
+      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=23');
+      if (!global.MindmapExport) throw new Error('Export module failed to load');
       const scene = this._exportScene();
       return global.MindmapExport.run(format, rect, scene, this.els);
     }
@@ -7262,6 +7264,10 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  }
+
+  function isStandaloneDoc() {
+    return document.documentElement.getAttribute('data-accretion') === 'standalone';
   }
 
   async function fetchStandaloneAsset(url) {
