@@ -53,6 +53,16 @@ html[data-theme="dark"] body {
 }
 
 #app { display: flex; height: 100vh; }
+html.is-slides-present #sidebar,
+html.is-slides-present #toolbar { display: none !important; }
+html.is-slides-present #main { width: 100%; }
+html.is-slides-present #editor-area,
+html.is-slides-present #mindmap-stage {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 80;
+  display: block !important;
+}
 
 #sidebar {
   width: 304px;
@@ -288,6 +298,32 @@ html[data-theme="dark"] .tree-row .icon.icon-kanban { color: #10141c; }
   opacity: 1;
 }
 html[data-theme="dark"] .tree-row .icon.icon-gantt { color: #10141c; }
+.tree-row .icon.icon-slides {
+  width: auto;
+  min-width: 22px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  background: #ea580c;
+  color: #fff;
+  opacity: 1;
+}
+html[data-theme="dark"] .tree-row .icon.icon-slides { color: #10141c; }
+.tree-row .icon.icon-wiki {
+  width: auto;
+  min-width: 22px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  background: #0d9488;
+  color: #fff;
+  opacity: 1;
+}
+html[data-theme="dark"] .tree-row .icon.icon-wiki { color: #10141c; }
 .tree-row .icon.icon-pdf {
   width: auto;
   min-width: 22px;

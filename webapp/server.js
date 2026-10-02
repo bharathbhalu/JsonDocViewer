@@ -5,6 +5,8 @@ const yaml = require('js-yaml');
 const FlowCore = require(path.join(__dirname, 'public', 'flow', 'core.js'));
 const KanbanCore = require(path.join(__dirname, 'public', 'kanban', 'core.js'));
 const GanttCore = require(path.join(__dirname, 'public', 'gantt', 'core.js'));
+const SlidesCore = require(path.join(__dirname, 'public', 'slides', 'core.js'));
+const WikiCore = require(path.join(__dirname, 'public', 'wiki', 'core.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
@@ -418,6 +420,8 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="flow"')) return 'flow';
     if (head.includes('data-docviewer="kanban"')) return 'kanban';
     if (head.includes('data-docviewer="gantt"')) return 'gantt';
+    if (head.includes('data-docviewer="slides"')) return 'slides';
+    if (head.includes('data-docviewer="wiki"')) return 'wiki';
   } catch (e) {
     return undefined;
   }
@@ -450,6 +454,78 @@ function buildTree(dir) {
 app.get('/api/tree', (req, res) => {
   try {
     res.json({ root: 'data', children: buildTree(DATA_ROOT) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function jsonBlock(html, id) {
+  const m = String(html).match(new RegExp('<script[^>]*id=["\']' + id + '["\'][^>]*>([\\s\\S]*?)</script>', 'i'));
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch (e) {
+    return null;
+  }
+}
+
+function boardFramesFromFile(full, name, kind) {
+  let html = '';
+  try {
+    html = fs.readFileSync(full, 'utf8');
+  } catch (e) {
+    return null;
+  }
+  if (kind === 'mindmap') {
+    const d = jsonBlock(html, 'mindmap-data');
+    const frames = ((d && d.frames) || []).map((f) => ({
+      id: String(f && f.id || ''),
+      title: String((f && f.title) || 'Frame').slice(0, 80),
+    })).filter((f) => f.id);
+    return { title: d && d.title, frames: [{ id: '', title: 'Whole board' }].concat(frames) };
+  }
+  if (kind === 'flow') {
+    const d = FlowCore.parseHtml(html);
+    const frames = ((d && d.frames) || []).map((f) => ({
+      id: String(f && f.id || ''),
+      title: String((f && f.title) || 'Frame').slice(0, 80),
+    })).filter((f) => f.id);
+    return { title: d && d.title, frames: [{ id: '', title: 'Whole board' }].concat(frames) };
+  }
+  if (kind === 'gantt') {
+    const d = GanttCore.parseHtml(html);
+    return { title: d && d.title, frames: [{ id: '', title: 'Whole board' }] };
+  }
+  return null;
+}
+
+app.get('/api/board-frames', (req, res) => {
+  try {
+    const boards = [];
+    function walk(dir) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        const kind = peekFileKind(full, entry.name);
+        if (kind !== 'mindmap' && kind !== 'flow' && kind !== 'gantt') continue;
+        const rel = path.relative(DATA_ROOT, full);
+        const extra = boardFramesFromFile(full, entry.name, kind);
+        if (!extra) continue;
+        boards.push({
+          path: rel.split(path.sep).join('/'),
+          kind,
+          title: extra.title || entry.name.replace(/\.html?$/i, ''),
+          frames: extra.frames || [],
+        });
+      }
+    }
+    walk(DATA_ROOT);
+    res.json({ boards });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -569,6 +645,8 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'flow') return flowTemplate();
   if (kind === 'kanban') return kanbanTemplate(template);
   if (kind === 'gantt') return ganttTemplate();
+  if (kind === 'slides') return slidesTemplate();
+  if (kind === 'wiki') return wikiTemplate(template);
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
   return '';
@@ -636,6 +714,107 @@ function ganttTemplate() {
   const data = GanttCore.createStarter();
   return GanttCore.serializeToHtml(data, data.title || 'Gantt');
 }
+
+function slidesTemplate() {
+  const data = SlidesCore.createStarter();
+  return SlidesCore.serializeToHtml(data, data.title || 'Deck');
+}
+
+function wikiTemplate(title) {
+  const name = typeof title === 'string' && title.trim() ? title.trim() : 'New page';
+  const data = WikiCore.createStarter(name);
+  return WikiCore.serializeToHtml(data, data.title || 'Page');
+}
+
+function clipLinkTitle(s, fallback) {
+  const t = String(s || '').trim();
+  return (t || fallback || 'Untitled').slice(0, 160);
+}
+
+function wikiGraphEntry(full, name) {
+  const kind = fileKind(full, name);
+  const rel = path.relative(DATA_ROOT, full).split(path.sep).join('/');
+  const base = name.replace(/\.[^.]+$/, '');
+  let html = '';
+  if (/\.html?$/i.test(name)) {
+    try {
+      html = fs.readFileSync(full, 'utf8');
+    } catch (e) {
+      html = '';
+    }
+  }
+  if (kind === 'wiki') {
+    const data = WikiCore.parseHtml(html);
+    if (!data) return { path: rel, title: base, kind: 'wiki', links: [] };
+    return WikiCore.pageSummary(rel, data, { kind: 'wiki' });
+  }
+  if (kind === 'mindmap') {
+    const d = jsonBlock(html, 'mindmap-data') || {};
+    const frames = ((d.frames) || []).map((f) => ({
+      id: String((f && f.id) || ''),
+      title: clipLinkTitle(f && f.title, 'Frame'),
+    })).filter((f) => f.id);
+    return { path: rel, title: clipLinkTitle(d.title, base), kind, frames, links: [] };
+  }
+  if (kind === 'flow') {
+    const d = FlowCore.parseHtml(html) || {};
+    const frames = ((d.frames) || []).map((f) => ({
+      id: String((f && f.id) || ''),
+      title: clipLinkTitle(f && f.title, 'Frame'),
+    })).filter((f) => f.id);
+    return { path: rel, title: clipLinkTitle(d.title, base), kind, frames, links: [] };
+  }
+  if (kind === 'slides') {
+    const d = SlidesCore.parseHtml(html) || {};
+    const slides = ((d.slides) || []).map((s, i) => ({
+      id: String((s && s.id) || ''),
+      title: clipLinkTitle((s && s.title) || (SlidesCore.slideLabel && SlidesCore.slideLabel(s)), 'Slide ' + (i + 1)),
+      index: i,
+    })).filter((s) => s.id);
+    return { path: rel, title: clipLinkTitle(d.title, base), kind, slides, links: [] };
+  }
+  if (kind === 'gantt') {
+    const d = GanttCore.parseHtml(html) || {};
+    const tasks = Object.keys(d.tasks || {}).map((id) => {
+      const t = d.tasks[id];
+      return { id: String((t && t.id) || id), title: clipLinkTitle(t && t.title, 'Task') };
+    }).filter((t) => t.id).slice(0, 200);
+    return { path: rel, title: clipLinkTitle(d.title, base), kind, tasks, links: [] };
+  }
+  if (kind === 'kanban') {
+    const d = KanbanCore.parseHtml(html) || {};
+    const cards = Object.keys(d.cards || {}).map((id) => {
+      const c = d.cards[id];
+      if (!c || c.archived) return null;
+      return { id: String(c.id || id), title: clipLinkTitle(c.title, 'Card') };
+    }).filter(Boolean).filter((c) => c.id).slice(0, 200);
+    return { path: rel, title: clipLinkTitle(d.title, base), kind, cards, links: [] };
+  }
+  return { path: rel, title: name, kind: kind || 'file', links: [] };
+}
+
+app.get('/api/wiki-graph', (req, res) => {
+  try {
+    const pages = [];
+    function walk(dir) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        pages.push(wikiGraphEntry(full, entry.name));
+      }
+    }
+    walk(DATA_ROOT);
+    pages.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+    res.json({ pages });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.post('/api/file/create', (req, res) => {
   try {
@@ -1072,6 +1251,8 @@ function kindLabel(kind) {
   if (kind === 'flow') return 'Flow';
   if (kind === 'kanban') return 'Kanban';
   if (kind === 'gantt') return 'Gantt';
+  if (kind === 'slides') return 'Slides';
+  if (kind === 'wiki') return 'Wiki';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
   if (kind === 'pdf') return 'PDF';

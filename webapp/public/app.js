@@ -137,7 +137,7 @@ function isPdfPath(p) {
 }
 
 function applyFileIcon(el, p, kind) {
-  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-json', 'icon-yaml', 'icon-pdf');
+  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-wiki', 'icon-json', 'icon-yaml', 'icon-pdf');
   if (kind === 'pdf' || isPdfPath(p)) {
     el.classList.add('icon-pdf');
     el.textContent = 'PDF';
@@ -166,6 +166,18 @@ function applyFileIcon(el, p, kind) {
     el.classList.add('icon-gantt');
     el.textContent = 'GT';
     el.title = 'Gantt';
+    return;
+  }
+  if (kind === 'slides') {
+    el.classList.add('icon-slides');
+    el.textContent = 'SL';
+    el.title = 'Slides';
+    return;
+  }
+  if (kind === 'wiki') {
+    el.classList.add('icon-wiki');
+    el.textContent = 'WK';
+    el.title = 'Wiki';
     return;
   }
   const fmt = langForPath(p);
@@ -868,7 +880,7 @@ async function createFile(parentPath, name) {
   await openFile(fullPath);
 }
 
-async function createBoardFile(parentPath, name, kind) {
+async function createBoardFile(parentPath, name, kind, template) {
   let trimmed = (name || '').trim();
   if (!trimmed) return;
   if (!/\.html?$/i.test(trimmed)) trimmed += '.html';
@@ -878,7 +890,7 @@ async function createBoardFile(parentPath, name, kind) {
   const res = await fetch('/api/file/create', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: fullPath, kind }),
+    body: JSON.stringify({ path: fullPath, kind, template }),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -891,7 +903,7 @@ async function createBoardFile(parentPath, name, kind) {
   await openFile(fullPath);
 }
 
-const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt' };
+const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides', wiki: 'wiki' };
 
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
@@ -899,6 +911,8 @@ const CREATE_KINDS = [
   { id: 'flow', label: 'Flow', hint: 'Flowchart board. .html is added if you omit it', placeholder: 'process' },
   { id: 'kanban', label: 'Kanban', hint: 'Task board with columns. .html is added if you omit it', placeholder: 'sprint' },
   { id: 'gantt', label: 'Gantt', hint: 'Timeline of tasks and dependencies. .html is added if you omit it', placeholder: 'roadmap' },
+  { id: 'slides', label: 'Slides', hint: 'Playlist of board frames. .html is added if you omit it', placeholder: 'review' },
+  { id: 'wiki', label: 'Wiki', hint: 'Page with [[links]] and backlinks. .html is added if you omit it', placeholder: 'notes' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
 ];
 
@@ -1068,6 +1082,8 @@ async function openCreateDialog(parentPath) {
   if (result.kind === 'flow') return createBoardFile(parentPath, result.name, 'flow');
   if (result.kind === 'kanban') return createBoardFile(parentPath, result.name, 'kanban');
   if (result.kind === 'gantt') return createBoardFile(parentPath, result.name, 'gantt');
+  if (result.kind === 'slides') return createBoardFile(parentPath, result.name, 'slides');
+  if (result.kind === 'wiki') return createBoardFile(parentPath, result.name, 'wiki', result.name);
   return createFile(parentPath, result.name);
 }
 
@@ -1548,6 +1564,8 @@ function boardKindFromHtml(content) {
   if (/data-docviewer\s*=\s*["']flow["']/.test(content)) return 'flow';
   if (/data-docviewer\s*=\s*["']kanban["']/.test(content)) return 'kanban';
   if (/data-docviewer\s*=\s*["']gantt["']/.test(content)) return 'gantt';
+  if (/data-docviewer\s*=\s*["']slides["']/.test(content)) return 'slides';
+  if (/data-docviewer\s*=\s*["']wiki["']/.test(content)) return 'wiki';
   return null;
 }
 
@@ -1575,6 +1593,10 @@ function ensureScript(src, flag, ready) {
     if (flag === 'data-kb-js') window.KanbanEngine = undefined;
     if (flag === 'data-gt-core') window.GanttCore = undefined;
     if (flag === 'data-gt-js') window.GanttEngine = undefined;
+    if (flag === 'data-sl-core') window.SlidesCore = undefined;
+    if (flag === 'data-sl-js') window.SlidesEngine = undefined;
+    if (flag === 'data-wk-core') window.WikiCore = undefined;
+    if (flag === 'data-wk-js') window.WikiEngine = undefined;
   } else if (ready()) {
     return Promise.resolve();
   }
@@ -1629,12 +1651,50 @@ function ensureGanttAssets() {
     .then(() => ensureScript('/gantt/engine.js?v=23', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
 }
 
+function ensureSlidesAssets() {
+  ensureStylesheet('/slides/engine.css?v=12', 'data-sl-css');
+  return ensureScript('/slides/core.js?v=6', 'data-sl-core', () => !!window.SlidesCore)
+    .then(() => ensureScript('/slides/engine.js?v=14', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
+}
+
+function ensureWikiAssets() {
+  ensureStylesheet('/wiki/engine.css?v=3', 'data-wk-css');
+  return ensureScript('/wiki/core.js?v=2', 'data-wk-core', () => !!window.WikiCore)
+    .then(() => ensureScript('/wiki/engine.js?v=4', 'data-wk-js', () => typeof window.WikiEngine === 'function'));
+}
+
 const BOARD_TYPES = {
   mindmap: { engine: 'MindmapEngine', ensure: ensureMindmapAssets },
   flow: { engine: 'FlowEngine', ensure: ensureFlowAssets },
   kanban: { engine: 'KanbanEngine', ensure: ensureKanbanAssets },
   gantt: { engine: 'GanttEngine', ensure: ensureGanttAssets },
+  slides: { engine: 'SlidesEngine', ensure: ensureSlidesAssets },
+  wiki: { engine: 'WikiEngine', ensure: ensureWikiAssets },
 };
+
+function destHasJump(dest) {
+  return !!(dest && (dest.frameId || dest.slideId || dest.taskId || dest.cardId
+    || (dest.slideIndex != null && dest.slideIndex !== '')));
+}
+
+function applyBoardDest(dest) {
+  if (!boardEngine || !destHasJump(dest)) return;
+  if (dest.frameId && typeof boardEngine.focusFrame === 'function') {
+    boardEngine.focusFrame(dest.frameId);
+    return;
+  }
+  if ((dest.slideId || dest.slideIndex != null) && typeof boardEngine.goToSlide === 'function') {
+    boardEngine.goToSlide(dest.slideId || dest.slideIndex);
+    return;
+  }
+  if (dest.taskId && typeof boardEngine.openTask === 'function') {
+    boardEngine.openTask(dest.taskId);
+    return;
+  }
+  if (dest.cardId && typeof boardEngine.openCard === 'function') {
+    boardEngine.openCard(dest.cardId);
+  }
+}
 
 function getSaveContent() {
   if (boardEngine && viewMode === 'board') {
@@ -1734,8 +1794,10 @@ async function openPdf(relPath) {
 
 async function openFile(relPath, lineToReveal, opts) {
   if (isPdfPath(relPath)) return openPdf(relPath);
+  const dest = (opts && opts.dest) || null;
   if (relPath === currentPath && lineToReveal == null && !(opts && opts.force)) {
     highlightActiveRow(relPath);
+    if (destHasJump(dest)) applyBoardDest(dest);
     return;
   }
   const token = ++openToken;
@@ -1791,60 +1853,37 @@ async function openFile(relPath, lineToReveal, opts) {
 
   const isHtml = /\.html?$/i.test(relPath);
   boardKind = isHtml ? boardKindFromHtml(data.content) : null;
-  if (boardKind === 'mindmap') {
+  const boardSpec = boardKind && BOARD_TYPES[boardKind];
+  if (boardSpec) {
     viewToggleBtn.classList.remove('hidden');
     try {
-      await ensureMindmapAssets();
+      await boardSpec.ensure();
       if (token !== openToken) return;
-      boardEngine = new window.MindmapEngine(mindmapStage, { onChange: onBoardChange });
+      const engineOpts = { onChange: onBoardChange };
+      if (boardKind === 'wiki') {
+        engineOpts.path = relPath;
+        engineOpts.onOpenPath = (p, dest) => {
+          if (p) openFile(p, undefined, { dest: dest || {} });
+        };
+        engineOpts.onCreatePage = (title) => {
+          const parent = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
+          return createBoardFile(parent, window.WikiCore.slug(title), 'wiki', title);
+        };
+      }
+      boardEngine = new window[boardSpec.engine](mindmapStage, engineOpts);
       boardEngine.loadFromHtml(data.content);
       setViewMode('board');
+      if (destHasJump(dest)) {
+        setTimeout(() => {
+          if (token !== openToken) return;
+          applyBoardDest(dest);
+        }, 80);
+      }
     } catch (err) {
       if (token !== openToken) return;
       console.error(err);
-      alert('Mindmap failed to load: ' + ((err && err.message) || err));
-      setViewMode('code');
-    }
-  } else if (boardKind === 'flow') {
-    viewToggleBtn.classList.remove('hidden');
-    try {
-      await ensureFlowAssets();
-      if (token !== openToken) return;
-      boardEngine = new window.FlowEngine(mindmapStage, { onChange: onBoardChange });
-      boardEngine.loadFromHtml(data.content);
-      setViewMode('board');
-    } catch (err) {
-      if (token !== openToken) return;
-      console.error(err);
-      alert('Flow failed to load: ' + ((err && err.message) || err));
-      setViewMode('code');
-    }
-  } else if (boardKind === 'kanban') {
-    viewToggleBtn.classList.remove('hidden');
-    try {
-      await ensureKanbanAssets();
-      if (token !== openToken) return;
-      boardEngine = new window.KanbanEngine(mindmapStage, { onChange: onBoardChange });
-      boardEngine.loadFromHtml(data.content);
-      setViewMode('board');
-    } catch (err) {
-      if (token !== openToken) return;
-      console.error(err);
-      alert('Kanban failed to load: ' + ((err && err.message) || err));
-      setViewMode('code');
-    }
-  } else if (boardKind === 'gantt') {
-    viewToggleBtn.classList.remove('hidden');
-    try {
-      await ensureGanttAssets();
-      if (token !== openToken) return;
-      boardEngine = new window.GanttEngine(mindmapStage, { onChange: onBoardChange });
-      boardEngine.loadFromHtml(data.content);
-      setViewMode('board');
-    } catch (err) {
-      if (token !== openToken) return;
-      console.error(err);
-      alert('Gantt failed to load: ' + ((err && err.message) || err));
+      const label = (BOARD_LABELS[boardKind] || boardKind);
+      alert(label.charAt(0).toUpperCase() + label.slice(1) + ' failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
   } else if (isHtml) {
@@ -1885,7 +1924,7 @@ function setViewMode(mode) {
   } else {
     if (boardEngine) syncBoardIntoEditor();
     document.getElementById('editor').classList.remove('hidden');
-    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : 'View Rendered';
+    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : boardKind === 'wiki' ? 'View Wiki' : 'View Rendered';
     findInFileBtn.disabled = !currentPath;
     if (boardEngine && editor) {
       editor.layout();
@@ -2016,6 +2055,10 @@ function currentSearchQuery() {
 function syncSearchPlaceholder() {
   if (searchType === 'mindmap') searchInput.placeholder = 'Filter mindmaps';
   else if (searchType === 'flow') searchInput.placeholder = 'Filter flows';
+  else if (searchType === 'kanban') searchInput.placeholder = 'Filter kanban boards';
+  else if (searchType === 'gantt') searchInput.placeholder = 'Filter gantt charts';
+  else if (searchType === 'slides') searchInput.placeholder = 'Filter slides';
+  else if (searchType === 'wiki') searchInput.placeholder = 'Filter wiki pages';
   else if (searchType === 'json') searchInput.placeholder = 'Filter JSON files';
   else if (searchType === 'yaml') searchInput.placeholder = 'Filter YAML files';
   else if (searchType === 'pdf') searchInput.placeholder = 'Filter PDF files';
@@ -2089,6 +2132,8 @@ async function runSearch(q, type) {
       else if (r.kind === 'flow') bits.push('Flow');
       else if (r.kind === 'kanban') bits.push('Kanban');
       else if (r.kind === 'gantt') bits.push('Gantt');
+      else if (r.kind === 'slides') bits.push('Slides');
+      else if (r.kind === 'wiki') bits.push('Wiki');
       else if (r.kind === 'json') bits.push('JSON');
       else if (r.kind === 'yaml') bits.push('YAML');
       else if (r.kind === 'pdf') bits.push('PDF');

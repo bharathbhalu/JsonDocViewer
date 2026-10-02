@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <title>Accretion</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="style.css?v=13" />
+  <link rel="stylesheet" href="style.css?v=17" />
 </head>
 <body>
   <div id="app">
@@ -17,7 +17,7 @@
           <span class="sidebar-title">Accretion</span>
         </div>
         <div class="sidebar-actions">
-          <button id="new-file-btn" title="New file, mindmap, flow, kanban, gantt, or folder">＋</button>
+          <button id="new-file-btn" title="New file, mindmap, flow, kanban, gantt, slides, wiki, or folder">＋</button>
           <button id="import-btn" title="Import files or a zip">↑</button>
           <button id="export-all-btn" title="Export workspace as zip">⤓</button>
           <button id="refresh-btn" title="Refresh tree">↻</button>
@@ -31,6 +31,8 @@
           <button type="button" class="search-filter" data-search-type="flow">Flows</button>
           <button type="button" class="search-filter" data-search-type="kanban">Kanban</button>
           <button type="button" class="search-filter" data-search-type="gantt">Gantt</button>
+          <button type="button" class="search-filter" data-search-type="slides">Slides</button>
+          <button type="button" class="search-filter" data-search-type="wiki">Wiki</button>
           <button type="button" class="search-filter" data-search-type="json">JSON</button>
           <button type="button" class="search-filter" data-search-type="yaml">YAML</button>
           <button type="button" class="search-filter" data-search-type="pdf">PDFs</button>
@@ -139,6 +141,6 @@
   <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js"></script>
   <input id="import-file" class="file-hidden" type="file" multiple />
-  <script src="app.js?v=178"></script>
+  <script src="app.js?v=195"></script>
 </body>
 </html>
