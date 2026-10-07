@@ -174,7 +174,12 @@ function normalizeTodos(raw) {
         let id = typeof t.id === 'string' && /^[\w-]{1,40}$/.test(t.id) ? t.id : 't_' + Math.random().toString(36).slice(2, 10);
         if (seen.has(id)) id = 't_' + Math.random().toString(36).slice(2, 10);
         seen.add(id);
-        return { id, text: t.text.slice(0, 2000), done: !!t.done };
+        const item = { id, text: t.text.slice(0, 2000), done: !!t.done };
+        // Reminder: time of day on that date, optional snooze, and whether it fired.
+        if (typeof t.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.time)) item.time = t.time;
+        if (typeof t.snooze === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(t.snooze)) item.snooze = t.snooze;
+        if ((item.time || item.snooze) && t.fired) item.fired = true;
+        return item;
       });
     if (list.length) days[day] = list;
   });

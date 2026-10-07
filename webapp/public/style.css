@@ -1181,3 +1181,98 @@ html[data-theme="dark"] .cal-day.is-selected { color: #10141c; }
   font: inherit;
 }
 .cal-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* Reminders */
+.cal-next { color: var(--accent); font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+.cal-bell {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+}
+.cal-item:hover .cal-bell, .cal-bell:focus, .cal-bell.has-time { opacity: 1; }
+.cal-bell.has-time { color: var(--accent); font-weight: 650; }
+.cal-bell.is-late { color: var(--danger); }
+.cal-item.is-done .cal-bell.has-time { color: var(--muted); text-decoration: line-through; }
+.cal-bell:hover { background: var(--accent-soft); }
+.cal-remind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 6px 22px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.cal-remind input[type="time"] {
+  padding: 3px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  color-scheme: light dark;
+}
+.cal-remind button {
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.cal-remind button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.cal-remind .cal-remind-set { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650; }
+html[data-theme="dark"] .cal-remind .cal-remind-set { color: #10141c; }
+
+#reminder-toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(340px, calc(100vw - 32px));
+}
+.rem-toast {
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+  animation: rem-in 0.18s ease-out;
+}
+@keyframes rem-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .rem-toast { animation: none; } }
+.rem-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.rem-when { flex: 1; font-weight: 650; }
+.rem-x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+.rem-x:hover { color: var(--ink); }
+.rem-text { margin: 6px 0 10px; font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.rem-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.rem-actions button {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.rem-actions button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.rem-actions .rem-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650; }
+html[data-theme="dark"] .rem-actions .rem-primary { color: #10141c; }

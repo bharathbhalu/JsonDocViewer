@@ -17,6 +17,7 @@
   let shownMonth = monthStart(fromKey(selected)); // month shown in the mini calendar
   let saveTimer = null;
   let editing = null; // id of the to-do being edited
+  let reminderFor = null; // id of the to-do whose reminder editor is open
 
   // ---------- dates (local time) ----------
   function pad(n) { return String(n).padStart(2, '0'); }
@@ -31,6 +32,31 @@
     return DOW[(d.getDay() + 6) % 7] + ', ' + MONTHS[d.getMonth()].slice(0, 3) + ' ' + d.getDate() + (withYear ? ' ' + d.getFullYear() : '');
   }
   function uid() { return 't_' + Math.random().toString(36).slice(2, 10); }
+  function hhmm(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function stamp(d) { return keyOf(d) + 'T' + hhmm(d); } // local "YYYY-MM-DDTHH:MM"
+  function fromStamp(v) { const [k, t] = v.split('T'); const d = fromKey(k); const [h, m] = t.split(':').map(Number); d.setHours(h, m, 0, 0); return d; }
+  // When a to-do's reminder is due (snooze wins over its time), or null.
+  function dueAt(k, t) {
+    if (t.snooze) return fromStamp(t.snooze);
+    if (t.time) return fromStamp(k + 'T' + t.time);
+    return null;
+  }
+  function timeLabel(t) {
+    if (t.snooze) return '⏰ ' + hhmm(fromStamp(t.snooze)) + ' (snoozed)';
+    return '⏰ ' + t.time;
+  }
+  // "Call Sam @14:30" / "@9" / "@2pm" / "@9:15am" -> { text, time }
+  function parseTimeSuffix(raw) {
+    const m = String(raw).match(/^(.*\S)\s+@\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i);
+    if (!m) return { text: raw, time: null };
+    let h = Number(m[2]);
+    const min = m[3] ? Number(m[3]) : 0;
+    const ap = (m[4] || '').toLowerCase();
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    if (h > 23 || min > 59) return { text: raw, time: null };
+    return { text: m[1], time: pad(h) + ':' + pad(min) };
+  }
 
   // ---------- storage ----------
   function list(k) { return store.days[k] || []; }
@@ -65,9 +91,12 @@
 
   // ---------- actions ----------
   function addTodo(k, text) {
-    const t = String(text || '').trim();
+    const parsed = parseTimeSuffix(String(text || '').trim());
+    const t = parsed.text.trim();
     if (!t) return;
-    change(() => setList(k, list(k).concat({ id: uid(), text: t.slice(0, 2000), done: false })));
+    const item = { id: uid(), text: t.slice(0, 2000), done: false };
+    if (parsed.time) { item.time = parsed.time; askNotifyPermission(); }
+    change(() => setList(k, list(k).concat(item)));
   }
   function updateTodo(k, id, patch) {
     change(() => setList(k, list(k).map((t) => (t.id === id ? Object.assign({}, t, patch) : t))));
@@ -75,6 +104,35 @@
   function removeTodo(k, id) {
     change(() => setList(k, list(k).filter((t) => t.id !== id)));
   }
+  // Set a reminder at an exact moment; moves the to-do if that's another day.
+  function remindAt(k, id, when) {
+    const toK = keyOf(when);
+    const item = list(k).find((t) => t.id === id);
+    if (!item) return;
+    const next = Object.assign({}, item, { time: hhmm(when), fired: false });
+    delete next.snooze;
+    change(() => {
+      if (toK === k) setList(k, list(k).map((t) => (t.id === id ? next : t)));
+      else {
+        setList(k, list(k).filter((t) => t.id !== id));
+        setList(toK, list(toK).concat(next));
+      }
+    });
+    askNotifyPermission();
+  }
+  function clearReminder(k, id) {
+    change(() => setList(k, list(k).map((t) => {
+      if (t.id !== id) return t;
+      const n = Object.assign({}, t);
+      delete n.time; delete n.snooze; delete n.fired;
+      return n;
+    })));
+  }
+  function snooze(k, id, minutes) {
+    const when = new Date(Date.now() + minutes * 60000);
+    change(() => setList(k, list(k).map((t) => (t.id === id ? Object.assign({}, t, { snooze: stamp(when), fired: false }) : t))));
+  }
+
   function moveTodo(fromK, id, toK) {
     if (fromK === toK) return;
     const item = list(fromK).find((t) => t.id === id);
@@ -125,6 +183,12 @@
     head.setAttribute('aria-expanded', ui.open ? 'true' : 'false');
     head.title = ui.open ? 'Hide calendar' : 'Show calendar and to-dos';
     head.append(el('span', 'cal-twist', ui.open ? '▾' : '▸'), el('span', 'cal-title', 'Calendar'), el('span', 'cal-today', niceDate(today)));
+    const next = nextReminder();
+    if (next) {
+      const r = el('span', 'cal-next', '⏰ ' + hhmm(next.when));
+      r.title = 'Next reminder: ' + next.t.text;
+      head.insertBefore(r, head.querySelector('.cal-today'));
+    }
     if (openToday) {
       const b = el('span', 'cal-badge', String(openToday));
       b.title = openToday + ' open to-do' + (openToday === 1 ? '' : 's') + ' today';
@@ -315,19 +379,58 @@
       text.addEventListener('dblclick', () => { editing = t.id; render(); });
       row.appendChild(text);
     }
+    const due = dueAt(k, t);
+    const bell = el('button', 'cal-bell' + (due ? ' has-time' : '') + (due && t.fired && !t.done ? ' is-late' : ''), due ? timeLabel(t) : '⏰');
+    bell.type = 'button';
+    bell.title = due ? 'Reminder ' + (t.fired ? 'went off' : 'set') + ' for ' + hhmm(due) + ' — click to change' : 'Add a reminder';
+    bell.addEventListener('click', () => { reminderFor = reminderFor === t.id ? null : t.id; render(); });
+    row.appendChild(bell);
     const del = el('button', 'cal-del', '✕');
     del.type = 'button';
     del.title = 'Delete to-do';
     del.addEventListener('click', () => removeTodo(k, t.id));
     row.appendChild(del);
-    return row;
+    if (reminderFor !== t.id) return row;
+    const wrap = el('div', 'cal-item-wrap');
+    wrap.append(row, renderReminderEditor(k, t));
+    return wrap;
+  }
+
+  function renderReminderEditor(k, t) {
+    const box = el('div', 'cal-remind');
+    const time = el('input');
+    time.type = 'time';
+    time.value = t.time || hhmm(new Date(Date.now() + 60 * 60000));
+    time.setAttribute('aria-label', 'Reminder time');
+    const set = el('button', 'cal-remind-set', 'Set');
+    set.type = 'button';
+    set.addEventListener('click', () => {
+      if (!/^\d{2}:\d{2}$/.test(time.value)) return;
+      reminderFor = null;
+      remindAt(k, t.id, fromStamp(k + 'T' + time.value));
+    });
+    time.addEventListener('keydown', (e) => { if (e.key === 'Enter') set.click(); if (e.key === 'Escape') { reminderFor = null; render(); } });
+    const quick = (label, fn) => {
+      const b = el('button', 'cal-remind-q', label);
+      b.type = 'button';
+      b.addEventListener('click', () => { reminderFor = null; fn(); });
+      return b;
+    };
+    const tomorrow9 = () => { const d = addDays(new Date(), 1); d.setHours(9, 0, 0, 0); return d; };
+    box.append(time, set,
+      quick('+15 min', () => remindAt(k, t.id, new Date(Date.now() + 15 * 60000))),
+      quick('+1 hour', () => remindAt(k, t.id, new Date(Date.now() + 60 * 60000))),
+      quick('Tomorrow 9:00', () => remindAt(k, t.id, tomorrow9())));
+    if (t.time || t.snooze) box.append(quick('Remove', () => clearReminder(k, t.id)));
+    requestAnimationFrame(() => time.focus());
+    return box;
   }
 
   function renderAdd() {
     const form = el('form', 'cal-add');
     const inp = el('input');
     inp.type = 'text';
-    inp.placeholder = 'Add to-do for ' + (selected === todayKey() ? 'today' : niceDate(selected)) + '…';
+    inp.placeholder = 'Add to-do for ' + (selected === todayKey() ? 'today' : niceDate(selected)) + '…  (@14:30 = reminder)';
     inp.maxLength = 2000;
     form.appendChild(inp);
     form.addEventListener('submit', (e) => {
@@ -342,6 +445,111 @@
     return form;
   }
 
+  // ---------- reminders ----------
+  // Fire while the app is open: an in-app alert, a desktop notification if
+  // allowed, and a short chime. Missed reminders from the last day still fire
+  // when the app is next opened.
+  const toasts = document.createElement('div');
+  toasts.id = 'reminder-toasts';
+  toasts.setAttribute('aria-live', 'polite');
+  document.body.appendChild(toasts);
+
+  function askNotifyPermission() {
+    try {
+      if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    } catch (e) { /* unsupported */ }
+  }
+
+  function nextReminder() {
+    const now = Date.now();
+    let best = null;
+    [todayKey(), keyOf(addDays(new Date(), 1))].forEach((k) => list(k).forEach((t) => {
+      const when = dueAt(k, t);
+      if (!when || t.done || t.fired || when.getTime() < now - 60000) return;
+      if (keyOf(when) !== todayKey()) return;
+      if (!best || when < best.when) best = { k, t, when };
+    }));
+    return best;
+  }
+
+  function chime() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = chime.ctx || (chime.ctx = new AC());
+      [0, 0.18].forEach((delay, i) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = i ? 1046.5 : 784;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + delay);
+        g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + delay + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + 0.35);
+        o.connect(g).connect(ctx.destination);
+        o.start(ctx.currentTime + delay);
+        o.stop(ctx.currentTime + delay + 0.4);
+      });
+    } catch (e) { /* no audio */ }
+  }
+
+  function showToast(k, t, when) {
+    const existing = toasts.querySelector('[data-id="' + t.id + '"]');
+    if (existing) existing.remove();
+    const card = el('div', 'rem-toast');
+    card.dataset.id = t.id;
+    card.setAttribute('role', 'alert');
+    const head = el('div', 'rem-head');
+    head.append(el('span', 'rem-icon', '⏰'), el('span', 'rem-when', 'Reminder · ' + hhmm(when) + (k !== todayKey() ? ' · ' + niceDate(k) : '')));
+    const close = el('button', 'rem-x', '✕');
+    close.type = 'button';
+    close.title = 'Dismiss';
+    close.addEventListener('click', () => card.remove());
+    head.appendChild(close);
+    card.append(head, el('div', 'rem-text', t.text));
+    const actions = el('div', 'rem-actions');
+    const act = (label, cls, fn) => {
+      const b = el('button', cls, label);
+      b.type = 'button';
+      b.addEventListener('click', () => { card.remove(); fn(); });
+      actions.appendChild(b);
+    };
+    act('Done', 'rem-primary', () => updateTodo(k, t.id, { done: true }));
+    act('Snooze 10 min', '', () => snooze(k, t.id, 10));
+    act('Snooze 1 hour', '', () => snooze(k, t.id, 60));
+    act('Show', '', () => { ui.open = true; selected = k; shownMonth = monthStart(fromKey(k)); rememberUi(); render(); });
+    card.appendChild(actions);
+    toasts.appendChild(card);
+  }
+
+  function notify(k, t, when) {
+    try {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      const n = new Notification('Reminder · ' + hhmm(when), { body: t.text, tag: 'todo-' + t.id, requireInteraction: true });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch (e) { /* unsupported */ }
+  }
+
+  function checkReminders() {
+    const now = Date.now();
+    const due = [];
+    const yesterday = keyOf(addDays(new Date(), -1));
+    Object.keys(store.days).forEach((k) => {
+      if (k < yesterday) return;
+      list(k).forEach((t) => {
+        const when = dueAt(k, t);
+        // Due now, or missed within the last day while the app was closed.
+        if (when && !t.done && !t.fired && when.getTime() <= now && now - when.getTime() < 24 * 3600000) due.push({ k, t, when });
+      });
+    });
+    if (!due.length) return;
+    change(() => due.forEach(({ k, t }) => {
+      setList(k, list(k).map((x) => (x.id === t.id ? Object.assign({}, x, { fired: true }) : x)));
+    }));
+    due.forEach(({ k, t, when }) => { showToast(k, t, when); notify(k, t, when); });
+    chime();
+  }
+  setInterval(checkReminders, 15 * 1000);
+
   // Keep "today" right if the app stays open past midnight.
   let lastToday = todayKey();
   setInterval(() => {
@@ -354,5 +562,5 @@
   }, 60 * 1000);
 
   render();
-  load();
+  load().then(checkReminders);
 })();
