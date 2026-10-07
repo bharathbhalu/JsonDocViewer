@@ -195,6 +195,9 @@ function applyAppTheme(theme, persist) {
   if (persist) saveUiSetting({ theme });
   if (themeBtn) themeBtn.textContent = theme === 'light' ? 'Dark mode' : 'Light mode';
   if (window.monaco) monaco.editor.setTheme(theme === 'light' ? 'vs' : 'vs-dark');
+  // A rendered markdown preview is themed too. (Throws harmlessly during
+  // start-up, before the view state below exists.)
+  try { if (viewMode === 'render' && isMarkdownPath(currentPath)) setViewMode('render'); } catch (e) { /* not ready yet */ }
 }
 applyAppTheme(storedTheme());
 let themeToggledByUser = false;
@@ -239,12 +242,247 @@ function monacoLanguageForPath(p) {
   return EXTENSION_TO_MONACO_LANG[ext] || 'plaintext';
 }
 
+function isMarkdownPath(p) {
+  return /\.(md|markdown)$/i.test(p || '');
+}
+
+// --- Markdown preview ---
+// marked (parser) + DOMPurify (sanitizer), served with the app (public/vendor)
+// so the preview never waits on a CDN; the CDN is only a fallback.
+const MARKDOWN_LIBS = [
+  { local: '/vendor/marked.min.js', cdn: 'https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js', ready: () => !!(window.marked && window.marked.parse) },
+  { local: '/vendor/purify.min.js', cdn: 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js', ready: () => !!(window.DOMPurify && window.DOMPurify.sanitize) },
+];
+const MARKDOWN_LOAD_TIMEOUT_MS = 10000;
+let markdownLibsP = null;
+// Only the newest preview request may write to the frame.
+let markdownRenderToken = 0;
+
+// Run a UMD bundle so it defines a global. The page has Monaco's AMD
+// `define`, which a UMD bundle would use instead; it is shadowed for this
+// script only (hiding window.define would break Monaco's own loads).
+async function loadGlobalScript(src, ready) {
+  if (ready()) return;
+  // A stalled request must not leave the preview waiting forever.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), MARKDOWN_LOAD_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(src, { signal: ctl.signal });
+  } catch (err) {
+    throw new Error(err && err.name === 'AbortError' ? 'Timed out loading ' + src : 'Failed to load ' + src);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error('Failed to load ' + src);
+  const code = await res.text();
+  // eslint-disable-next-line no-new-func
+  new Function('define', 'module', 'exports', code + '\n//# sourceURL=' + src).call(window, undefined, undefined, undefined);
+  if (!ready()) throw new Error('Loaded ' + src + ' without its API');
+}
+
+function ensureMarkdownLibs() {
+  if (!markdownLibsP) {
+    markdownLibsP = (async () => {
+      for (const lib of MARKDOWN_LIBS) {
+        try {
+          await loadGlobalScript(lib.local, lib.ready);
+        } catch (err) {
+          await loadGlobalScript(lib.cdn, lib.ready);
+        }
+      }
+    })();
+    // Let a later attempt retry after a failure.
+    markdownLibsP.catch(() => { markdownLibsP = null; });
+  }
+  return markdownLibsP;
+}
+
+// Shown in the preview frame (theme-coloured, never a blank white page)
+// while the renderer loads, or if it fails.
+function markdownStatusDoc(message, isError) {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  const bg = dark ? '#0d1117' : '#ffffff';
+  const fg = dark ? '#9198a1' : '#59636e';
+  const safe = String(message).replace(/[<&>]/g, (c) => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;' }[c]));
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:${bg};color:${fg};font:14px/1.5 ui-sans-serif,system-ui,sans-serif}`
+    + `p{max-width:640px;margin:48px auto;padding:0 24px}${isError ? 'p{color:' + (dark ? '#f97066' : '#d92d20') + '}' : ''}</style></head>`
+    + `<body><p>${safe}</p></body></html>`;
+}
+
+// Resolve a link written in a markdown file (relative to that file) to a
+// workspace path, or null for external / in-page links.
+function resolveWorkspaceLink(fromPath, href) {
+  if (!href || /^([a-z][\w+.-]*:|#|\/\/)/i.test(href)) return null;
+  const clean = decodeURIComponent(href.split('#')[0].split('?')[0]);
+  if (!clean) return null;
+  const parts = clean.startsWith('/') ? [] : (fromPath || '').split('/').slice(0, -1);
+  clean.replace(/^\/+/, '').split('/').forEach((seg) => {
+    if (seg === '..') parts.pop();
+    else if (seg && seg !== '.') parts.push(seg);
+  });
+  return parts.join('/');
+}
+
+const MARKDOWN_CSS = `
+:root { color-scheme: light; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --soft: #f6f8fa; --link: #0969da; --bg: #ffffff; }
+html[data-theme="dark"] { color-scheme: dark; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --soft: #151b23; --link: #4493f8; --bg: #0d1117; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif; }
+.md { max-width: 860px; margin: 0 auto; padding: 32px 40px 80px; overflow-wrap: break-word; }
+.md > :first-child { margin-top: 0; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1.5em 0 0.6em; line-height: 1.25; font-weight: 650; }
+.md h1 { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--line); }
+.md h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--line); }
+.md h3 { font-size: 1.25em; }
+.md h6 { color: var(--muted); }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md table { margin: 0 0 1em; }
+.md a { color: var(--link); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md ul, .md ol { padding-left: 2em; }
+.md li + li { margin-top: 0.25em; }
+.md li > input[type="checkbox"] { margin: 0 0.4em 0 -1.3em; vertical-align: middle; }
+.md blockquote { padding: 0 1em; color: var(--muted); border-left: 0.25em solid var(--line); }
+.md code { font: 0.875em/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 0.2em 0.4em; border-radius: 6px; background: var(--soft); }
+.md pre { padding: 16px; overflow: auto; border-radius: 8px; background: var(--soft); }
+.md pre code { padding: 0; background: none; font-size: 0.85em; }
+.md table { border-collapse: collapse; display: block; max-width: 100%; overflow: auto; }
+.md th, .md td { padding: 6px 13px; border: 1px solid var(--line); }
+.md th { font-weight: 650; background: var(--soft); }
+.md img { max-width: 100%; border-radius: 4px; }
+.md hr { height: 1px; border: 0; background: var(--line); margin: 1.5em 0; }
+.md .md-missing { color: var(--muted); font-style: italic; }
+.md img.md-board-img { display: block; max-width: 100%; max-height: 70vh; width: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
+`;
+
+function markdownTemplate(source) {
+  const raw = window.marked.parse(String(source || ''), { gfm: true, breaks: false });
+  const clean = window.DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
+  const tpl = document.createElement('template');
+  tpl.innerHTML = clean;
+  return tpl;
+}
+
+// A link/image target inside a board: "path.html#frame=ID", "#view=sheet",
+// "#slide=3". Returns { path, ref } for workspace boards, else null.
+function boardTargetOf(fromPath, href) {
+  const hash = String(href || '').split('#')[1] || '';
+  if (!/^(frame|view|slide)=/.test(hash)) return null;
+  const ws = resolveWorkspaceLink(fromPath, href);
+  return ws && /\.html?$/i.test(ws) ? { path: ws, ref: hash } : null;
+}
+
+let markdownBoardRenderer = null;
+// Images that point at a board frame / gantt view are rendered live (from
+// the current board) to data URLs before the preview is built.
+async function renderMarkdownBoardImages(source, relPath) {
+  const tpl = markdownTemplate(source);
+  const wanted = new Map();
+  tpl.content.querySelectorAll('img[src]').forEach((img) => {
+    const t = boardTargetOf(relPath, img.getAttribute('src'));
+    if (t && !t.ref.startsWith('slide=')) wanted.set(t.path + '#' + t.ref, t);
+  });
+  if (!wanted.size) return {};
+  await ensureSlidesAssets();
+  if (!markdownBoardRenderer) markdownBoardRenderer = window.SlidesEngine.createRenderer(SLIDES_SOURCE_ASSETS);
+  markdownBoardRenderer.clear(); // live: always the current board content
+  const out = {};
+  for (const [key, t] of wanted) {
+    const id = decodeURIComponent(t.ref.split('=')[1] || '');
+    try {
+      out[key] = await markdownBoardRenderer.renderImage(t.path, id);
+    } catch (err) {
+      out[key] = { error: (err && err.message) || 'Could not render' };
+    }
+  }
+  return out;
+}
+
+// Build the sandboxed preview document for a markdown file. `boardImages`
+// comes from renderMarkdownBoardImages().
+function renderMarkdownDoc(source, relPath, boardImages) {
+  const tpl = markdownTemplate(source);
+  const origin = location.origin;
+  // Images relative to the .md file load from the workspace; board frame
+  // images use the live renders.
+  tpl.content.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src');
+    const t = boardTargetOf(relPath, src);
+    if (t) {
+      const r = (boardImages || {})[t.path + '#' + t.ref];
+      if (typeof r === 'string') {
+        img.setAttribute('src', r);
+        img.classList.add('md-board-img');
+      } else {
+        const note = document.createElement('span');
+        note.className = 'md-missing';
+        note.textContent = '[' + (img.getAttribute('alt') || t.path) + ': ' + ((r && r.error) || 'not available') + ']';
+        img.replaceWith(note);
+      }
+      return;
+    }
+    const ws = resolveWorkspaceLink(relPath, src);
+    if (ws) img.setAttribute('src', origin + '/api/raw?path=' + encodeURIComponent(ws));
+  });
+  // Links: other workspace files (and frames/slides in them) open in the
+  // app; external ones in a new tab.
+  tpl.content.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (href.startsWith('#')) return;
+    const ws = resolveWorkspaceLink(relPath, href);
+    if (ws) {
+      const t = boardTargetOf(relPath, href);
+      a.setAttribute('data-open', t ? ws + '#' + t.ref : ws);
+      a.setAttribute('href', '#');
+    } else {
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+  const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  const body = tpl.innerHTML.trim() || '<p class="md-missing">This file is empty.</p>';
+  return `<!DOCTYPE html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${MARKDOWN_CSS}</style></head>`
+    + `<body><article class="md">${body}</article>`
+    + `<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[data-open]');if(!a)return;e.preventDefault();parent.postMessage({type:'docviewer-open',path:a.getAttribute('data-open')},'*');});<\/script>`
+    + `</body></html>`;
+}
+
+// Links in the markdown preview ask the app to open a workspace file.
+window.addEventListener('message', (e) => {
+  if (!htmlPreviewFrame || e.source !== htmlPreviewFrame.contentWindow) return;
+  const d = e.data;
+  if (!d || d.type !== 'docviewer-open' || typeof d.path !== 'string' || !d.path) return;
+  const [path, ref] = d.path.split('#');
+  if (!path || path.split('/').includes('..')) return;
+  openFileAt(path, ref);
+});
+
+// Open a file and, for boards, jump to a frame / gantt view / slide.
+async function openFileAt(path, ref) {
+  await openFile(path);
+  if (!ref || currentPath !== path || !boardEngine) return;
+  const [key, raw] = ref.split('=');
+  const val = decodeURIComponent(raw || '');
+  try {
+    if (key === 'frame' && val && val !== '__all__' && typeof boardEngine.focusFrame === 'function') {
+      boardEngine.focusFrame(val);
+    } else if (key === 'view' && boardEngine.els && boardEngine.els.mode) {
+      const b = boardEngine.els.mode.querySelector('[data-mode="' + CSS.escape(val) + '"]');
+      if (b) b.click();
+    } else if (key === 'slide' && Array.isArray(boardEngine.data && boardEngine.data.slides)) {
+      const n = Math.min(boardEngine.data.slides.length, Math.max(1, parseInt(val, 10) || 1));
+      boardEngine.current = n - 1;
+      boardEngine.render();
+    }
+  } catch (err) { /* the file is open; the jump is best effort */ }
+}
+
 function isPdfPath(p) {
   return /\.pdf$/i.test(p || '');
 }
 
 function applyFileIcon(el, p, kind) {
-  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-json', 'icon-yaml', 'icon-pdf');
+  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
   if (kind === 'pdf' || isPdfPath(p)) {
     el.classList.add('icon-pdf');
     el.textContent = 'PDF';
@@ -275,6 +513,12 @@ function applyFileIcon(el, p, kind) {
     el.title = 'Gantt';
     return;
   }
+  if (kind === 'slides') {
+    el.classList.add('icon-slides');
+    el.textContent = 'SL';
+    el.title = 'Slides';
+    return;
+  }
   const fmt = langForPath(p);
   if (fmt === 'json') {
     el.classList.add('icon-json');
@@ -284,6 +528,12 @@ function applyFileIcon(el, p, kind) {
   if (fmt === 'yaml') {
     el.classList.add('icon-yaml');
     el.textContent = 'YML';
+    return;
+  }
+  if (isMarkdownPath(p)) {
+    el.classList.add('icon-md');
+    el.textContent = 'MD';
+    el.title = 'Markdown';
     return;
   }
   el.textContent = '📄';
@@ -1133,14 +1383,16 @@ async function createBoardFile(parentPath, name, kind) {
   await openFile(fullPath);
 }
 
-const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt' };
+const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides' };
 
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
+  { id: 'markdown', label: 'Markdown', hint: 'Markdown document. .md is added if you omit it', placeholder: 'notes' },
   { id: 'mindmap', label: 'Mindmap', hint: 'Tree board. .html is added if you omit it', placeholder: 'ideas' },
   { id: 'flow', label: 'Flow', hint: 'Flowchart board. .html is added if you omit it', placeholder: 'process' },
   { id: 'kanban', label: 'Kanban', hint: 'Task board with columns. .html is added if you omit it', placeholder: 'sprint' },
   { id: 'gantt', label: 'Gantt', hint: 'Timeline of tasks and dependencies. .html is added if you omit it', placeholder: 'roadmap' },
+  { id: 'slides', label: 'Slides', hint: 'Presentation built from mindmap/flow frames and gantt charts. .html is added if you omit it', placeholder: 'deck' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
 ];
 
@@ -1306,10 +1558,15 @@ async function openCreateDialog(parentPath) {
   });
   if (!result || !result.name) return;
   if (result.kind === 'folder') return createFolder(parentPath, result.name);
+  if (result.kind === 'markdown') {
+    const name = result.name.trim();
+    return createFile(parentPath, /\.(md|markdown)$/i.test(name) ? name : name + '.md');
+  }
   if (result.kind === 'mindmap') return createBoardFile(parentPath, result.name, 'mindmap');
   if (result.kind === 'flow') return createBoardFile(parentPath, result.name, 'flow');
   if (result.kind === 'kanban') return createBoardFile(parentPath, result.name, 'kanban');
   if (result.kind === 'gantt') return createBoardFile(parentPath, result.name, 'gantt');
+  if (result.kind === 'slides') return createBoardFile(parentPath, result.name, 'slides');
   return createFile(parentPath, result.name);
 }
 
@@ -1390,7 +1647,7 @@ function setStandaloneVisible(on) {
 
 async function exportStandaloneFile(fileName) {
   if (!boardEngine || typeof boardEngine.exportStandalone !== 'function') {
-    setStatus('Standalone export is only for boards (mindmap, flow, kanban, gantt)', 'dirty');
+    setStatus('Standalone export is only for boards (mindmap, flow, kanban, gantt, slides)', 'dirty');
     return;
   }
   if (boardEngine && viewMode === 'board') syncBoardIntoEditor();
@@ -1827,6 +2084,7 @@ function boardKindFromHtml(content) {
   if (/data-docviewer\s*=\s*["']flow["']/.test(content)) return 'flow';
   if (/data-docviewer\s*=\s*["']kanban["']/.test(content)) return 'kanban';
   if (/data-docviewer\s*=\s*["']gantt["']/.test(content)) return 'gantt';
+  if (/data-docviewer\s*=\s*["']slides["']/.test(content)) return 'slides';
   return null;
 }
 
@@ -1854,6 +2112,8 @@ function ensureScript(src, flag, ready) {
     if (flag === 'data-kb-js') window.KanbanEngine = undefined;
     if (flag === 'data-gt-core') window.GanttCore = undefined;
     if (flag === 'data-gt-js') window.GanttEngine = undefined;
+    if (flag === 'data-sl-core') window.SlidesCore = undefined;
+    if (flag === 'data-sl-js') window.SlidesEngine = undefined;
   } else if (ready()) {
     return Promise.resolve();
   }
@@ -1886,14 +2146,14 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=96', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=131', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=97', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=133', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=24', 'data-fl-css');
   return ensureScript('/flow/core.js?v=21', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=35', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=36', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function ensureKanbanAssets() {
@@ -1908,11 +2168,22 @@ function ensureGanttAssets() {
     .then(() => ensureScript('/gantt/engine.js?v=23', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
 }
 
+function ensureSlidesAssets() {
+  ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
+  return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
+    .then(() => ensureScript('/slides/engine.js?v=9', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
+}
+
+// Slides render live windows of mindmap/flow frames and gantt charts, so
+// they need to be able to load those editors' code.
+const SLIDES_SOURCE_ASSETS = { mindmap: ensureMindmapAssets, flow: ensureFlowAssets, gantt: ensureGanttAssets };
+
 const BOARD_TYPES = {
   mindmap: { engine: 'MindmapEngine', ensure: ensureMindmapAssets },
   flow: { engine: 'FlowEngine', ensure: ensureFlowAssets },
   kanban: { engine: 'KanbanEngine', ensure: ensureKanbanAssets },
   gantt: { engine: 'GanttEngine', ensure: ensureGanttAssets },
+  slides: { engine: 'SlidesEngine', ensure: ensureSlidesAssets, opts: { ensureAssets: SLIDES_SOURCE_ASSETS } },
 };
 
 function getSaveContent() {
@@ -2184,7 +2455,22 @@ async function openFile(relPath, lineToReveal, opts) {
       alert('Gantt failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
-  } else if (isHtml) {
+  } else if (boardKind === 'slides') {
+    viewToggleBtn.classList.remove('hidden');
+    try {
+      await ensureSlidesAssets();
+      if (token !== openToken) return;
+      boardEngine = new window.SlidesEngine(mindmapStage, { onChange: onBoardChange, ensureAssets: SLIDES_SOURCE_ASSETS, getPath: () => currentPath });
+      boardEngine.loadFromHtml(data.content);
+      setViewMode('board');
+    } catch (err) {
+      if (token !== openToken) return;
+      console.error(err);
+      alert('Slides failed to load: ' + ((err && err.message) || err));
+      setViewMode('code');
+    }
+  } else if (isHtml || isMarkdownPath(relPath)) {
+    // HTML and markdown open rendered; the toggle shows the raw file.
     viewToggleBtn.classList.remove('hidden');
     setViewMode('render');
   } else {
@@ -2196,9 +2482,19 @@ async function openFile(relPath, lineToReveal, opts) {
   markClean();
 }
 
+// Load a document into the preview frame. A counter comment makes every
+// load a real navigation: re-setting identical srcdoc on a frame that was
+// hidden (View Source -> View Rendered) can otherwise leave it blank white.
+let previewLoads = 0;
+function setPreviewDoc(html) {
+  htmlPreviewFrame.srcdoc = html + '\n<!-- docviewer preview ' + (++previewLoads) + ' -->';
+}
+
 function setViewMode(mode) {
   viewMode = mode;
   htmlPreviewFrame.classList.add('hidden');
+  // Unload the preview when leaving it, so coming back always starts fresh.
+  if (mode !== 'render' && htmlPreviewFrame.hasAttribute('srcdoc')) htmlPreviewFrame.removeAttribute('srcdoc');
   document.getElementById('editor').classList.add('hidden');
   mindmapStage.classList.add('hidden');
   if (mode !== 'pdf') hidePdfFrame();
@@ -2215,19 +2511,43 @@ function setViewMode(mode) {
     viewToggleBtn.textContent = 'View Source';
     findInFileBtn.disabled = true;
   } else if (mode === 'render') {
-    htmlPreviewFrame.srcdoc = editor.getValue();
+    // Show the frame first so it navigates while visible.
     htmlPreviewFrame.classList.remove('hidden');
+    if (isMarkdownPath(currentPath)) {
+      const path = currentPath;
+      const source = editor.getValue();
+      const token = ++markdownRenderToken;
+      const stillWanted = () => token === markdownRenderToken && viewMode === 'render' && currentPath === path;
+      const ready = MARKDOWN_LIBS.every((lib) => lib.ready());
+      if (!ready) setPreviewDoc(markdownStatusDoc('Rendering…'));
+      ensureMarkdownLibs()
+        .then(() => renderMarkdownBoardImages(source, path).catch(() => ({})))
+        .then((boardImages) => {
+        if (!stillWanted()) return;
+        try {
+          setPreviewDoc(renderMarkdownDoc(source, path, boardImages));
+        } catch (err) {
+          setPreviewDoc(markdownStatusDoc('Could not render this file: ' + ((err && err.message) || err) + '. Use View Source to see it.', true));
+        }
+      }).catch((err) => {
+        if (!stillWanted()) return;
+        setPreviewDoc(markdownStatusDoc('Could not load the markdown renderer (' + ((err && err.message) || err) + '). Use View Source to see the file, or reopen it to retry.', true));
+      });
+    } else {
+      setPreviewDoc(editor.getValue());
+    }
     viewToggleBtn.textContent = 'View Source';
     findInFileBtn.disabled = false;
   } else {
     if (boardEngine) syncBoardIntoEditor();
     document.getElementById('editor').classList.remove('hidden');
-    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : 'View Rendered';
+    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : 'View Rendered';
     findInFileBtn.disabled = !currentPath;
     if (boardEngine && editor) {
       editor.layout();
     }
   }
+  if (typeof syncMarkdownToolbar === 'function') syncMarkdownToolbar();
 }
 
 viewToggleBtn.addEventListener('click', () => {
@@ -2452,8 +2772,10 @@ async function runSearch(q, type) {
       else if (r.kind === 'flow') bits.push('Flow');
       else if (r.kind === 'kanban') bits.push('Kanban');
       else if (r.kind === 'gantt') bits.push('Gantt');
+      else if (r.kind === 'slides') bits.push('Slides');
       else if (r.kind === 'json') bits.push('JSON');
       else if (r.kind === 'yaml') bits.push('YAML');
+      else if (r.kind === 'markdown') bits.push('Markdown');
       else if (r.kind === 'pdf') bits.push('PDF');
       if (r.text && r.matchType === 'content') bits.push(r.text);
       else if (r.text && r.matchType !== 'type' && r.matchType !== 'filename') bits.push(r.text);
@@ -2546,7 +2868,7 @@ async function viewVersion(hash) {
     await board.ensure();
     if (!boardEngine || boardKind !== previewKind) {
       if (boardEngine) boardEngine.destroy();
-      boardEngine = new window[board.engine](mindmapStage, { onChange: onBoardChange, readOnly: true });
+      boardEngine = new window[board.engine](mindmapStage, Object.assign({}, board.opts, { onChange: onBoardChange, readOnly: true }));
     }
     boardKind = previewKind;
     boardEngine.setReadOnly(true);

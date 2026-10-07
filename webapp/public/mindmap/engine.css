@@ -2229,3 +2229,6 @@ html[data-theme="light"] .mm-color-hex {
 html[data-theme="light"] .mm-color-custom-well {
   border-color: rgba(20, 30, 50, 0.16);
 }
+
+/* Plain-text code nodes (e.g. pasted diagrams): show everything, no scroll. */
+.mm-code.is-plain { max-height: none; overflow: hidden; color: #e6edf3; }

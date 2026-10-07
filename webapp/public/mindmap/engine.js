@@ -47,7 +47,7 @@
     { id: 'dashed', label: 'Dashed', dash: '9 7' },
     { id: 'dash-dot', label: 'Dash-dot', dash: '12 6 2.5 6' },
   ];
-  const CODE_LANGS = ['auto', 'javascript', 'typescript', 'python', 'go', 'rust', 'java', 'html', 'css', 'json', 'yaml', 'bash', 'sql', 'markdown', 'c', 'cpp'];
+  const CODE_LANGS = ['auto', 'plaintext', 'javascript', 'typescript', 'python', 'go', 'rust', 'java', 'html', 'css', 'json', 'yaml', 'bash', 'sql', 'markdown', 'c', 'cpp'];
   const CLIP_PREFIX = 'DOCVIEWER_MINDMAP:';
 
   function uid(prefix) {
@@ -731,6 +731,17 @@
     ctx.font = '12px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
     const padX = 28;
     const padY = 48;
+    if (n.language === 'plaintext') {
+      // Plain text (e.g. a pasted diagram): sized to fit, never wrapped.
+      const lines = text.split('\n');
+      let widest = ctx.measureText(' ').width;
+      lines.forEach((line) => { widest = Math.max(widest, ctx.measureText(line || ' ').width); });
+      const maxW = ctx.measureText('n'.repeat(160)).width;
+      return {
+        w: clamp(Math.ceil(Math.min(widest, maxW) + padX + 4), 200, Math.ceil(maxW + padX)),
+        h: clamp(Math.ceil(lines.length * 17.4 + 84), 72, 1400),
+      };
+    }
     const maxInner = ctx.measureText('n'.repeat(CELL_CHARS)).width;
     let contentW = ctx.measureText(' ').width;
     String(text || ' ').split('\n').forEach((line) => {
@@ -4394,6 +4405,20 @@
       el.classList.add('editing');
       this._styleTextEditor(n);
       this._syncTextEditorBox(n);
+      // Pasted text: drop invisible characters; a text diagram turns the node
+      // into a plain-text code block so it lines up (monospace, no wrapping).
+      ta.addEventListener('paste', (ev) => {
+        const P = global.DocPaste;
+        const raw = P && ev.clipboardData && ev.clipboardData.getData('text/plain');
+        if (!raw || this.readOnly) return;
+        const diagram = P.isDiagram(raw);
+        const text = diagram ? P.cleanDiagram(raw) : P.normalize(raw);
+        if (!diagram && text === raw) return;
+        ev.preventDefault();
+        ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, 'end');
+        ta.dispatchEvent(new Event('input'));
+        if (diagram) this._convertToDiagram(n.id);
+      });
       ta.addEventListener('input', () => {
         if (this.readOnly) return;
         n.content = ta.value;
@@ -4467,6 +4492,22 @@
       const el = this.els.world.querySelector(`.mm-node[data-id="${CSS.escape(this.editingId)}"]`);
       const body = el && el.querySelector('[data-edit]');
       if (body) n.content = readEditValue(body);
+    }
+
+    _convertToDiagram(id) {
+      this.commitEdit();
+      const n = this.data.nodes[id];
+      if (!n) return;
+      n.language = 'plaintext';
+      if (!n.format) n.format = defaultFormat();
+      n.format.align = 'left';
+      n.userSized = false;
+      this.setNodeType(id, 'code');
+      this._fitAutoNode(n);
+      this._relayoutAround([n]);
+      this.selectOnly(id);
+      this.render();
+      this._emit();
     }
 
     commitEdit() {
@@ -4837,7 +4878,7 @@
         const opts = CODE_LANGS.map((l) => `<option value="${l}"${n.language === l ? ' selected' : ''}>${l}</option>`).join('');
         body = `<div class="mm-code-head"><span>Code</span><select data-lang>${opts}</select></div>`;
         if (editing) body += `<textarea class="mm-code-edit" data-edit>${escapeHtml(n.content)}</textarea>`;
-        else body += `<pre class="mm-code"><code>${highlightCode(n.content || '', n.language)}</code></pre>`;
+        else body += `<pre class="mm-code${n.language === 'plaintext' ? ' is-plain' : ''}"><code>${highlightCode(n.content || '', n.language)}</code></pre>`;
       } else if (n.type === 'youtube') {
         const vid = youtubeId(n.content);
         body = `<div class="mm-node-chrome">YouTube</div>`;

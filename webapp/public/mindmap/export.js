@@ -423,6 +423,9 @@
 
   global.MindmapExport = {
     _v: 18,
+    // Used by slides to render a live window of a frame.
+    buildSvg,
+    inlineImages,
     async run(format, rect, scene, els) {
       const base = (rect.name || 'mindmap').replace(/[^\w.-]+/g, '_');
       const ext = format === 'svg' ? 'svg' : format === 'pdf' ? 'pdf' : 'png';

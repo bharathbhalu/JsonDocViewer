@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <title>Accretion</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="style.css?v=14" />
+  <link rel="stylesheet" href="style.css?v=18" />
 </head>
 <body>
   <div id="app">
@@ -18,7 +18,7 @@
           <span class="sidebar-title">Accretion</span>
         </div>
         <div class="sidebar-actions">
-          <button id="new-file-btn" title="New file, mindmap, flow, kanban, gantt, or folder">＋</button>
+          <button id="new-file-btn" title="New file, markdown, mindmap, flow, kanban, gantt, slides, or folder">＋</button>
           <button id="import-btn" title="Import files of any type, or a zip">↑</button>
           <button id="export-all-btn" title="Export workspace as zip">⤓</button>
           <button id="refresh-btn" title="Refresh tree">↻</button>
@@ -32,8 +32,10 @@
           <button type="button" class="search-filter" data-search-type="flow">Flows</button>
           <button type="button" class="search-filter" data-search-type="kanban">Kanban</button>
           <button type="button" class="search-filter" data-search-type="gantt">Gantt</button>
+          <button type="button" class="search-filter" data-search-type="slides">Slides</button>
           <button type="button" class="search-filter" data-search-type="json">JSON</button>
           <button type="button" class="search-filter" data-search-type="yaml">YAML</button>
+          <button type="button" class="search-filter" data-search-type="markdown">Markdown</button>
           <button type="button" class="search-filter" data-search-type="pdf">PDFs</button>
         </div>
         <div id="search-results" class="hidden"></div>
@@ -52,6 +54,7 @@
         </div>
         <div id="tree"></div>
       </div>
+      <div id="calendar-footer" aria-label="Calendar and to-dos"></div>
       </div>
     </div>
     <div id="main">
@@ -102,6 +105,28 @@
           <button id="theme-btn" title="Toggle light/dark mode">Dark mode</button>
         </div>
       </div>
+      <div id="md-toolbar" class="hidden" role="toolbar" aria-label="Markdown">
+        <button type="button" data-md="headings" title="Heading">H ▾</button>
+        <button type="button" data-md="bold" title="Bold (Cmd/Ctrl+B)"><b>B</b></button>
+        <button type="button" data-md="italic" title="Italic (Cmd/Ctrl+I)"><i>I</i></button>
+        <button type="button" data-md="strike" title="Strikethrough"><s>S</s></button>
+        <button type="button" data-md="code" title="Inline code">&lt;/&gt;</button>
+        <span class="md-sep"></span>
+        <button type="button" data-md="ul" title="Bulleted list">• List</button>
+        <button type="button" data-md="ol" title="Numbered list">1. List</button>
+        <button type="button" data-md="task" title="Task list">☐ Tasks</button>
+        <button type="button" data-md="quote" title="Quote">❝ Quote</button>
+        <button type="button" data-md="codeblock" title="Code block">{ } Code</button>
+        <button type="button" data-md="hr" title="Divider">— Divider</button>
+        <span class="md-sep"></span>
+        <button type="button" data-md="table" title="Insert table">▦ Table</button>
+        <button type="button" data-md="link" title="Insert web link (Cmd/Ctrl+K)">🔗 Link</button>
+        <button type="button" data-md="image" title="Insert image">🖼 Image</button>
+        <button type="button" data-md="file" title="Link to a workspace file">📄 File</button>
+        <span class="md-sep"></span>
+        <button type="button" data-md="frame" class="md-accent" title="Link or embed a mindmap/flow frame or gantt view (Cmd/Ctrl+Shift+F)">⧉ Frame</button>
+        <button type="button" data-md="slide" class="md-accent" title="Link to a slide">▶ Slide</button>
+      </div>
       <div id="editor-area">
         <div id="editor"></div>
         <div id="welcome" class="welcome pending">
@@ -120,7 +145,7 @@
             </ul>
           </div>
         </div>
-        <iframe id="html-preview-frame" class="hidden" sandbox="allow-scripts allow-forms allow-modals" referrerpolicy="no-referrer"></iframe>
+        <iframe id="html-preview-frame" class="hidden" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
         <iframe id="pdf-frame" class="hidden" title="PDF viewer"></iframe>
         <div id="mindmap-stage" class="hidden"></div>
       </div>
@@ -160,6 +185,16 @@
   <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js"></script>
   <input id="import-file" class="file-hidden" type="file" multiple />
-  <script src="app.js?v=189"></script>
+  <div id="md-dialog" class="hidden" role="dialog" aria-modal="true">
+    <div class="md-dialog-box">
+      <div class="md-dialog-head"><span class="md-dialog-title"></span><button type="button" data-close aria-label="Close">×</button></div>
+      <div class="md-dialog-body"></div>
+      <div class="md-dialog-foot"></div>
+    </div>
+  </div>
+  <script src="paste-utils.js?v=1"></script>
+  <script src="app.js?v=205"></script>
+  <script src="md-tools.js?v=4"></script>
+  <script src="calendar.js?v=1"></script>
 </body>
 </html>

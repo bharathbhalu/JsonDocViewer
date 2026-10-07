@@ -211,7 +211,7 @@
       if (!global.FlowExport) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/flow/export.js?v=12';
+          s.src = '/flow/export.js?v=13';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Export module failed to load'));
           document.body.appendChild(s);
@@ -1789,7 +1789,29 @@
       label.style.textDecoration = fmt.underline ? 'underline' : 'none';
       label.style.justifyContent = fmt.align === 'left' ? 'flex-start' : fmt.align === 'right' ? 'flex-end' : 'center';
       label.style.textAlign = fmt.align || 'center';
-      label.style.whiteSpace = s.type === 'textbox' ? 'pre-wrap' : '';
+      // Monospace text (e.g. pasted diagrams) keeps every space and line as-is.
+      const mono = fmt.fontFamily === 'mono';
+      label.style.whiteSpace = mono ? 'pre' : s.type === 'textbox' ? 'pre-wrap' : '';
+      label.style.wordBreak = mono ? 'normal' : '';
+    }
+
+    // A text diagram was pasted into a shape: monospace, left-aligned, and
+    // big enough to show it without wrapping. One undo step with the text.
+    _makeDiagramShape(shape, ta) {
+      if (!this._edit || this._edit.pushed) return;
+      this._pushUndo();
+      this._edit.pushed = true;
+      shape.format = Object.assign(C.defaultFormat(), shape.format || {}, { fontFamily: 'mono', align: 'left', valign: 'top' });
+      const fs = Number(shape.format.fontSize) || 14;
+      const P = global.DocPaste;
+      const lines = String(ta.value).split('\n');
+      const cols = P ? P.maxLineLength(ta.value) : Math.max(...lines.map((l) => l.length));
+      shape.w = C.snap(Math.max(shape.w, Math.ceil(cols * fs * 0.62 + 36)));
+      shape.h = C.snap(Math.max(shape.h, Math.ceil(lines.length * fs * 1.3 + 32)));
+      Object.assign(ta.style, {
+        fontFamily: C.fontCss('mono'), textAlign: 'left', whiteSpace: 'pre',
+        width: Math.max(80, shape.w) + 'px', height: Math.max(40, shape.h) + 'px',
+      });
     }
 
     _stickyBarHtml(s) {
@@ -2435,6 +2457,20 @@
       };
       ta.addEventListener('input', grow);
       grow();
+      // Pasted text: drop invisible characters; a text diagram also switches
+      // the shape to a monospace, no-wrap layout so it lines up.
+      ta.addEventListener('paste', (ev) => {
+        const P = global.DocPaste;
+        const raw = P && ev.clipboardData && ev.clipboardData.getData('text/plain');
+        if (!raw) return;
+        const diagram = P.isDiagram(raw);
+        const text = diagram ? P.cleanDiagram(raw) : P.normalize(raw);
+        if (!diagram && text === raw) return;
+        ev.preventDefault();
+        ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, 'end');
+        if (diagram) this._makeDiagramShape(shape, ta);
+        ta.dispatchEvent(new Event('input'));
+      });
       ta.addEventListener('blur', () => this._endEdit(true));
       ta.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') { ev.preventDefault(); this._endEdit(false); return; }
@@ -2447,7 +2483,7 @@
 
     _endEdit(commit) {
       if (!this._edit) return;
-      const { el, id, link } = this._edit;
+      const { el, id, link, pushed } = this._edit;
       const next = el.value;
       const grownH = el.offsetHeight;
       const host = !link && this.els.world.querySelector(`.fl-shape[data-id="${CSS.escape(id)}"]`);
@@ -2467,9 +2503,9 @@
       }
       const shape = this.data.shapes[id];
       if (!shape) return;
-      const grew = shape.type === 'textbox' && grownH > shape.h + 4;
-      if (next !== shape.text || grew) {
-        this._pushUndo();
+      const grew = shape.type === 'textbox' && grownH > shape.h + 4 && !pushed;
+      if (next !== shape.text || grew || pushed) {
+        if (!pushed) this._pushUndo();
         shape.text = next;
         if (grew) shape.h = C.snap(Math.max(C.MIN_H, grownH));
         if (shape.type === 'sticky' && shape.collapsed) this._applyCollapsedSticky(shape);

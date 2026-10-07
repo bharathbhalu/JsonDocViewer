@@ -5,6 +5,7 @@ const yaml = require('js-yaml');
 const FlowCore = require(path.join(__dirname, 'public', 'flow', 'core.js'));
 const KanbanCore = require(path.join(__dirname, 'public', 'kanban', 'core.js'));
 const GanttCore = require(path.join(__dirname, 'public', 'gantt', 'core.js'));
+const SlidesCore = require(path.join(__dirname, 'public', 'slides', 'core.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
@@ -154,6 +155,45 @@ function normalizeBookmarks(raw) {
     }))
     : [];
   return { categories, items };
+}
+
+// --- Calendar to-dos: { days: { "YYYY-MM-DD": [{ id, text, done }] } } ---
+const TODOS_FILE = path.join(__dirname, 'todos.json');
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+function normalizeTodos(raw) {
+  const days = {};
+  const src = raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object' ? raw.days : {};
+  Object.keys(src).forEach((day) => {
+    if (!DAY_KEY.test(day) || !Array.isArray(src[day])) return;
+    const seen = new Set();
+    const list = src[day]
+      .filter((t) => t && typeof t === 'object' && typeof t.text === 'string' && t.text.trim())
+      .slice(0, 500)
+      .map((t) => {
+        let id = typeof t.id === 'string' && /^[\w-]{1,40}$/.test(t.id) ? t.id : 't_' + Math.random().toString(36).slice(2, 10);
+        if (seen.has(id)) id = 't_' + Math.random().toString(36).slice(2, 10);
+        seen.add(id);
+        return { id, text: t.text.slice(0, 2000), done: !!t.done };
+      });
+    if (list.length) days[day] = list;
+  });
+  return { version: 1, days };
+}
+
+function readTodos() {
+  try {
+    return normalizeTodos(JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8')));
+  } catch (e) {
+    return { version: 1, days: {} };
+  }
+}
+
+function writeTodos(store) {
+  // Write to a temp file then rename, so a crash never leaves half a file.
+  const tmp = TODOS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8');
+  fs.renameSync(tmp, TODOS_FILE);
 }
 
 function readBookmarks() {
@@ -349,8 +389,19 @@ function pruneTransientDownloads() {
   }
 }
 
+const IMAGE_TYPES = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif', ico: 'image/x-icon',
+};
+
+function imageTypeFor(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(name);
+  return (m && IMAGE_TYPES[m[1].toLowerCase()]) || null;
+}
+
 function contentTypeFor(name) {
   if (/\.pdf$/i.test(name)) return 'application/pdf';
+  if (imageTypeFor(name)) return imageTypeFor(name);
   if (/\.html?$/i.test(name)) return 'text/html; charset=utf-8';
   if (/\.json$/i.test(name)) return 'application/json; charset=utf-8';
   if (/\.ya?ml$/i.test(name)) return 'text/yaml; charset=utf-8';
@@ -420,6 +471,7 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="flow"')) return 'flow';
     if (head.includes('data-docviewer="kanban"')) return 'kanban';
     if (head.includes('data-docviewer="gantt"')) return 'gantt';
+    if (head.includes('data-docviewer="slides"')) return 'slides';
   } catch (e) {
     return undefined;
   }
@@ -609,8 +661,14 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'flow') return flowTemplate();
   if (kind === 'kanban') return kanbanTemplate(template);
   if (kind === 'gantt') return ganttTemplate();
+  if (kind === 'slides') return SlidesCore.serializeToHtml(SlidesCore.createStarter());
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
+  // New markdown files start with a heading named after the file.
+  if (/\.(md|markdown)$/i.test(relPath)) {
+    const title = path.posix.basename(relPath).replace(/\.(md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim();
+    return '# ' + (title ? title.charAt(0).toUpperCase() + title.slice(1) : 'Notes') + '\n\n';
+  }
   return '';
 }
 
@@ -727,6 +785,20 @@ app.post('/api/file/delete', (req, res) => {
   }
 });
 
+app.get('/api/todos', (req, res) => {
+  res.json(readTodos());
+});
+
+app.put('/api/todos', (req, res) => {
+  try {
+    const store = normalizeTodos(req.body);
+    writeTodos(store);
+    res.json(store);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/favorites', (req, res) => {
   res.json(bookmarksPayload(readBookmarks()));
 });
@@ -828,8 +900,18 @@ app.get('/api/raw', (req, res) => {
     if (!stat || !stat.isFile()) {
       return res.status(404).json({ error: 'File not found' });
     }
-    if (!/\.pdf$/i.test(full)) {
-      return res.status(400).json({ error: 'Only PDF files can be viewed this way' });
+    // PDFs (viewer) and images (slides) only.
+    const imageType = imageTypeFor(full);
+    if (!/\.pdf$/i.test(full) && !imageType) {
+      return res.status(400).json({ error: 'Only PDF and image files can be viewed this way' });
+    }
+    if (imageType) {
+      res.setHeader('Content-Type', imageType);
+      res.setHeader('Cache-Control', 'no-cache');
+      // An SVG opened directly must not run scripts.
+      if (imageType === 'image/svg+xml') res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+      fs.createReadStream(full).pipe(res);
+      return;
     }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="' + path.basename(full).replace(/"/g, '') + '"');
@@ -1103,6 +1185,7 @@ function fileKind(full, name) {
   if (board) return board;
   if (/\.ya?ml$/i.test(name)) return 'yaml';
   if (/\.json$/i.test(name)) return 'json';
+  if (/\.(md|markdown)$/i.test(name)) return 'markdown';
   if (/\.pdf$/i.test(name)) return 'pdf';
   return 'file';
 }
@@ -1112,8 +1195,10 @@ function kindLabel(kind) {
   if (kind === 'flow') return 'Flow';
   if (kind === 'kanban') return 'Kanban';
   if (kind === 'gantt') return 'Gantt';
+  if (kind === 'slides') return 'Slides';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
+  if (kind === 'markdown') return 'Markdown';
   if (kind === 'pdf') return 'PDF';
   return 'File';
 }
@@ -1163,6 +1248,55 @@ app.get('/api/search', (req, res) => {
     res.json({ results: results.slice(0, 200) });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Everything a markdown file can link to or embed inside boards: mindmap and
+// flow frames (plus "whole board"), gantt views and slides. Each item has a
+// `ref` fragment used in links, e.g. "frame=f_123", "view=sheet", "slide=2".
+function boardTargets(full, rel, kind) {
+  const content = fs.readFileSync(full, 'utf8');
+  const out = [];
+  const add = (ref, title, embeddable) => out.push({ path: rel, kind, ref, title: String(title || '').slice(0, 200), embeddable });
+  if (kind === 'mindmap') {
+    const m = content.match(/<script[^>]*id=["']mindmap-data["'][^>]*>([\s\S]*?)<\/script>/i);
+    let frames = [];
+    try { frames = (m && JSON.parse(m[1]).frames) || []; } catch (e) { frames = []; }
+    frames.forEach((f) => { if (f && f.id) add('frame=' + f.id, f.title || 'Frame', true); });
+    add('frame=__all__', 'Whole mindmap', true);
+  } else if (kind === 'flow') {
+    const data = FlowCore.parseHtml(content);
+    ((data && data.frames) || []).forEach((f) => { if (f && f.id) add('frame=' + f.id, f.title || 'Frame', true); });
+    add('frame=__all__', 'Whole flow', true);
+  } else if (kind === 'gantt') {
+    [['chart', 'Timeline'], ['sheet', 'Sheet'], ['analytics', 'Analytics']].forEach(([v, label]) => add('view=' + v, label, true));
+  } else if (kind === 'slides') {
+    const data = SlidesCore.parseHtml(content);
+    ((data && data.slides) || []).forEach((sl, i) => add('slide=' + (i + 1), 'Slide ' + (i + 1) + (sl.title ? ': ' + sl.title : ''), false));
+  }
+  return out;
+}
+
+app.get('/api/frames', (req, res) => {
+  try {
+    const items = [];
+    (function walk(dir) {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!/\.html?$/i.test(entry.name)) continue;
+        const kind = peekFileKind(full, entry.name);
+        if (!['mindmap', 'flow', 'gantt', 'slides'].includes(kind)) continue;
+        try {
+          items.push(...boardTargets(full, path.relative(DATA_ROOT, full).split(path.sep).join('/'), kind));
+        } catch (e) { /* unreadable board: skip */ }
+        if (items.length > 5000) return;
+      }
+    })(DATA_ROOT);
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

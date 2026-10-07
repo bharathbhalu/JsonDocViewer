@@ -253,7 +253,9 @@
         const lineH = fs * 1.3;
         // The editor hides overflow, so only draw the lines that fit the shape.
         const fit = Math.max(1, Math.floor((s.h - (s.type === 'sticky' ? 28 : 16)) / lineH));
-        const lines = wrapToWidth(s.text, font, Math.max(20, s.w - 24)).slice(0, fit);
+        // Monospace text (diagrams) is drawn line for line, spaces kept.
+        const mono = fmt.fontFamily === 'mono';
+        const lines = (mono ? String(s.text || '').split('\n') : wrapToWidth(s.text, font, Math.max(20, s.w - 24))).slice(0, fit);
         const block = lines.length * lineH;
         const valign = C.normValign(fmt.valign, s.type === 'textbox' ? 'top' : 'middle');
         const startY = y + Math.max(fs, (
@@ -265,7 +267,8 @@
         const align = fmt.align || 'center';
         const anchor = align === 'right' ? 'end' : align === 'left' ? 'start' : 'middle';
         const tx = align === 'right' ? x + s.w - 12 : align === 'left' ? x + 12 : x + s.w / 2;
-        const extra = (italic === 'italic' ? ' font-style="italic"' : '') + (deco === 'underline' ? ' text-decoration="underline"' : '');
+        const extra = (italic === 'italic' ? ' font-style="italic"' : '') + (deco === 'underline' ? ' text-decoration="underline"' : '')
+          + (mono ? ' xml:space="preserve"' : '');
         lines.forEach((line, i) => {
           parts.push(`<text x="${q(tx)}" y="${q(startY + i * lineH)}" text-anchor="${anchor}" fill="${escapeXml(C.hexAlpha(s.style.textColor || '#1a2130', s.style.textAlpha))}" font-size="${fs}" font-weight="${weight}" font-family="${escapeXml(fam)}"${extra}>${escapeXml(line)}</text>`);
         });
@@ -321,6 +324,9 @@
   }
 
   global.FlowExport = {
+    // Used by slides to render a live window of a frame.
+    buildSvg,
+    inlineImages,
     async run(format, rect, data) {
       const base = (rect.name || 'flow').replace(/[^\w.-]+/g, '_');
       const ext = format === 'svg' ? 'svg' : format === 'pdf' ? 'pdf' : 'png';

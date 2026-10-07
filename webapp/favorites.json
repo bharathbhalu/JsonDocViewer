@@ -11,5 +11,10 @@
       "collapsed": true
     }
   ],
-  "items": []
+  "items": [
+    {
+      "path": "test_slides.html",
+      "categoryId": "c_default"
+    }
+  ]
 }
