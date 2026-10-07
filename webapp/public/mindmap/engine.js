@@ -1536,7 +1536,8 @@
       return serializeToHtml(this.data);
     }
 
-    async exportStandalone(filename) {
+    // opts.returnHtml: give back the page instead of downloading it (folder export).
+    async exportStandalone(filename, opts) {
       const first = this.data.rootIds && this.data.nodes[this.data.rootIds[0]];
       const title = (stripTags(first && first.content) || 'Mindmap').slice(0, 80);
       const json = JSON.stringify(this.data, null, 2).replace(/</g, '\\u003c');
@@ -1549,6 +1550,7 @@
         jsUrls: ['/mindmap/engine.js', '/mindmap/export.js'],
       });
       const name = filename || safeStandaloneName(title, 'mindmap');
+      if (opts && opts.returnHtml) return html;
       downloadStandalone(html, name);
     }
 

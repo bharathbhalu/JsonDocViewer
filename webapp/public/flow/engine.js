@@ -117,7 +117,8 @@
 
     serializeToHtml() { return C.serializeToHtml(this.data); }
 
-    async exportStandalone(filename) {
+    // opts.returnHtml: give back the page instead of downloading it (folder export).
+    async exportStandalone(filename, opts) {
       const shapes = this.data.shapes || {};
       const first = Object.keys(shapes).map((id) => shapes[id]).find((s) => s && String(s.text || '').trim());
       const title = (first && first.text ? String(first.text).trim() : 'Flow').slice(0, 80);
@@ -130,6 +131,7 @@
         cssUrls: ['/flow/engine.css'],
         jsUrls: ['/flow/core.js', '/flow/engine.js', '/flow/export.js'],
       });
+      if (opts && opts.returnHtml) return html;
       downloadStandalone(html, filename || safeStandaloneName(title, 'flow'));
     }
     collapseAll() { this.setZoom(0.4); }

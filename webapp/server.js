@@ -984,6 +984,41 @@ app.get('/api/download', (req, res) => {
   }
 });
 
+// Website export of a folder: the client renders the pages (markdown and
+// board pages need the browser engines); everything else is copied here.
+// Body: { folder, pages: [{ path, content }], copy: [workspacePath] }.
+app.post('/api/export-site', (req, res) => {
+  try {
+    const folder = String((req.body && req.body.folder) || '').replace(/^\/+|\/+$/g, '');
+    const base = folder ? resolveSafe(folder) : DATA_ROOT;
+    if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) return res.status(404).json({ error: 'Folder not found' });
+    const root = path.basename(folder ? base : 'site');
+    const cleanRel = (p) => {
+      const rel = String(p || '').replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!rel || rel.split('/').some((seg) => seg === '..' || seg === '')) throw new Error('Bad path: ' + p);
+      return rel;
+    };
+    const entries = new Map();
+    (Array.isArray(req.body.pages) ? req.body.pages : []).forEach((pg) => {
+      entries.set(cleanRel(pg.path), Buffer.from(String(pg.content || ''), 'utf8'));
+    });
+    (Array.isArray(req.body.copy) ? req.body.copy : []).forEach((wsPath) => {
+      const full = resolveSafe(String(wsPath));
+      if (full !== base && !full.startsWith(base + path.sep)) return; // outside the folder
+      if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return;
+      const rel = path.relative(base, full).split(path.sep).join('/');
+      if (!entries.has(rel)) entries.set(rel, fs.readFileSync(full));
+    });
+    if (!entries.size) return res.status(400).json({ error: 'Nothing to export' });
+    const zip = buildZip([...entries].map(([name, data]) => ({ name: root + '/' + name, data })));
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + safeDownloadName(root) + '-site.zip"');
+    res.end(zip);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/import', (req, res) => {
   try {
     const dest = String((req.body && req.body.dest) || '').replace(/^\/+|\/+$/g, '');

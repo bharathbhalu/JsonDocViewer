@@ -1271,6 +1271,8 @@ function treeMenuItems(node, row) {
       ...toTop,
       bookmark,
       { label: 'Export as zip', action: () => downloadHref(p) },
+      { label: 'Export as website (.zip)', action: () => exportFolderSite(p) },
+      { label: 'Export as PDF', action: () => exportFolderPdf(p) },
       { label: 'Copy path', action: () => copyPath(p) },
       'sep',
       { label: 'Delete folder…', action: () => deleteFolder(p), danger: true },
@@ -1305,6 +1307,9 @@ document.getElementById('tree').addEventListener('contextmenu', (e) => {
   showTreeMenu(e.clientX, e.clientY, [
     { label: 'New…', action: () => openCreateDialog('') },
     { label: 'Import…', action: () => pickImport('') },
+    'sep',
+    { label: 'Export workspace as website (.zip)', action: () => exportFolderSite('') },
+    { label: 'Export workspace as PDF', action: () => exportFolderPdf('') },
     'sep',
     { label: 'Refresh', action: () => loadTree() },
   ]);

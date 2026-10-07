@@ -1603,7 +1603,9 @@
     }
 
     // ---- standalone export: a self-contained deck with rendered visuals ----
-    async exportStandalone(filename) {
+    // Every slide as static HTML (visuals and images embedded as data URLs)
+    // plus the slides stylesheet. Used by standalone and folder exports.
+    async buildStaticSlides() {
       this._sources.clear();
       this._frames.clear();
       const slidesHtml = [];
@@ -1627,6 +1629,12 @@
       }
       let css = '';
       try { css = await (await fetch('/slides/engine.css', { cache: 'no-store' })).text(); } catch (e) { css = ''; }
+      return { slidesHtml, css };
+    }
+
+    // opts.returnHtml: give back the page instead of downloading it.
+    async exportStandalone(filename, opts) {
+      const { slidesHtml, css } = await this.buildStaticSlides();
       const title = (this.data.slides[0] && this.data.slides[0].title) || this.data.title || 'Slides';
       // Keep the data block so the file can be imported back as slides.
       const json = JSON.stringify(this.data, null, 2).replace(/</g, '\\u003c');
@@ -1665,6 +1673,7 @@ ${json}
 </html>
 `;
       const name = filename || (String(title).replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'slides') + '-standalone.html';
+      if (opts && opts.returnHtml) return html;
       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

@@ -2402,7 +2402,8 @@
       await global.GanttExport.run(format, this.data, opts || {});
     }
 
-    async exportStandalone(filename) {
+    // opts.returnHtml: give back the page instead of downloading it (folder export).
+    async exportStandalone(filename, opts) {
       const title = (this.data.title || 'Gantt').slice(0, 80);
       const json = JSON.stringify(C.normalize(this.data), null, 2).replace(/</g, '\\u003c');
       const html = await buildStandaloneHtml({
@@ -2413,6 +2414,7 @@
         cssUrls: ['/gantt/engine.css'],
         jsUrls: ['/gantt/core.js', '/gantt/engine.js', '/gantt/export.js'],
       });
+      if (opts && opts.returnHtml) return html;
       downloadStandalone(html, filename || safeStandaloneName(title, 'gantt'));
     }
 

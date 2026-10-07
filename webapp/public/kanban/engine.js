@@ -2391,7 +2391,8 @@
       input.click();
     }
 
-    async exportStandalone(filename) {
+    // opts.returnHtml: give back the page instead of downloading it (folder export).
+    async exportStandalone(filename, opts) {
       const title = (this.data.title || 'Kanban').slice(0, 80);
       const json = JSON.stringify(C.normalize(this.data), null, 2).replace(/</g, '\\u003c');
       const html = await buildStandaloneHtml({
@@ -2402,6 +2403,7 @@
         cssUrls: ['/kanban/engine.css'],
         jsUrls: ['/kanban/core.js', '/kanban/engine.js', '/kanban/export.js'],
       });
+      if (opts && opts.returnHtml) return html;
       downloadStandalone(html, filename || safeStandaloneName(title, 'kanban'));
     }
 
