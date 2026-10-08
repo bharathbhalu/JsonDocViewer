@@ -2492,7 +2492,18 @@
       el.remove();
       this._edit = null;
       if (host) host.classList.remove('is-editing');
-      if (!commit) return;
+      if (!commit) {
+        // Cancelled after a diagram paste already reformatted the shape:
+        // roll that back too (its undo step holds the state before).
+        if (pushed && this._undo.length) {
+          const vp = this.data.viewport;
+          this.data = this._undo.pop();
+          this.data.viewport = vp;
+          this.render();
+          this._syncToolbar();
+        }
+        return;
+      }
       if (link) {
         const c = this.data.connectors[id];
         if (c && next !== c.label) {

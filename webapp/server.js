@@ -17,7 +17,8 @@ if (!fs.existsSync(DATA_ROOT)) {
   fs.mkdirSync(DATA_ROOT, { recursive: true });
 }
 
-const GIT_ENV_ARGS = ['-c', 'user.email=docviewer@local', '-c', 'user.name=JsonDocViewer'];
+// --literal-pathspecs: file names are names, never patterns like "*.md".
+const GIT_ENV_ARGS = ['--literal-pathspecs', '-c', 'user.email=docviewer@local', '-c', 'user.name=JsonDocViewer'];
 const GIT_TIMEOUT_MS = 8000;
 let gitDisabled = false;
 
@@ -36,6 +37,58 @@ function git(args) {
   } finally {
     gitBusy = false;
   }
+}
+
+// Raw bytes from git (binary-safe, e.g. restoring an image).
+function gitBuffer(args) {
+  if (gitDisabled) throw new Error('git disabled');
+  if (gitBusy) throw new Error('git busy');
+  gitBusy = true;
+  try {
+    return execFileSync('git', [...GIT_ENV_ARGS, ...args], {
+      cwd: DATA_ROOT,
+      encoding: 'buffer',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+  } finally {
+    gitBusy = false;
+  }
+}
+
+// Commit ids from the client go into git arguments: only accept hex, so a
+// value like "--output=/some/file" can't be read as a git option.
+function checkHash(hash) {
+  const h = String(hash || '');
+  if (!/^[0-9a-f]{4,40}$/i.test(h)) throw new Error('Invalid commit id');
+  return h;
+}
+
+// A folder we can't read is skipped instead of failing the whole request.
+function safeReaddir(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return [];
+  }
+}
+
+// Write JSON via a temp file + rename so a crash never leaves half a file.
+function writeJsonAtomic(file, value) {
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+// Stream a file to the response; read errors end the response instead of
+// crashing the server.
+function sendFileStream(full, res) {
+  const stream = fs.createReadStream(full);
+  stream.on('error', (err) => {
+    if (!res.headersSent) res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Could not read file' });
+    else res.destroy(err);
+  });
+  stream.pipe(res);
 }
 
 function gitRepoOk() {
@@ -112,6 +165,32 @@ function commitFile(relPathOrPaths, message) {
   }
 }
 
+// Listen on this computer only (set HOST=0.0.0.0 to share on the network).
+const HOST = process.env.HOST || '127.0.0.1';
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+// Other websites must not be able to drive this API from the browser:
+// - Host must be this machine (blocks DNS-rebinding),
+// - state-changing requests must come from this app's own pages.
+app.use((req, res, next) => {
+  const host = String(req.headers.host || '').toLowerCase();
+  const hostname = host.replace(/:\d+$/, '');
+  if (LOOPBACK_HOSTS.has(HOST) && !LOOPBACK_HOSTS.has(hostname)) {
+    return res.status(403).json({ error: 'Forbidden host' });
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    const origin = req.headers.origin;
+    if (origin) {
+      let ok = false;
+      try { ok = new URL(origin).host.toLowerCase() === host; } catch (e) { ok = false; }
+      if (!ok) return res.status(403).json({ error: 'Cross-site request blocked' });
+    } else {
+      const site = req.headers['sec-fetch-site'];
+      if (site && site !== 'same-origin' && site !== 'none') return res.status(403).json({ error: 'Cross-site request blocked' });
+    }
+  }
+  next();
+});
+
 app.use(express.json({ limit: '40mb' }));
 // json() skips non-JSON types but still sets req.body = {} and does not
 // consume the stream. A 400 then leaves the unread POST in the socket
@@ -183,37 +262,44 @@ function normalizeTodos(raw) {
       });
     if (list.length) days[day] = list;
   });
-  return { version: 1, days };
+  const rev = Number.isInteger(raw && raw.rev) && raw.rev >= 0 ? raw.rev : 0;
+  return { version: 1, rev, days };
 }
 
 function readTodos() {
   try {
     return normalizeTodos(JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8')));
   } catch (e) {
-    return { version: 1, days: {} };
+    return { version: 1, rev: 0, days: {} };
   }
 }
 
 function writeTodos(store) {
   // Write to a temp file then rename, so a crash never leaves half a file.
-  const tmp = TODOS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8');
-  fs.renameSync(tmp, TODOS_FILE);
+  writeJsonAtomic(TODOS_FILE, store);
 }
 
 function readBookmarks() {
+  let text;
   try {
-    const raw = JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8'));
+    text = fs.readFileSync(FAVORITES_FILE, 'utf8');
+  } catch (e) {
+    return { categories: [], items: [] }; // no bookmarks yet
+  }
+  try {
+    const raw = JSON.parse(text);
     const store = normalizeBookmarks(raw);
     if (Array.isArray(raw)) writeBookmarks(store);
     return store;
   } catch (e) {
+    // Unreadable file: keep a copy instead of letting the next write wipe it.
+    try { fs.copyFileSync(FAVORITES_FILE, FAVORITES_FILE + '.corrupt-' + Date.now()); } catch (err) { /* ignore */ }
     return { categories: [], items: [] };
   }
 }
 
 function writeBookmarks(store) {
-  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(store, null, 2), 'utf8');
+  writeJsonAtomic(FAVORITES_FILE, store);
 }
 
 function bookmarksPayload(store) {
@@ -293,6 +379,7 @@ function buildZip(entries) {
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6); // names are UTF-8
     local.writeUInt16LE(0, 8);
     local.writeUInt16LE(time, 10);
     local.writeUInt16LE(date, 12);
@@ -305,6 +392,7 @@ function buildZip(entries) {
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x0800, 8); // names are UTF-8
     central.writeUInt16LE(0, 10);
     central.writeUInt16LE(time, 12);
     central.writeUInt16LE(date, 14);
@@ -326,7 +414,11 @@ function buildZip(entries) {
   return Buffer.concat([...locals, centralBuf, eocd]);
 }
 
-function readZip(buf) {
+// limits: { maxFiles, maxBytes } are enforced while inflating, so a small
+// archive that expands to gigabytes is refused before it uses the memory.
+function readZip(buf, limits) {
+  const maxFiles = (limits && limits.maxFiles) || 1000;
+  let budget = (limits && limits.maxBytes) || 200 * 1024 * 1024;
   if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
   let eocd = -1;
   const start = Math.max(0, buf.length - 22 - 0xFFFF);
@@ -354,16 +446,25 @@ function readZip(buf) {
     const dataStart = localOff + 30 + localNameLen + localExtra;
     const raw = buf.slice(dataStart, dataStart + comp);
     let data;
+    if (out.length >= maxFiles) throw new Error('Too many files in the zip (limit ' + maxFiles + ')');
     if (method === 0) data = Buffer.from(raw);
-    else if (method === 8) data = zlib.inflateRawSync(raw);
-    else throw new Error('Unsupported zip compression in ' + name);
+    else if (method === 8) {
+      try {
+        data = zlib.inflateRawSync(raw, { maxOutputLength: Math.max(1, budget) });
+      } catch (e) {
+        if (e && (e.code === 'ERR_BUFFER_TOO_LARGE' || /maxOutputLength|too large/i.test(e.message))) throw new Error('Zip contents are too large');
+        throw e;
+      }
+    } else throw new Error('Unsupported zip compression in ' + name);
+    budget -= data.length;
+    if (budget < 0) throw new Error('Zip contents are too large');
     out.push({ name, data });
   }
   return out;
 }
 
 function listExportFiles(dir, prefix, out) {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const entries = safeReaddir(dir);
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
@@ -484,7 +585,7 @@ function peekFileKind(full, name) {
 }
 
 function buildTree(dir) {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const entries = safeReaddir(dir);
   const children = [];
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
@@ -537,7 +638,7 @@ app.post('/api/ui-settings', (req, res) => {
       if (lf === null || lf === '') delete next.lastFile;
       else if (typeof lf === 'string') { resolveSafe(lf); next.lastFile = lf; }
     }
-    fs.writeFileSync(UI_SETTINGS_FILE, JSON.stringify(next, null, 2) + '\n');
+    writeJsonAtomic(UI_SETTINGS_FILE, next);
     res.json(next);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -603,7 +704,7 @@ app.get('/api/changes', (req, res) => {
 });
 
 function listAllFiles(dir, out) {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const entries = safeReaddir(dir);
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
@@ -794,15 +895,26 @@ app.get('/api/todos', (req, res) => {
   res.json(readTodos());
 });
 
-app.put('/api/todos', (req, res) => {
+// Saves carry the revision they were based on; a save based on an older
+// revision (another tab saved meanwhile) is refused with 409 so the client
+// can reload and re-apply its change instead of overwriting.
+function putTodos(req, res) {
   try {
-    const store = normalizeTodos(req.body);
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body; // sendBeacon sends text
+    const current = readTodos();
+    if (!body || !Number.isInteger(body.baseRev) || body.baseRev !== current.rev) {
+      return res.status(409).json({ error: 'To-dos changed elsewhere', current });
+    }
+    const store = normalizeTodos(body);
+    store.rev = current.rev + 1;
     writeTodos(store);
     res.json(store);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
-});
+}
+app.put('/api/todos', putTodos);
+app.post('/api/todos', putTodos);
 
 app.get('/api/favorites', (req, res) => {
   res.json(bookmarksPayload(readBookmarks()));
@@ -915,12 +1027,12 @@ app.get('/api/raw', (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       // An SVG opened directly must not run scripts.
       if (imageType === 'image/svg+xml') res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
-      fs.createReadStream(full).pipe(res);
+      sendFileStream(full, res);
       return;
     }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="' + path.basename(full).replace(/"/g, '') + '"');
-    fs.createReadStream(full).pipe(res);
+    sendFileStream(full, res);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -978,7 +1090,7 @@ app.get('/api/download', (req, res) => {
     if (!stat.isFile()) return res.status(404).json({ error: 'Not found' });
     res.setHeader('Content-Type', contentTypeFor(full));
     res.setHeader('Content-Disposition', 'attachment; filename="' + safeDownloadName(path.basename(full)) + '"');
-    fs.createReadStream(full).pipe(res);
+    sendFileStream(full, res);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -1036,7 +1148,7 @@ app.post('/api/import', (req, res) => {
         ? Buffer.from(String(item.content || ''), 'base64')
         : Buffer.from(String(item.content ?? ''), 'utf8');
       if (/\.zip$/i.test(rawName)) {
-        const members = readZip(data);
+        const members = readZip(data, { maxFiles: 100, maxBytes: 40 * 1024 * 1024 });
         for (const member of members) {
           const memberName = safeMemberName(member.name);
           if (!memberName || !allowedShareName(memberName)) continue;
@@ -1054,11 +1166,33 @@ app.post('/api/import', (req, res) => {
       incoming.push({ name: rawName, data });
     }
     if (!incoming.length) return res.status(400).json({ error: 'No files to import (hidden dotfiles are skipped).' });
-    const imported = [];
-    for (const file of incoming) {
+    // Work out and check every destination first, so an import either
+    // writes all of its files or none (no half-imports on error).
+    const planned = new Set();
+    const plan = incoming.map((file) => {
       const wanted = joinDest(dest, file.name);
-      const rel = overwrite ? wanted : uniqueRelPath(wanted);
+      let rel = overwrite ? wanted : uniqueRelPath(wanted);
+      // Two files with the same name in one import get distinct names too.
+      if (!overwrite && planned.has(rel)) {
+        const ext = path.posix.extname(wanted);
+        const stem = wanted.slice(0, wanted.length - ext.length);
+        for (let n = 2; planned.has(rel) || fs.existsSync(resolveSafe(rel)); n++) rel = `${stem}-${n}${ext}`;
+      }
+      planned.add(rel);
       const full = resolveSafe(rel);
+      if (fs.existsSync(full) && fs.statSync(full).isDirectory()) throw new Error('A folder already exists at ' + rel);
+      for (let dir = path.dirname(full); dir.startsWith(DATA_ROOT) && dir !== DATA_ROOT; dir = path.dirname(dir)) {
+        if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) throw new Error('A file is in the way of folder ' + path.relative(DATA_ROOT, dir));
+      }
+      return { file, rel, full };
+    });
+    const seenRel = new Set();
+    plan.forEach((p) => {
+      if (seenRel.has(p.rel)) throw new Error('Duplicate file in import: ' + p.rel);
+      seenRel.add(p.rel);
+    });
+    const imported = [];
+    for (const { file, rel, full } of plan) {
       fs.mkdirSync(path.dirname(full), { recursive: true });
       fs.writeFileSync(full, file.data);
       imported.push({ path: rel, kind: peekFileKind(full, path.basename(rel)) || undefined });
@@ -1168,10 +1302,19 @@ app.post('/api/move', (req, res) => {
     const fromFull = resolveSafe(from);
     const toFull = resolveSafe(to);
     if (!fs.existsSync(fromFull)) return res.status(404).json({ error: 'Source not found' });
-    if (fs.existsSync(toFull)) return res.status(400).json({ error: 'A file or folder already exists at the destination' });
+    // Renaming only the letter case ("Notes.md" -> "notes.md"): on macOS the
+    // destination "exists" because it is the same file; go via a temp name.
+    const caseOnly = fromFull !== toFull && fromFull.toLowerCase() === toFull.toLowerCase();
+    if (!caseOnly && fs.existsSync(toFull)) return res.status(400).json({ error: 'A file or folder already exists at the destination' });
     fs.mkdirSync(path.dirname(toFull), { recursive: true });
-    fs.renameSync(fromFull, toFull);
-    rewriteBookmarkPaths(from, to);
+    if (caseOnly) {
+      const tmp = fromFull + '.renaming-' + Date.now();
+      fs.renameSync(fromFull, tmp);
+      fs.renameSync(tmp, toFull);
+    } else fs.renameSync(fromFull, toFull);
+    // Bookmarks are stored as clean workspace paths ("a.md", not "./a.md").
+    const relOf = (full) => path.relative(DATA_ROOT, full).split(path.sep).join('/');
+    rewriteBookmarkPaths(relOf(fromFull), relOf(toFull));
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1199,7 +1342,7 @@ app.get('/api/version', (req, res) => {
     const hash = req.query.hash;
     resolveSafe(relPath);
     if (!hash) return res.status(400).json({ error: 'hash is required' });
-    const content = git(['show', `${hash}:${relPath}`]);
+    const content = git(['show', `${checkHash(hash)}:${relPath}`]);
     res.json({ content });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1211,7 +1354,7 @@ app.post('/api/restore', (req, res) => {
     const { path: relPath, hash } = req.body;
     if (!relPath || !hash) return res.status(400).json({ error: 'path and hash are required' });
     const full = resolveSafe(relPath);
-    const content = git(['show', `${hash}:${relPath}`]);
+    const content = gitBuffer(['show', `${checkHash(hash)}:${relPath}`]);
     fs.writeFileSync(full, content, 'utf8');
     const commit = commitFile(relPath, `Restore ${relPath} to ${hash.slice(0, 7)}`);
     res.json({ ok: true, content, commit });
@@ -1252,7 +1395,7 @@ app.get('/api/search', (req, res) => {
     const needle = q.toLowerCase();
 
     function walk(dir) {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const entries = safeReaddir(dir);
       for (const entry of entries) {
         if (entry.name.startsWith('.')) continue;
         const full = path.join(dir, entry.name);
@@ -1321,7 +1464,7 @@ app.get('/api/frames', (req, res) => {
   try {
     const items = [];
     (function walk(dir) {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      for (const entry of safeReaddir(dir)) {
         if (entry.name.startsWith('.')) continue;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) { walk(full); continue; }
@@ -1387,7 +1530,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: (err && err.message) || 'Server error' });
 });
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => {
   const actualPort = server.address().port;
   const url = `http://localhost:${actualPort}`;
   printLink(url);
@@ -1402,7 +1545,7 @@ server.keepAliveTimeout = 5000;
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.log(`Port ${PORT} is in use, picking a random free port instead...`);
-    const fallback = app.listen(0, () => {
+    const fallback = app.listen(0, HOST, () => {
       const actualPort = fallback.address().port;
       const url = `http://localhost:${actualPort}`;
       printLink(url);

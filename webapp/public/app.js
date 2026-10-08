@@ -4,6 +4,12 @@ let currentLang = null; // Monaco language id used for syntax highlighting
 let currentDataFormat = null; // 'json' | 'yaml' | null - drives validation & conversion
 let isDirty = false;
 let ignoreDirtyUntil = 0;
+// Bumped on every edit; a save only marks the file clean if no edit
+// happened while it was in flight.
+let editGen = 0;
+// 'history' (viewing an old version) or 'conversion' (unsaved JSON<->YAML
+// preview): the editor content isn't the file, so saving it is blocked.
+let previewMode = null;
 let openToken = 0;
 let saveInFlight = null;
 let autoSaveEnabled = true;
@@ -314,7 +320,9 @@ function markdownStatusDoc(message, isError) {
 // workspace path, or null for external / in-page links.
 function resolveWorkspaceLink(fromPath, href) {
   if (!href || /^([a-z][\w+.-]*:|#|\/\/)/i.test(href)) return null;
-  const clean = decodeURIComponent(href.split('#')[0].split('?')[0]);
+  const rawPath = href.split('#')[0].split('?')[0];
+  let clean;
+  try { clean = decodeURIComponent(rawPath); } catch (e) { clean = rawPath; } // e.g. "100%.md"
   if (!clean) return null;
   const parts = clean.startsWith('/') ? [] : (fromPath || '').split('/').slice(0, -1);
   clean.replace(/^\/+/, '').split('/').forEach((seg) => {
@@ -741,7 +749,7 @@ require(['vs/editor/editor.main'], function () {
 
 function scheduleAutoSave() {
   clearTimeout(autoSaveTimer);
-  if (!autoSaveEnabled || !isDirty || saveInFlight) return;
+  if (!autoSaveEnabled || !isDirty || saveInFlight || previewMode) return;
   autoSaveTimer = setTimeout(() => {
     if (!isDirty || saveInFlight) return;
     saveCurrentFile();
@@ -1135,6 +1143,8 @@ async function deleteItem(relPath, { endpoint, kind, confirmMessage }) {
   });
   if (currentPath && (currentPath === relPath || currentPath.startsWith(relPath + '/'))) {
     currentPath = null;
+    previewMode = null;
+    markClean();
     setWelcomeVisible(true);
     rememberLastFile(null);
     currentLang = null;
@@ -2103,7 +2113,7 @@ function destroyBoard() {
 }
 
 function onBoardChange() {
-  noteUnsaved();
+  noteUnsaved(true);
 }
 
 function ensureScript(src, flag, ready) {
@@ -2152,31 +2162,31 @@ function ensureStylesheet(href, flag) {
 
 function ensureMindmapAssets() {
   ensureStylesheet('/mindmap/engine.css?v=97', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=133', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  return ensureScript('/mindmap/engine.js?v=134', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=24', 'data-fl-css');
   return ensureScript('/flow/core.js?v=21', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=36', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=37', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function ensureKanbanAssets() {
   ensureStylesheet('/kanban/engine.css?v=2', 'data-kb-css');
-  return ensureScript('/kanban/core.js?v=1', 'data-kb-core', () => !!window.KanbanCore)
-    .then(() => ensureScript('/kanban/engine.js?v=4', 'data-kb-js', () => typeof window.KanbanEngine === 'function'));
+  return ensureScript('/kanban/core.js?v=2', 'data-kb-core', () => !!window.KanbanCore)
+    .then(() => ensureScript('/kanban/engine.js?v=5', 'data-kb-js', () => typeof window.KanbanEngine === 'function'));
 }
 
 function ensureGanttAssets() {
   ensureStylesheet('/gantt/engine.css?v=18', 'data-gt-css');
-  return ensureScript('/gantt/core.js?v=7', 'data-gt-core', () => !!window.GanttCore)
-    .then(() => ensureScript('/gantt/engine.js?v=23', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
+  return ensureScript('/gantt/core.js?v=8', 'data-gt-core', () => !!window.GanttCore)
+    .then(() => ensureScript('/gantt/engine.js?v=24', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
 }
 
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
   return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
-    .then(() => ensureScript('/slides/engine.js?v=9', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
+    .then(() => ensureScript('/slides/engine.js?v=10', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
 }
 
 // Slides render live windows of mindmap/flow frames and gantt charts, so
@@ -2198,15 +2208,18 @@ function getSaveContent() {
   return editor && editor.getValue ? editor.getValue() : '';
 }
 
+// After opening a file. Board engines emit change events while they load and
+// measure, so board changes are ignored for a moment (not editor typing).
 function markClean() {
   isDirty = false;
   ignoreDirtyUntil = Date.now() + 1500;
   clearTimeout(autoSaveTimer);
 }
 
-function noteUnsaved() {
-  if (!currentPath || isPdfPath(currentPath) || saveInFlight) return;
-  if (Date.now() < ignoreDirtyUntil) return;
+function noteUnsaved(fromBoard) {
+  if (!currentPath || isPdfPath(currentPath) || previewMode) return;
+  if (fromBoard && Date.now() < ignoreDirtyUntil) return;
+  editGen++;
   if (!isDirty) {
     isDirty = true;
     saveBtn.disabled = false;
@@ -2216,6 +2229,16 @@ function noteUnsaved() {
 }
 
 async function confirmLeaveIfDirty() {
+  if (previewMode === 'conversion') {
+    const ok = await showAsk({
+      title: 'Discard conversion?',
+      label: 'The converted text has not been saved. Use Save as to keep it.',
+      mode: 'confirm',
+      danger: true,
+      confirmLabel: 'Discard',
+    });
+    return !!ok;
+  }
   if (!isDirty) return true;
   try {
     const choice = await showAsk({
@@ -2314,6 +2337,7 @@ async function openPdf(relPath) {
   if (token !== openToken) return;
   destroyBoard();
   currentPath = relPath;
+  previewMode = null;
   setWelcomeVisible(false);
   rememberLastFile(relPath);
   currentLang = null;
@@ -2369,6 +2393,7 @@ async function openFile(relPath, lineToReveal, opts) {
   }
   destroyBoard();
   currentPath = relPath;
+  previewMode = null;
   setWelcomeVisible(false);
   rememberLastFile(relPath);
   currentLang = monacoLanguageForPath(relPath);
@@ -2581,7 +2606,7 @@ async function postFileContent(relPath, content) {
 }
 
 async function saveCurrentFile() {
-  if (!currentPath || isPdfPath(currentPath)) return false;
+  if (!currentPath || isPdfPath(currentPath) || previewMode) return false;
   if (saveInFlight) return saveInFlight;
   saveInFlight = (async () => {
     clearTimeout(autoSaveTimer);
@@ -2589,19 +2614,28 @@ async function saveCurrentFile() {
     await new Promise((r) => setTimeout(r, 0));
     if (boardEngine && typeof boardEngine.flushEdit === 'function') boardEngine.flushEdit();
     else if (boardEngine && typeof boardEngine.commitEdit === 'function') boardEngine.commitEdit();
+    const savedPath = currentPath;
+    const gen = editGen;
     const content = getSaveContent();
-    const { res, data } = await postFileContent(currentPath, content);
+    const { res, data } = await postFileContent(savedPath, content);
     if (!res.ok) {
       const msg = (data && data.error) || res.statusText || 'Save failed';
       setStatus('Save failed: ' + msg, 'dirty');
       alert('Save failed: ' + msg);
       return false;
     }
-    markClean();
+    if (currentPath === savedPath && editGen === gen) {
+      isDirty = false;
+      clearTimeout(autoSaveTimer);
+    } else if (currentPath === savedPath) {
+      // Edited while saving: still unsaved; autosave runs again below.
+      setStatus('Modified (unsaved)', 'dirty');
+    }
     runValidation();
     return true;
   })().finally(() => {
     saveInFlight = null;
+    if (isDirty && autoSaveEnabled) scheduleAutoSave();
   });
   return saveInFlight;
 }
@@ -2807,7 +2841,11 @@ historyBtn.addEventListener('click', async () => {
   const data = await res.json();
   historyList.innerHTML = '';
   if (!res.ok) {
-    historyList.innerHTML = `<div class="search-empty">Error: ${data.error}</div>`;
+    historyList.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.className = 'search-empty';
+    msg.textContent = 'Error: ' + (data.error || 'unknown');
+    historyList.appendChild(msg);
     return;
   }
   if (!data.commits || data.commits.length === 0) {
@@ -2853,12 +2891,20 @@ historyModal.addEventListener('click', (e) => {
 });
 
 async function viewVersion(hash) {
-  const res = await fetch(`/api/version?path=${encodeURIComponent(currentPath)}&hash=${encodeURIComponent(hash)}`);
+  // Unsaved edits would otherwise be autosaved (or "saved") as the old version.
+  if (!(await confirmLeaveIfDirty())) return;
+  const path = currentPath;
+  const token = ++openToken;
+  const res = await fetch(`/api/version?path=${encodeURIComponent(path)}&hash=${encodeURIComponent(hash)}`);
   const data = await res.json();
+  if (token !== openToken || currentPath !== path) return; // another file was opened meanwhile
   if (!res.ok) {
     alert('Failed to load version: ' + data.error);
     return;
   }
+  markClean();
+  previewMode = 'history';
+  commitBtn.disabled = true;
   const model = monaco.editor.createModel(data.content, currentLang);
   editor.setModel(model);
   editor.updateOptions({ readOnly: true });
@@ -2879,10 +2925,16 @@ async function viewVersion(hash) {
     boardEngine.setReadOnly(true);
     boardEngine.loadFromHtml(data.content);
     setViewMode('board');
+  } else if (boardEngine) {
+    // This old version isn't a board: show it as text, not the live board.
+    destroyBoard();
+    viewToggleBtn.classList.add('hidden');
+    setViewMode('code');
   }
 }
 
 backToLatestBtn.addEventListener('click', () => {
+  previewMode = null;
   editor.updateOptions({ readOnly: false });
   backToLatestBtn.classList.add('hidden');
   openFile(currentPath, undefined, { force: true });
@@ -2947,8 +2999,12 @@ convertBtn.addEventListener('click', async () => {
     currentDataFormat = to;
     const model = monaco.editor.createModel(data.output, to);
     editor.setModel(model);
-    isDirty = true;
-    saveBtn.disabled = false;
+    // A preview: Save would write the converted text into the original file.
+    markClean();
+    previewMode = 'conversion';
+    saveBtn.disabled = true;
+    commitBtn.disabled = true;
+    setStatus('Conversion preview — use Save as to keep it', 'dirty');
     currentPathEl.textContent = defaultPath + ' (unsaved conversion)';
     runValidation();
     return;

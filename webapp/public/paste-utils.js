@@ -29,6 +29,10 @@
     }).join('\n');
   }
 
+  // Markdown structure that a diagram never has: headings, lists, fences,
+  // table separator rows, links/images, emphasis.
+  const MARKDOWN_LINE = /^\s{0,3}(#{1,6}\s|[-*+]\s+\S|\d+[.)]\s+\S|>\s|```|~~~|\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$)|\[[^\]]+\]\([^)]+\)|\*\*\S/;
+
   // True when the text is a drawing made of characters, e.g.
   //   ┌────────┐      +--------+
   //   │ Client │──▶   | Client |-->
@@ -36,6 +40,12 @@
   function isDiagram(text) {
     const lines = normalize(text).split('\n').filter((l) => l.trim());
     if (lines.length < 2) return false;
+    // Text that already contains a code fence keeps its own fencing.
+    if (lines.some((l) => /^\s*(```|~~~)/.test(l))) return false;
+    // Mostly-markdown text (with a rule or table row here and there) is not
+    // a diagram: only treat it as one when markdown-looking lines are rare.
+    const md = lines.filter((l) => MARKDOWN_LINE.test(l)).length;
+    if (md >= 2 && md / lines.length > 0.2) return false;
     const boxLines = lines.filter((l) => BOX_CHARS.test(l)).length;
     if (boxLines >= 2) return true;
     // ASCII boxes / edges: +----+, |    |, arrows, and aligned gaps.

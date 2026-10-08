@@ -61,22 +61,48 @@
   }
 
   // Toggle a line prefix (heading, list, quote...) on every selected line.
-  function prefixLines(makePrefix, stripRe) {
+  // Toggle a block prefix on the selected lines. `ownRe` matches this exact
+  // prefix (all lines have it -> remove it); `stripRe` matches any competing
+  // prefix of the same family, which is replaced (H1 -> H2, bullet -> task).
+  // Indentation is kept.
+  function prefixLines(makePrefix, ownRe, stripRe) {
     const m = model();
     const sel = selection();
+    // A drag that ends at the very start of the next line doesn't include it.
+    const last = sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber ? sel.endLineNumber - 1 : sel.endLineNumber;
     const edits = [];
     let n = 0;
     let allHave = true;
-    for (let ln = sel.startLineNumber; ln <= sel.endLineNumber; ln++) {
-      if (!stripRe.test(m.getLineContent(ln))) allHave = false;
+    for (let ln = sel.startLineNumber; ln <= last; ln++) {
+      if (!ownRe.test(m.getLineContent(ln))) allHave = false;
     }
-    for (let ln = sel.startLineNumber; ln <= sel.endLineNumber; ln++) {
+    for (let ln = sel.startLineNumber; ln <= last; ln++) {
       const line = m.getLineContent(ln);
-      const body = line.replace(stripRe, '');
-      const next = allHave ? body : makePrefix(n++) + body;
+      const indent = (line.match(/^[ \t]*/) || [''])[0];
+      const body = line.replace(stripRe || ownRe, '').replace(/^[ \t]*/, '');
+      const next = allHave ? indent + body : indent + makePrefix(n++) + body;
       edits.push({ range: new monaco.Range(ln, 1, ln, line.length + 1), text: next });
     }
     edit(edits);
+  }
+
+  const HEADING = /^[ \t]*#{1,6}[ \t]+/;
+  const ANY_LIST = /^[ \t]*([-*+][ \t]+(\[[ xX]\][ \t]+)?|\d+[.)][ \t]+)/;
+
+  // Wrap the selected lines (or a placeholder) in a fenced code block.
+  function codeBlock() {
+    const m = model();
+    const sel = selection();
+    if (sel.isEmpty()) {
+      insertBlock('```\ncode\n```');
+      return;
+    }
+    const last = sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber ? sel.endLineNumber - 1 : sel.endLineNumber;
+    const lines = [];
+    for (let ln = sel.startLineNumber; ln <= last; ln++) lines.push(m.getLineContent(ln));
+    const range = new monaco.Range(sel.startLineNumber, 1, last, m.getLineMaxColumn(last));
+    const text = '```\n' + lines.join('\n') + '\n```';
+    edit([{ range, text }], new monaco.Selection(sel.startLineNumber + lines.length + 1, 4, sel.startLineNumber + lines.length + 1, 4));
   }
 
   // Insert a block on its own lines at the cursor (blank line around it).
@@ -132,22 +158,19 @@
 
   // ---------- toolbar ----------
   const ACTIONS = {
-    h1: () => prefixLines(() => '# ', /^#{1,6}\s+/),
-    h2: () => prefixLines(() => '## ', /^#{1,6}\s+/),
-    h3: () => prefixLines(() => '### ', /^#{1,6}\s+/),
+    h1: () => prefixLines(() => '# ', /^[ \t]*#[ \t]+/, HEADING),
+    h2: () => prefixLines(() => '## ', /^[ \t]*##[ \t]+/, HEADING),
+    h3: () => prefixLines(() => '### ', /^[ \t]*###[ \t]+/, HEADING),
     bold: () => wrap('**', '**', 'bold text'),
     italic: () => wrap('_', '_', 'italic text'),
     strike: () => wrap('~~', '~~', 'struck text'),
     code: () => wrap('`', '`', 'code'),
-    ul: () => prefixLines(() => '- ', /^\s*[-*+]\s+(?!\[[ xX]\])/),
-    ol: () => prefixLines((n) => (n + 1) + '. ', /^\s*\d+\.\s+/),
-    task: () => prefixLines(() => '- [ ] ', /^\s*[-*+]\s+\[[ xX]\]\s+/),
-    quote: () => prefixLines(() => '> ', /^>\s?/),
+    ul: () => prefixLines(() => '- ', /^[ \t]*[-*+][ \t]+(?!\[[ xX]\])/, ANY_LIST),
+    ol: () => prefixLines((n) => (n + 1) + '. ', /^[ \t]*\d+[.)][ \t]+/, ANY_LIST),
+    task: () => prefixLines(() => '- [ ] ', /^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+/, ANY_LIST),
+    quote: () => prefixLines(() => '> ', /^>[ \t]?/),
     hr: () => insertBlock('---'),
-    codeblock: () => {
-      const t = selectedText();
-      insertBlock('```\n' + (t || 'code') + '\n```');
-    },
+    codeblock: () => codeBlock(),
     table: () => openTableDialog(),
     link: () => openLinkDialog(),
     image: () => openImageDialog(),

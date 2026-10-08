@@ -204,15 +204,28 @@
       if (this._ro) this._ro.observe(this.els.stage);
       // 'Match app' theme: re-render when the app switches light/dark.
       this._themeObs = typeof MutationObserver === 'function' ? new MutationObserver(() => {
-        if (this.data.theme === 'auto') this.render();
+        if (this.data.theme !== 'auto') return;
+        // Don't rebuild the slide under the user's cursor: wait for the
+        // text field to lose focus.
+        const a = document.activeElement;
+        if (a && a.closest && a.closest('.sl-slide [data-field]') && this.container.contains(a)) {
+          a.addEventListener('blur', () => this.render(), { once: true });
+        } else this.render();
+        if (this._present) this._presentShow();
       }) : null;
       if (this._themeObs) this._themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     }
 
     // ---- public API used by the app ----
     loadFromHtml(html) {
+      // Dialogs and present mode point at the old slides: close / refresh them.
+      if (this.els && !this.els.modal.classList.contains('hidden')) this._closeModal();
       this.data = C.parseHtml(html) || C.createEmpty();
       this.current = Math.min(this.current, this.data.slides.length - 1);
+      if (this._present) {
+        this._present.index = Math.min(this._present.index, this.data.slides.length - 1);
+        this._presentShow();
+      }
       this._undo = [];
       this._redo = [];
       this._sources.clear();
@@ -797,7 +810,12 @@
           <div class="sl-modal-actions"><button type="button" class="sl-primary" data-use-url disabled>Use image</button></div>
         </div>`;
       this._openModal(title, body);
-      const pick = (img) => { this._closeModal(); onPick(img); };
+      const token = this._modalToken;
+      const pick = (img) => {
+        if (token !== this._modalToken || this.els.modal.classList.contains('hidden')) return; // cancelled meanwhile
+        this._closeModal();
+        onPick(img);
+      };
       const tabs = body.querySelectorAll('[data-tab]');
       let wsLoaded = false;
       const show = (name) => {
@@ -952,7 +970,7 @@
             if (!kind) throw new Error(path.split('/').pop() + ' is not a mindmap, flow or gantt');
             return { path, kind, content: data.content };
           });
-        p.catch(() => this._sources.delete(path));
+        p.catch(() => { if (this._sources.get(path) === p) this._sources.delete(path); });
         this._sources.set(path, p);
       }
       return this._sources.get(path);
@@ -998,7 +1016,7 @@
           if (src.kind === 'flow') return this._renderFlowFrame(src, frameId);
           return this._renderGanttView(src, frameId, isDark);
         })();
-        p.catch(() => this._frames.delete(key));
+        p.catch(() => { if (this._frames.get(key) === p) this._frames.delete(key); });
         this._frames.set(key, p);
       }
       return this._frames.get(key);
@@ -1147,7 +1165,10 @@
     }
 
     // ---- picker: file -> frame -> window ----
+    // Each opened dialog gets a token; async work started by a dialog checks
+    // it so a late result can't land after Cancel or in a newer dialog.
     _openModal(title, bodyEl, footEl) {
+      this._modalToken = (this._modalToken || 0) + 1;
       this.els.modalTitle.textContent = title;
       this.els.modalBody.innerHTML = '';
       this.els.modalFoot.innerHTML = '';
@@ -1268,12 +1289,14 @@
       const box = body.querySelector('.sl-win-box');
       const shade = body.querySelector('.sl-win-shade');
       let fr;
+      const token = this._modalToken;
       try {
         fr = await this._renderFrame(source.path, source.frameId);
       } catch (err) {
-        body.querySelector('.sl-win-loading').textContent = (err && err.message) || 'Could not render';
+        if (token === this._modalToken) body.querySelector('.sl-win-loading').textContent = (err && err.message) || 'Could not render';
         return;
       }
+      if (token !== this._modalToken) return; // this dialog was closed or replaced
       body.querySelector('.sl-win-loading').remove();
       img.src = svgDataUrl(fr.svg);
       const stage = body.querySelector('.sl-win-stage');
@@ -1615,10 +1638,12 @@
         for (const slot of slots) {
           const v = slide.visuals[Number(slot.getAttribute('data-vi'))];
           slot.innerHTML = '';
-          if (!v || !v.source) continue;
+          if (!v || (!v.source && !v.image)) continue;
           try {
-            const url = await this._renderVisual(v);
-            slot.innerHTML = `<img class="sl-visual-img" alt="" src="${url}">`;
+            // Image visuals keep their fit; _inlineMedia embeds them below.
+            const url = v.image ? imageUrl(v.image) : await this._renderVisual(v);
+            const fit = v.image && v.image.fit === 'cover' ? ' style="object-fit:cover"' : '';
+            slot.innerHTML = `<img class="sl-visual-img" alt=""${fit} src="${esc(url)}">`;
           } catch (err) {
             slot.innerHTML = `<span class="sl-empty-label">${esc((err && err.message) || 'Could not render')}</span>`;
           }

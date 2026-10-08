@@ -137,7 +137,14 @@
         return;
       }
       if (line) lines.push(line);
-      line = word;
+      // A single word wider than the card (URL, path) is split, not overflowed.
+      if (ctx.measureText(word).width > maxWidth) {
+        let chunk = '';
+        for (const ch of word) {
+          if (chunk && ctx.measureText(chunk + ch).width > maxWidth) { lines.push(chunk); chunk = ch; } else chunk += ch;
+        }
+        line = chunk;
+      } else line = word;
     });
     if (line) lines.push(line);
     const cap = maxLines || 8;

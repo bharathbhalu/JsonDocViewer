@@ -286,6 +286,10 @@
 
     const liveLabels = new Set(data.labels.map((l) => l.id));
     const liveMembers = new Set(data.members.map((m) => m.id));
+    // A saved filter on a label/person that no longer exists would hide every
+    // card with no way to clear it from the filter chips.
+    data.view.filters.labels = data.view.filters.labels.filter((id) => liveLabels.has(id));
+    if (data.view.filters.assignee && data.view.filters.assignee !== '__none' && !liveMembers.has(data.view.filters.assignee)) data.view.filters.assignee = '';
     const liveColumns = new Set(data.columns.map((c) => c.id));
     const fallbackColumn = data.columns.length ? data.columns[0].id : null;
 
@@ -421,7 +425,8 @@
     if (card.due === ref) return 'today';
     const soon = new Date(ref + 'T00:00:00');
     soon.setDate(soon.getDate() + 7);
-    const soonIso = soon.toISOString().slice(0, 10);
+    // Local calendar date (toISOString would shift it by the UTC offset).
+    const soonIso = soon.getFullYear() + '-' + String(soon.getMonth() + 1).padStart(2, '0') + '-' + String(soon.getDate()).padStart(2, '0');
     if (card.due <= soonIso) return 'soon';
     return 'later';
   }

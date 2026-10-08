@@ -308,9 +308,10 @@
       if (e.el.isConnected) this._writeEdit(e, readEditValue(e.el));
       const before = this._editBefore;
       this._teardownEdit();
-      if (before && before !== JSON.stringify(this.data)) this._pushHistory(before);
+      const changed = before && before !== JSON.stringify(this.data);
+      if (changed) this._pushHistory(before);
       this.render();
-      this._emit();
+      if (changed) this._emit();
     }
 
     _teardownEdit() {
@@ -443,6 +444,7 @@
       this.render();
       this._refreshDrawer();
       this._syncHistoryButtons();
+      this._emit(); // the board changed: let the app save it
       this._emit();
     }
 
@@ -747,6 +749,7 @@
       const d = this.drawerEls;
 
       this._onDocPointerDown = (ev) => {
+        this._ptrInside = this.els.root.contains(ev.target);
         if (!this.els.menu.contains(ev.target)) this._closeMenu();
       };
       this._onKeyDown = (ev) => this._handleKey(ev);
@@ -1496,7 +1499,11 @@
         this._drag = Object.assign({}, p, { proxy, placeholder });
       } else {
         p.el.classList.add('is-dragging');
-        this._drag = Object.assign({}, p, { proxy });
+        this._drag = Object.assign({}, p, {
+          proxy,
+          beforeOrder: this.data.columns.map((c) => c.id).join(','),
+          snapshot: JSON.stringify(this.data),
+        });
       }
     }
 
@@ -1581,8 +1588,22 @@
           this._mutate(() => {
             const card = this.data.cards[d.id];
             if (!card) return false;
-            if (laneId && laneId !== d.lane) this._applyLane(card, laneId);
-            return C.moveCard(this.data, d.id, toCol, beforeId);
+            const col = (this.data.columns || []).find((c) => c.id === toCol);
+            const sorted = col && col.sort && col.sort !== 'manual';
+            // A sorted column shows cards in sort order, so the drop position
+            // says nothing about the manual order: keep it (same column) or
+            // add at the end (other column).
+            if (sorted && card.columnId === toCol && !(laneId && laneId !== d.lane)) return false;
+            const sig = () => JSON.stringify(Object.values(this.data.cards).map((c) => [c.id, c.columnId, c.order, (c.labels || []).join('|'), c.assignee || '']));
+            const before = sig();
+            const prevUpdated = card.updatedAt;
+            if (laneId && laneId !== d.lane) this._applyLane(card, laneId, d.lane);
+            C.moveCard(this.data, d.id, toCol, sorted ? null : beforeId);
+            if (sig() === before) {
+              card.updatedAt = prevUpdated; // dropped where it was: not an edit
+              return false;
+            }
+            return true;
           });
         } else this.render();
       } else {
@@ -1613,14 +1634,19 @@
     }
 
     // Dropping into a swimlane sets the grouped field on the card.
-    _applyLane(card, laneId) {
+    // Moving a card to another swimlane changes the grouped field. For label
+    // lanes the card leaves the lane it came from (it doesn't keep both).
+    _applyLane(card, laneId, fromLane) {
       const by = this.data.view.groupBy;
       const value = laneId === '__none' ? null : laneId;
       if (by === 'assignee') card.assignee = value;
       else if (by === 'priority') card.priority = value;
       else if (by === 'label') {
         if (!value) card.labels = [];
-        else if (!card.labels.includes(value)) card.labels = card.labels.concat(value);
+        else {
+          const kept = fromLane && fromLane !== '__none' ? card.labels.filter((l) => l !== fromLane) : card.labels.slice();
+          card.labels = kept.includes(value) ? kept : kept.concat(value);
+        }
       }
     }
 
@@ -2354,7 +2380,7 @@
       if (!global.KanbanExport || stale) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/kanban/export.js?v=1';
+          s.src = '/kanban/export.js?v=2';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Export module failed to load'));
           document.body.appendChild(s);
@@ -2434,6 +2460,12 @@
       if (this.container.classList.contains('hidden') || this.container.closest('.hidden')) return;
       const active = document.activeElement;
       const typing = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
+      // Only handle keys meant for the board: focus inside it, or on the page
+      // after a click inside it; never while an app dialog is open.
+      const onPage = active === document.body || active === document.documentElement || !active;
+      const inside = (active && this.els.root.contains(active)) || (onPage && this._ptrInside !== false);
+      const appDialog = document.querySelector('.modal:not(.hidden), #md-dialog:not(.hidden), #export-progress:not(.hidden)');
+      if (!inside || appDialog) return;
 
       if (ev.key === 'Escape') {
         if (this.els.help.classList.contains('open')) {

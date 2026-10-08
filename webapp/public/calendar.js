@@ -64,15 +64,52 @@
     if (items.length) store.days[k] = items;
     else delete store.days[k];
   }
+  // Every change is kept as an operation until the server has it. If another
+  // tab saved first (409) or the list wasn't loaded yet, the operations are
+  // replayed on the server's latest list, so nothing overwrites anything.
+  let loaded = false;
+  let loadError = false;
+  let pendingOps = [];
+  let saving = false;
+  function replay(base) {
+    store = { version: 1, rev: base.rev || 0, days: JSON.parse(JSON.stringify(base.days || {})) };
+    pendingOps.forEach((op) => { try { op(); } catch (e) { /* stale op */ } });
+  }
   function save() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      fetch('/api/todos', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(store) })
-        .then((r) => { if (!r.ok) throw new Error('save failed'); })
-        .catch(() => { if (typeof setStatus === 'function') setStatus('Could not save to-dos', 'dirty'); });
-    }, 300);
+    saveTimer = setTimeout(flush, 300);
+  }
+  async function flush(attempt) {
+    if (!loaded || saving || !pendingOps.length) return;
+    saving = true;
+    const sent = pendingOps.length;
+    try {
+      const r = await fetch('/api/todos', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({}, store, { baseRev: store.rev || 0 })),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 409 && data.current && (attempt || 0) < 3) {
+        replay(data.current); // someone else saved: re-apply ours on top
+        saving = false;
+        render();
+        return flush((attempt || 0) + 1);
+      }
+      if (!r.ok) throw new Error(data.error || 'save failed');
+      pendingOps.splice(0, sent);
+      replay(data); // the server's list plus anything changed while saving
+    } catch (e) {
+      if (typeof setStatus === 'function') setStatus('Could not save to-dos — will retry', 'dirty');
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(flush, 5000);
+    } finally {
+      saving = false;
+    }
+    if (pendingOps.length) save();
   }
   function change(fn) {
+    pendingOps.push(fn);
     fn();
     save();
     render();
@@ -80,11 +117,29 @@
   async function load() {
     try {
       const r = await fetch('/api/todos', { cache: 'no-store' });
-      if (r.ok) store = await r.json();
-    } catch (e) { /* keep empty */ }
-    if (!store.days) store.days = {};
+      if (!r.ok) throw new Error('load failed');
+      const fresh = await r.json();
+      loaded = true;
+      loadError = false;
+      replay(fresh); // keeps anything added before the list arrived
+      if (pendingOps.length) save();
+    } catch (e) {
+      // Never save over the server's list if we couldn't read it.
+      loadError = true;
+      setTimeout(load, 10000);
+    }
     render();
   }
+  // Pick up changes saved from another tab when coming back to this one.
+  window.addEventListener('focus', () => {
+    if (loaded && !pendingOps.length && !saving) load();
+  });
+  // Don't lose the last change when the tab closes during the save delay.
+  window.addEventListener('pagehide', () => {
+    if (!loaded || !pendingOps.length || !navigator.sendBeacon) return;
+    const body = JSON.stringify(Object.assign({}, store, { baseRev: store.rev || 0 }));
+    navigator.sendBeacon('/api/todos', new Blob([body], { type: 'text/plain' }));
+  });
   function rememberUi() {
     try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) { /* ignore */ }
   }
@@ -172,6 +227,28 @@
   }
 
   function render() {
+    // Re-rendering (e.g. when a reminder fires) must not throw away what
+    // the user is typing.
+    const addIn = root.querySelector('.cal-add input');
+    const editIn = root.querySelector('.cal-edit');
+    const timeIn = root.querySelector('.cal-remind input[type="time"]');
+    const keep = {
+      add: addIn ? addIn.value : '',
+      addFocus: addIn && document.activeElement === addIn,
+      edit: editIn ? editIn.value : null,
+      time: timeIn ? timeIn.value : null,
+    };
+    renderNow();
+    const a = root.querySelector('.cal-add input');
+    if (a && keep.add) a.value = keep.add;
+    if (a && keep.addFocus) a.focus();
+    const e = root.querySelector('.cal-edit');
+    if (e && keep.edit != null) e.value = keep.edit;
+    const t = root.querySelector('.cal-remind input[type="time"]');
+    if (t && keep.time) t.value = keep.time;
+  }
+
+  function renderNow() {
     const today = todayKey();
     const openToday = list(today).filter((t) => !t.done).length;
     root.classList.toggle('is-open', ui.open);
@@ -197,6 +274,15 @@
     head.addEventListener('click', () => { ui.open = !ui.open; rememberUi(); render(); });
     root.appendChild(head);
     if (!ui.open) return;
+    if (loadError) {
+      const bar = el('div', 'cal-carry');
+      bar.appendChild(el('span', null, 'Couldn\'t load to-dos. Changes are kept and saved once it loads.'));
+      const retry = el('button', null, 'Retry');
+      retry.type = 'button';
+      retry.addEventListener('click', load);
+      bar.appendChild(retry);
+      root.appendChild(bar);
+    }
 
     root.appendChild(renderMonth(today));
     root.appendChild(renderModes());
@@ -436,6 +522,7 @@
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const v = inp.value;
+      inp.value = ''; // so the re-render doesn't restore it
       addTodo(selected, v);
       requestAnimationFrame(() => {
         const next = root.querySelector('.cal-add input');
@@ -541,12 +628,21 @@
         if (when && !t.done && !t.fired && when.getTime() <= now && now - when.getTime() < 24 * 3600000) due.push({ k, t, when });
       });
     });
-    if (!due.length) return;
+    if (!loaded || !due.length) return;
+    // Only one open tab shows a given reminder.
+    const mine = due.filter(({ t, when }) => {
+      const key = 'docviewer-rem:' + t.id + ':' + when.getTime();
+      try {
+        if (localStorage.getItem(key)) return false;
+        localStorage.setItem(key, String(Date.now()));
+      } catch (e) { /* no storage: fire anyway */ }
+      return true;
+    });
     change(() => due.forEach(({ k, t }) => {
       setList(k, list(k).map((x) => (x.id === t.id ? Object.assign({}, x, { fired: true }) : x)));
     }));
-    due.forEach(({ k, t, when }) => { showToast(k, t, when); notify(k, t, when); });
-    chime();
+    mine.forEach(({ k, t, when }) => { showToast(k, t, when); notify(k, t, when); });
+    if (mine.length) chime();
   }
   setInterval(checkReminders, 15 * 1000);
 

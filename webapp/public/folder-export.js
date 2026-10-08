@@ -157,7 +157,10 @@
         return;
       }
       const t = boardTargetOf(p, href);
-      const to = linkFor(ws, t ? t.ref : '');
+      // Keep "#section" anchors (board refs like #frame= mean nothing there).
+      const hash = !t && href.includes('#') ? href.slice(href.indexOf('#')) : '';
+      const base = linkFor(ws, t ? t.ref : '');
+      const to = base && hash && !base.startsWith('#') ? base + hash : base;
       if (to) a.setAttribute('href', to);
       else {
         const span = document.createElement('span');
@@ -227,8 +230,13 @@
             copy.push(f.path); // fall back to the raw file
           }
         } else if (kind === 'markdown') {
-          const source = await readFile(f.path);
-          const body = await markdownBody(f.path, source, (ws) => (siteOf.has(ws) ? relUrl(sp, siteOf.get(ws)) : null));
+          let body;
+          try {
+            const source = await readFile(f.path);
+            body = await markdownBody(f.path, source, (ws) => (siteOf.has(ws) ? relUrl(sp, siteOf.get(ws)) : null));
+          } catch (err) {
+            body = `<p class="md-missing">Could not export this file: ${esc((err && err.message) || err)}</p>`;
+          }
           const name = f.path.split('/').pop();
           pages.push({
             path: sp,
@@ -332,7 +340,7 @@ html, body { background: #fff !important; color: #1f2328; }
       if (!window.KanbanExport) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/kanban/export.js?v=1';
+          s.src = '/kanban/export.js?v=2';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Kanban export failed to load'));
           document.body.appendChild(s);
@@ -429,8 +437,11 @@ html, body { background: #fff !important; color: #1f2328; }
         await Promise.all([...doc.images].map((img) => (img.decode ? img.decode().catch(() => {}) : Promise.resolve())));
         const prevTitle = document.title;
         document.title = title; // default file name in "Save as PDF"
+        let cleaned = false;
         const cleanup = () => {
-          document.title = prevTitle;
+          if (cleaned) return;
+          cleaned = true;
+          if (document.title === title) document.title = prevTitle;
           setTimeout(() => frame.remove(), 1000);
           resolve();
         };

@@ -3794,6 +3794,23 @@
       child.parentId = parent.id;
       child.dir = side;
       child.userPlaced = true;
+      // Its own children on the side facing the new parent would grow back
+      // into it: mirror those branches to the outer side.
+      const facing = OPP[side];
+      if (side === 'left' || side === 'right') {
+        const cx0 = child.x + child.w / 2;
+        this.childrenOf(child.id, facing).forEach((k) => {
+          k.dir = side;
+          this.descendants(k.id, true).forEach((d) => {
+            if (d.id !== k.id && (d.dir === 'left' || d.dir === 'right')) d.dir = OPP[d.dir];
+            d.x = 2 * cx0 - (d.x + d.w);
+          });
+        });
+        if (child.collapsedDirs && child.collapsedDirs[facing]) {
+          child.collapsedDirs[side] = child.collapsedDirs[side] || child.collapsedDirs[facing];
+          child.collapsedDirs[facing] = false;
+        }
+      }
       child.order = this.childrenOf(parent.id, side).filter((s) => s.id !== child.id).length;
       this.data.rootIds = this.data.rootIds.filter((rid) => rid !== child.id);
       if (!child.style) child.style = defaultStyle();
@@ -4011,6 +4028,8 @@
         h0: n.h,
         fx: n.x,
         fy: n.y,
+        // Resizing can move the node's children; kept for pinch rollback.
+        origins: this._snapshotSubtree(n.id),
       };
       const box = this._paintNodeBox(n);
       if (box) box.classList.add('is-resizing');
@@ -4497,14 +4516,27 @@
     }
 
     _convertToDiagram(id) {
-      this.commitEdit();
+      const n0 = this.data.nodes[id];
+      if (!n0 || this.isNodeLocked(n0)) { this.commitEdit(); return; }
+      // Commit + convert as ONE undo step: only the final emit records history.
+      this._historyIgnore = true;
+      try {
+        this.commitEdit();
+      } finally {
+        this._historyIgnore = false;
+      }
       const n = this.data.nodes[id];
       if (!n) return;
+      this._historyIgnore = true;
       n.language = 'plaintext';
       if (!n.format) n.format = defaultFormat();
       n.format.align = 'left';
       n.userSized = false;
-      this.setNodeType(id, 'code');
+      try {
+        this.setNodeType(id, 'code');
+      } finally {
+        this._historyIgnore = false;
+      }
       this._fitAutoNode(n);
       this._relayoutAround([n]);
       this.selectOnly(id);
@@ -5940,6 +5972,7 @@
       } else if (d.kind === 'resize-node') {
         const n = this.data.nodes[d.id];
         if (n) Object.assign(n, { x: d.fx, y: d.fy, w: d.w0, h: d.h0 });
+        restore(d.origins);
       } else if (d.origins) {
         restore(d.origins);
       } else {

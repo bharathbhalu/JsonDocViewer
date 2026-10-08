@@ -534,6 +534,7 @@
       const e = this.els;
       const d = this.drawer;
       this._onDocPointerDown = (ev) => {
+        this._ptrInside = this.els.root.contains(ev.target);
         if (!e.menu.contains(ev.target)) this._closeMenu();
       };
       this._onKey = (ev) => this._handleKey(ev);
@@ -1784,7 +1785,8 @@
       const origin = this.els.timeBody.getBoundingClientRect();
       const x2 = ev.clientX - origin.left + this.els.timeClip.scrollLeft;
       const y2 = ev.clientY - origin.top + this.els.timeClip.scrollTop;
-      const tasks = C.visibleTasks(this.data);
+      // Rows on screen follow the active filters, so use the same list.
+      const tasks = this._shownTasks();
       const index = tasks.findIndex((t) => t.id === this._drag.id);
       const y1 = index * ROW + ROW / 2;
       svg.innerHTML = '<path d="' + depPath(from.x2, y1, x2, y2) + '"></path>';
@@ -2390,7 +2392,7 @@
       if (!global.GanttExport || stale) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/gantt/export.js?v=10';
+          s.src = '/gantt/export.js?v=11';
           s.onload = () => resolve();
           s.onerror = () => reject(new Error('Could not load export'));
           document.body.appendChild(s);
@@ -2442,6 +2444,11 @@
       if (this.container.classList.contains('hidden') || (this.container.closest && this.container.closest('.hidden'))) return;
       const active = document.activeElement;
       const typing = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.isContentEditable);
+      // Only handle keys meant for the chart: focus inside it, or on the page
+      // after a click inside it; never while an app dialog is open.
+      const onPage = active === document.body || active === document.documentElement || !active;
+      const inside = (active && this.els.root.contains(active)) || (onPage && this._ptrInside !== false);
+      if (!inside || document.querySelector('.modal:not(.hidden), #md-dialog:not(.hidden), #export-progress:not(.hidden)')) return;
       if (ev.key === 'Escape') {
         if (this.els.help.classList.contains('open')) {
           this.els.help.classList.remove('open');

@@ -35,8 +35,14 @@
     return new Date().toISOString();
   }
 
+  // A real calendar date in YYYY-MM-DD (rejects e.g. 2026-02-30).
   function isDateIso(v) {
-    return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+    const y = Number(v.slice(0, 4));
+    const m = Number(v.slice(5, 7));
+    const d = Number(v.slice(8, 10));
+    const t = new Date(Date.UTC(y, m - 1, d));
+    return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
   }
 
   function isHex(v) {
@@ -386,8 +392,9 @@
       if (today < spanStart) remaining = spanDays;
       else if (today > spanEnd) elapsed = spanDays;
       else {
+        // Today counts as remaining, so elapsed + remaining = span.
         elapsed = diffDays(spanStart, today);
-        remaining = diffDays(today, spanEnd);
+        remaining = diffDays(today, spanEnd) + 1;
       }
     }
     const labels = labelsList(data).map((lab) => ({
@@ -560,19 +567,42 @@
     });
   }
 
+  // Would `targetId` depending on `fromId` create a cycle? Scheduling also
+  // flows through the hierarchy: a task inherits its ancestors' deps and a
+  // summary spans its children, so both count, and reaching the target's
+  // ancestors or descendants is as bad as reaching the target.
   function depReaches(data, fromId, targetId) {
+    const targets = new Set([targetId]);
+    for (let p = data.tasks[targetId]; p && p.parentId && !targets.has(p.parentId); p = data.tasks[p.parentId]) targets.add(p.parentId);
+    const addDesc = (id) => childrenOf(data, id).forEach((c) => { if (!targets.has(c.id)) { targets.add(c.id); addDesc(c.id); } });
+    addDesc(targetId);
     const stack = [fromId];
     const seen = new Set();
     while (stack.length) {
       const id = stack.pop();
-      if (id === targetId) return true;
+      if (targets.has(id)) return true;
       if (seen.has(id)) continue;
       seen.add(id);
       const t = data.tasks[id];
       if (!t) continue;
       (t.deps || []).forEach((d) => stack.push(d));
+      for (let a = t.parentId ? data.tasks[t.parentId] : null, guard = 0; a && guard < 1000; a = a.parentId ? data.tasks[a.parentId] : null, guard++) {
+        (a.deps || []).forEach((d) => stack.push(d));
+      }
+      childrenOf(data, id).forEach((c) => stack.push(c.id));
     }
     return false;
+  }
+
+  // Dependencies between a task and its own ancestor/descendant make no
+  // sense (the summary spans the child) and would keep pushing dates.
+  function dropHierarchyDeps(data) {
+    taskValues(data).forEach((task) => {
+      task.deps = (task.deps || []).filter((d) => {
+        if (!data.tasks[d] || d === task.id) return false;
+        return !isAncestor(data, task.id, d) && !isAncestor(data, d, task.id);
+      });
+    });
   }
 
   function rollup(data) {
@@ -856,6 +886,7 @@
     t.parentId = prev.id;
     prev.collapsed = false;
     t.order = childrenOf(data, prev.id).length;
+    dropHierarchyDeps(data);
     reindexGroups(data);
     settle(data);
     return true;
@@ -1031,8 +1062,19 @@
   }
 
   function csvCell(v) {
-    const s = String(v == null ? '' : v);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    let s = String(v == null ? '' : v);
+    // Spreadsheets run cells starting with = + - @ as formulas: neutralise
+    // text cells that do (numbers like -3 are left alone).
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = "'" + s;
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  // Every task in outline order, including ones inside collapsed groups.
+  function allTasksInOrder(data) {
+    const out = [];
+    const walk = (parentId) => childrenOf(data, parentId).forEach((t) => { out.push(t); walk(t.id); });
+    walk(null);
+    return out;
   }
 
   const CSV_HEADERS = ['Title', 'Start', 'End', 'Progress', 'Milestone', 'Parent', 'Predecessors', 'Assignee', 'Priority', 'Labels', 'Color', 'Notes'];
@@ -1040,7 +1082,7 @@
   function toCsv(data) {
     const rows = [CSV_HEADERS.join(',')];
     const nameOf = (id) => (data.tasks[id] ? data.tasks[id].title : '');
-    visibleTasks(data).forEach((task) => {
+    allTasksInOrder(data).forEach((task) => {
       const parent = task.parentId ? nameOf(task.parentId) : '';
       const preds = (task.deps || []).map(nameOf).filter(Boolean).join('; ');
       rows.push([

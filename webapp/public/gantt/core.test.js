@@ -274,6 +274,43 @@ test('blank template is a single task', () => {
   assert.equal(Object.keys(data.tasks).length, 1);
 });
 
+test('indenting under a predecessor drops that dependency (no date jump)', () => {
+  const C = GanttCore;
+  const data = C.createEmpty();
+  const a = C.addTask(data, { title: 'A', start: '2026-01-05', end: '2026-01-07' });
+  const b = C.addTask(data, { title: 'B', start: '2026-01-08', end: '2026-01-09' });
+  assert.ok(C.linkDep(data, b.id, a.id));
+  assert.ok(C.indentTask(data, b.id));
+  assert.deepEqual(data.tasks[b.id].deps, []);
+  assert.ok(data.tasks[a.id].start < '2026-02-01', 'A stayed in January: ' + data.tasks[a.id].start);
+});
+
+test('dependency cycles through a summary task are refused', () => {
+  const C = GanttCore;
+  const data = C.createEmpty();
+  const p = C.addTask(data, { title: 'P', start: '2026-01-05', end: '2026-01-07' });
+  const c = C.addTask(data, { title: 'C', start: '2026-01-05', end: '2026-01-06', parentId: p.id });
+  const x = C.addTask(data, { title: 'X', start: '2026-01-08', end: '2026-01-09' });
+  assert.ok(C.linkDep(data, x.id, c.id)); // X after C: fine
+  assert.equal(C.linkDep(data, p.id, x.id), false); // P after X would loop through C
+});
+
+test('invalid calendar dates are rejected', () => {
+  assert.equal(GanttCore.isDateIso('2026-02-30'), false);
+  assert.equal(GanttCore.isDateIso('2026-02-28'), true);
+});
+
+test('CSV export includes tasks inside collapsed groups and blocks formulas', () => {
+  const C = GanttCore;
+  const data = C.createEmpty();
+  const p = C.addTask(data, { title: 'Group', start: '2026-01-05', end: '2026-01-07' });
+  C.addTask(data, { title: '=HYPERLINK("x")', start: '2026-01-05', end: '2026-01-06', parentId: p.id });
+  data.tasks[p.id].collapsed = true;
+  const csv = C.toCsv(data);
+  assert.ok(csv.includes("'=HYPERLINK"), csv);
+  assert.equal(csv.trim().split('\n').length, 3);
+});
+
 let failed = 0;
 tests.forEach((t) => {
   try {
