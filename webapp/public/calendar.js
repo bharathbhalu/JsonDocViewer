@@ -45,6 +45,12 @@
     if (t.snooze) return '⏰ ' + hhmm(fromStamp(t.snooze)) + ' (snoozed)';
     return '⏰ ' + t.time;
   }
+  // Trailing repeat word: "Standup @9:30 weekdays", "Water plants weekly".
+  const REPEAT_WORDS = { daily: 'daily', 'every day': 'daily', weekdays: 'weekdays', 'every weekday': 'weekdays', weekly: 'weekly', 'every week': 'weekly', monthly: 'monthly', 'every month': 'monthly', yearly: 'yearly', 'every year': 'yearly' };
+  function parseRepeatSuffix(raw) {
+    const m = String(raw).match(/^(.*\S)\s+(daily|weekdays|weekly|monthly|yearly|every (?:day|weekday|week|month|year))\s*$/i);
+    return m ? { text: m[1], repeat: REPEAT_WORDS[m[2].toLowerCase()] } : { text: raw, repeat: null };
+  }
   // "Call Sam @14:30" / "@9" / "@2pm" / "@9:15am" -> { text, time }
   function parseTimeSuffix(raw) {
     const m = String(raw).match(/^(.*\S)\s+@\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i);
@@ -63,6 +69,83 @@
   function setList(k, items) {
     if (items.length) store.days[k] = items;
     else delete store.days[k];
+  }
+
+  // ---------- repeating to-dos ----------
+  // Stored once on their first day; occurrences are worked out per day.
+  const REPEAT_LABEL = { daily: 'Every day', weekdays: 'Weekdays', weekly: 'Every week', monthly: 'Every month', yearly: 'Every year' };
+  function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+  function occursOn(t, startK, k) {
+    if (k < startK || (t.until && k > t.until) || (t.exDates || []).includes(k)) return false;
+    const s = fromKey(startK);
+    const d = fromKey(k);
+    // A 31st repeats on the last day of shorter months.
+    const sameDate = () => d.getDate() === Math.min(s.getDate(), daysInMonth(d.getFullYear(), d.getMonth()));
+    switch (t.repeat) {
+      case 'daily': return true;
+      case 'weekdays': return d.getDay() >= 1 && d.getDay() <= 5;
+      case 'weekly': return d.getDay() === s.getDay();
+      case 'monthly': return sameDate();
+      case 'yearly': return d.getMonth() === s.getMonth() && sameDate();
+      default: return false;
+    }
+  }
+  function series() {
+    const out = [];
+    Object.keys(store.days).forEach((k) => list(k).forEach((t) => { if (t.repeat) out.push({ k, t }); }));
+    return out;
+  }
+  // What shows on a day: its one-off to-dos plus repeating ones falling on it
+  // (with that day's done / fired / snooze state; _series = its first day).
+  function itemsOn(k) {
+    const own = list(k).filter((t) => !t.repeat);
+    const reps = series().filter(({ k: sk, t }) => occursOn(t, sk, k)).map(({ k: sk, t }) => Object.assign({}, t, {
+      done: (t.doneDates || []).includes(k),
+      fired: (t.firedDates || []).includes(k),
+      snooze: t.snooze && t.snooze.slice(0, 10) === k ? t.snooze : undefined,
+      _series: sk,
+    }));
+    return own.concat(reps);
+  }
+  function findItem(id) {
+    for (const k of Object.keys(store.days)) {
+      const t = list(k).find((x) => x.id === id);
+      if (t) return { k, t };
+    }
+    return null;
+  }
+  function patchItem(id, fn) {
+    const loc = findItem(id);
+    if (loc) setList(loc.k, list(loc.k).map((x) => (x.id === id ? fn(Object.assign({}, x)) : x)));
+  }
+  function setDay(x, field, k, on) {
+    const set = new Set(x[field] || []);
+    if (on) set.add(k); else set.delete(k);
+    x[field] = [...set].sort();
+  }
+  function isRepeating(id) {
+    const loc = findItem(id);
+    return !!(loc && loc.t.repeat);
+  }
+  // Turn repetition on/off/change it. Turning it on keeps the to-do on the
+  // day it is stored on, which becomes the first day of the series.
+  function setRepeat(id, repeat) {
+    change(() => patchItem(id, (x) => {
+      if (repeat) {
+        if (!x.repeat) {
+          const loc = findItem(id);
+          x.doneDates = x.done && loc ? [loc.k] : [];
+          x.exDates = [];
+          x.firedDates = [];
+          x.done = false;
+          delete x.fired;
+        }
+        x.repeat = repeat;
+      } else if (x.repeat) {
+        delete x.repeat; delete x.doneDates; delete x.exDates; delete x.firedDates; delete x.until;
+      }
+      return x;
+    }));
   }
   // Every change is kept as an operation until the server has it. If another
   // tab saved first (409) or the list wasn't loaded yet, the operations are
@@ -146,21 +229,59 @@
 
   // ---------- actions ----------
   function addTodo(k, text) {
-    const parsed = parseTimeSuffix(String(text || '').trim());
+    const rep1 = parseRepeatSuffix(String(text || '').trim());
+    const parsed = parseTimeSuffix(rep1.text.trim());
     const t = parsed.text.trim();
     if (!t) return;
     const item = { id: uid(), text: t.slice(0, 2000), done: false };
     if (parsed.time) { item.time = parsed.time; askNotifyPermission(); }
+    if (rep1.repeat) Object.assign(item, { repeat: rep1.repeat, doneDates: [], exDates: [], firedDates: [] });
     change(() => setList(k, list(k).concat(item)));
   }
+  // k is the day shown; for a repeating to-do, done/fired apply to that day
+  // only, the text to every day.
   function updateTodo(k, id, patch) {
+    if (isRepeating(id)) {
+      change(() => patchItem(id, (x) => {
+        if ('done' in patch) setDay(x, 'doneDates', k, patch.done);
+        if ('fired' in patch) setDay(x, 'firedDates', k, patch.fired);
+        if ('text' in patch) x.text = patch.text;
+        return x;
+      }));
+      return;
+    }
     change(() => setList(k, list(k).map((t) => (t.id === id ? Object.assign({}, t, patch) : t))));
   }
-  function removeTodo(k, id) {
+  async function removeTodo(k, id) {
+    const loc = findItem(id);
+    if (loc && loc.t.repeat && typeof showAsk === 'function') {
+      const choice = await showAsk({
+        title: 'Delete repeating to-do',
+        label: '“' + loc.t.text.slice(0, 80) + '” repeats ' + (REPEAT_LABEL[loc.t.repeat] || '').toLowerCase() + '.',
+        mode: 'leave',
+        confirmLabel: 'Only this day',
+        discardLabel: 'Every day',
+      });
+      if (choice === 'save') change(() => patchItem(id, (x) => { setDay(x, 'exDates', k, true); return x; }));
+      else if (choice === 'discard') change(() => setList(loc.k, list(loc.k).filter((t) => t.id !== id)));
+      return;
+    }
     change(() => setList(k, list(k).filter((t) => t.id !== id)));
   }
   // Set a reminder at an exact moment; moves the to-do if that's another day.
-  function remindAt(k, id, when) {
+  // For a repeating to-do: an explicit time applies to every day; a quick
+  // "+15 min" style reminder (oneTime) only to the day shown.
+  function remindAt(k, id, when, oneTime) {
+    if (isRepeating(id)) {
+      change(() => patchItem(id, (x) => {
+        if (oneTime) x.snooze = stamp(when);
+        else { x.time = hhmm(when); delete x.snooze; }
+        setDay(x, 'firedDates', oneTime ? keyOf(when) : k, false);
+        return x;
+      }));
+      askNotifyPermission();
+      return;
+    }
     const toK = keyOf(when);
     const item = list(k).find((t) => t.id === id);
     if (!item) return;
@@ -176,6 +297,10 @@
     askNotifyPermission();
   }
   function clearReminder(k, id) {
+    if (isRepeating(id)) {
+      change(() => patchItem(id, (x) => { delete x.time; delete x.snooze; return x; }));
+      return;
+    }
     change(() => setList(k, list(k).map((t) => {
       if (t.id !== id) return t;
       const n = Object.assign({}, t);
@@ -185,11 +310,15 @@
   }
   function snooze(k, id, minutes) {
     const when = new Date(Date.now() + minutes * 60000);
+    if (isRepeating(id)) {
+      change(() => patchItem(id, (x) => { x.snooze = stamp(when); setDay(x, 'firedDates', k, false); return x; }));
+      return;
+    }
     change(() => setList(k, list(k).map((t) => (t.id === id ? Object.assign({}, t, { snooze: stamp(when), fired: false }) : t))));
   }
 
   function moveTodo(fromK, id, toK) {
-    if (fromK === toK) return;
+    if (fromK === toK || isRepeating(id)) return; // repeating ones follow their rule
     const item = list(fromK).find((t) => t.id === id);
     if (!item) return;
     change(() => {
@@ -202,7 +331,7 @@
     const today = todayKey();
     const out = [];
     Object.keys(store.days).forEach((k) => {
-      if (k < today) list(k).forEach((t) => { if (!t.done) out.push({ k, t }); });
+      if (k < today) list(k).forEach((t) => { if (!t.done && !t.repeat) out.push({ k, t }); });
     });
     return out;
   }
@@ -250,7 +379,7 @@
 
   function renderNow() {
     const today = todayKey();
-    const openToday = list(today).filter((t) => !t.done).length;
+    const openToday = itemsOn(today).filter((t) => !t.done).length;
     root.classList.toggle('is-open', ui.open);
     root.innerHTML = '';
 
@@ -298,6 +427,13 @@
     }
     root.appendChild(renderList(today));
     root.appendChild(renderAdd());
+    if (window.openDaily) {
+      const daily = el('button', 'cal-daily', '🔥 Habits & standup · ' + niceDate(selected));
+      daily.type = 'button';
+      daily.title = 'Check off habits and write the standup for the selected day; download by day/week/month/year';
+      daily.addEventListener('click', () => window.openDaily(selected));
+      root.appendChild(daily);
+    }
   }
 
   function renderMonth(today) {
@@ -325,7 +461,7 @@
     for (let i = 0; i < 42; i++) {
       const d = addDays(start, i);
       const k = keyOf(d);
-      const items = list(k);
+      const items = itemsOn(k);
       const cell = el('button', 'cal-day', String(d.getDate()));
       cell.type = 'button';
       cell.dataset.day = k;
@@ -406,7 +542,7 @@
     const days = daysInRange();
     let total = 0;
     days.forEach((k) => {
-      const items = list(k);
+      const items = itemsOn(k);
       // Week view lists every day; month view only days with to-dos.
       if (ui.mode === 'month' && !items.length) return;
       if (ui.mode !== 'day') {
@@ -428,7 +564,7 @@
 
   function renderItem(k, t) {
     const row = el('div', 'cal-item' + (t.done ? ' is-done' : ''));
-    row.draggable = editing !== t.id;
+    row.draggable = editing !== t.id && !t.repeat; // repeating ones follow their rule
     row.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/x-todo', k + '|' + t.id);
       e.dataTransfer.effectAllowed = 'move';
@@ -466,6 +602,11 @@
       row.appendChild(text);
     }
     const due = dueAt(k, t);
+    if (t.repeat) {
+      const r = el('span', 'cal-repeat', '↻');
+      r.title = REPEAT_LABEL[t.repeat] || 'Repeats';
+      row.insertBefore(r, row.querySelector('.cal-text, .cal-edit'));
+    }
     const bell = el('button', 'cal-bell' + (due ? ' has-time' : '') + (due && t.fired && !t.done ? ' is-late' : ''), due ? timeLabel(t) : '⏰');
     bell.type = 'button';
     bell.title = due ? 'Reminder ' + (t.fired ? 'went off' : 'set') + ' for ' + hhmm(due) + ' — click to change' : 'Add a reminder';
@@ -486,14 +627,24 @@
     const box = el('div', 'cal-remind');
     const time = el('input');
     time.type = 'time';
-    time.value = t.time || hhmm(new Date(Date.now() + 60 * 60000));
+    time.value = t.time || (t.repeat ? '' : hhmm(new Date(Date.now() + 60 * 60000)));
     time.setAttribute('aria-label', 'Reminder time');
+    const repeat = el('select', 'cal-remind-repeat');
+    repeat.setAttribute('aria-label', 'Repeat');
+    [['', 'Does not repeat']].concat(Object.entries(REPEAT_LABEL)).forEach(([v, label]) => {
+      const o = el('option', null, label);
+      o.value = v;
+      if ((t.repeat || '') === v) o.selected = true;
+      repeat.appendChild(o);
+    });
     const set = el('button', 'cal-remind-set', 'Set');
     set.type = 'button';
     set.addEventListener('click', () => {
-      if (!/^\d{2}:\d{2}$/.test(time.value)) return;
+      const hasTime = /^\d{2}:\d{2}$/.test(time.value);
       reminderFor = null;
-      remindAt(k, t.id, fromStamp(k + 'T' + time.value));
+      if ((t.repeat || '') !== repeat.value) setRepeat(t.id, repeat.value || null);
+      if (hasTime) remindAt(k, t.id, fromStamp(k + 'T' + time.value));
+      else if (!repeat.value || (t.repeat || '') === repeat.value) render();
     });
     time.addEventListener('keydown', (e) => { if (e.key === 'Enter') set.click(); if (e.key === 'Escape') { reminderFor = null; render(); } });
     const quick = (label, fn) => {
@@ -503,10 +654,10 @@
       return b;
     };
     const tomorrow9 = () => { const d = addDays(new Date(), 1); d.setHours(9, 0, 0, 0); return d; };
-    box.append(time, set,
-      quick('+15 min', () => remindAt(k, t.id, new Date(Date.now() + 15 * 60000))),
-      quick('+1 hour', () => remindAt(k, t.id, new Date(Date.now() + 60 * 60000))),
-      quick('Tomorrow 9:00', () => remindAt(k, t.id, tomorrow9())));
+    box.append(time, repeat, set,
+      quick('+15 min', () => remindAt(k, t.id, new Date(Date.now() + 15 * 60000), true)),
+      quick('+1 hour', () => remindAt(k, t.id, new Date(Date.now() + 60 * 60000), true)),
+      quick('Tomorrow 9:00', () => remindAt(k, t.id, tomorrow9(), true)));
     if (t.time || t.snooze) box.append(quick('Remove', () => clearReminder(k, t.id)));
     requestAnimationFrame(() => time.focus());
     return box;
@@ -516,7 +667,7 @@
     const form = el('form', 'cal-add');
     const inp = el('input');
     inp.type = 'text';
-    inp.placeholder = 'Add to-do for ' + (selected === todayKey() ? 'today' : niceDate(selected)) + '…  (@14:30 = reminder)';
+    inp.placeholder = 'Add to-do for ' + (selected === todayKey() ? 'today' : niceDate(selected)) + '…  (@14:30 reminder · "daily", "weekly"… repeats)';
     inp.maxLength = 2000;
     form.appendChild(inp);
     form.addEventListener('submit', (e) => {
@@ -550,7 +701,7 @@
   function nextReminder() {
     const now = Date.now();
     let best = null;
-    [todayKey(), keyOf(addDays(new Date(), 1))].forEach((k) => list(k).forEach((t) => {
+    [todayKey(), keyOf(addDays(new Date(), 1))].forEach((k) => itemsOn(k).forEach((t) => {
       const when = dueAt(k, t);
       if (!when || t.done || t.fired || when.getTime() < now - 60000) return;
       if (keyOf(when) !== todayKey()) return;
@@ -620,9 +771,9 @@
     const now = Date.now();
     const due = [];
     const yesterday = keyOf(addDays(new Date(), -1));
-    Object.keys(store.days).forEach((k) => {
-      if (k < yesterday) return;
-      list(k).forEach((t) => {
+    // Yesterday and today: one-off to-dos plus repeating occurrences.
+    [yesterday, todayKey()].forEach((k) => {
+      itemsOn(k).forEach((t) => {
         const when = dueAt(k, t);
         // Due now, or missed within the last day while the app was closed.
         if (when && !t.done && !t.fired && when.getTime() <= now && now - when.getTime() < 24 * 3600000) due.push({ k, t, when });
@@ -639,7 +790,13 @@
       return true;
     });
     change(() => due.forEach(({ k, t }) => {
-      setList(k, list(k).map((x) => (x.id === t.id ? Object.assign({}, x, { fired: true }) : x)));
+      if (t._series) {
+        patchItem(t.id, (x) => {
+          setDay(x, 'firedDates', k, true);
+          if (x.snooze && x.snooze.slice(0, 10) === k) delete x.snooze; // the one-time reminder is used up
+          return x;
+        });
+      } else setList(k, list(k).map((x) => (x.id === t.id ? Object.assign({}, x, { fired: true }) : x)));
     }));
     mine.forEach(({ k, t, when }) => { showToast(k, t, when); notify(k, t, when); });
     if (mine.length) chime();

@@ -258,6 +258,18 @@ function normalizeTodos(raw) {
         if (typeof t.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.time)) item.time = t.time;
         if (typeof t.snooze === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(t.snooze)) item.snooze = t.snooze;
         if ((item.time || item.snooze) && t.fired) item.fired = true;
+        // Repeating to-do: one stored item on its first day; per-day state
+        // (done / skipped / reminder fired) is kept as lists of dates.
+        if (['daily', 'weekdays', 'weekly', 'monthly', 'yearly'].includes(t.repeat)) {
+          const dates = (a) => (Array.isArray(a) ? [...new Set(a.filter((x) => typeof x === 'string' && DAY_KEY.test(x)))].sort().slice(-1000) : []);
+          item.repeat = t.repeat;
+          item.done = false;
+          delete item.fired;
+          item.doneDates = dates(t.doneDates);
+          item.exDates = dates(t.exDates);
+          item.firedDates = dates(t.firedDates);
+          if (typeof t.until === 'string' && DAY_KEY.test(t.until)) item.until = t.until;
+        }
         return item;
       });
     if (list.length) days[day] = list;
@@ -310,13 +322,56 @@ function bookmarksPayload(store) {
   };
 }
 
+// --- File tags: { files: { "path": ["tag", …] } } in webapp/tags.json ---
+const TAGS_FILE = path.join(__dirname, 'tags.json');
+function cleanTag(t) {
+  return String(t || '').trim().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^\p{L}\p{N}_./-]/gu, '').slice(0, 40);
+}
+function readTags() {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(TAGS_FILE, 'utf8')); } catch (e) { return { files: {} }; }
+  const files = {};
+  const src = raw && raw.files && typeof raw.files === 'object' ? raw.files : {};
+  Object.keys(src).forEach((p) => {
+    if (!Array.isArray(src[p])) return;
+    const seen = new Set();
+    const tags = src[p].map(cleanTag).filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, 30);
+    if (tags.length) files[p] = tags;
+  });
+  return { files };
+}
+function writeTags(store) {
+  writeJsonAtomic(TAGS_FILE, store);
+}
+function removeTagsUnder(relPath) {
+  const store = readTags();
+  let changed = false;
+  Object.keys(store.files).forEach((p) => {
+    if (p === relPath || p.startsWith(relPath + '/')) { delete store.files[p]; changed = true; }
+  });
+  if (changed) writeTags(store);
+}
+function rewriteTagPaths(from, to) {
+  const store = readTags();
+  let changed = false;
+  Object.keys(store.files).forEach((p) => {
+    let next = null;
+    if (p === from) next = to;
+    else if (p.startsWith(from + '/')) next = to + p.slice(from.length);
+    if (next) { store.files[next] = store.files[p]; delete store.files[p]; changed = true; }
+  });
+  if (changed) writeTags(store);
+}
+
 function removeFavoritesUnder(relPath) {
+  removeTagsUnder(relPath);
   const store = readBookmarks();
   const items = store.items.filter((it) => it.path !== relPath && !it.path.startsWith(relPath + '/'));
   if (items.length !== store.items.length) writeBookmarks({ ...store, items });
 }
 
 function rewriteBookmarkPaths(from, to) {
+  rewriteTagPaths(from, to);
   const store = readBookmarks();
   let changed = false;
   const items = store.items.map((it) => {
@@ -770,6 +825,10 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'slides') return SlidesCore.serializeToHtml(SlidesCore.createStarter());
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
+  // New Mermaid files start with a small example diagram.
+  if (/\.(mmd|mermaid)$/i.test(relPath)) {
+    return 'flowchart LR\n  client[Client] --> gw[API Gateway]\n  gw --> svc[Service]\n  svc --> db[(Database)]\n';
+  }
   // New markdown files start with a heading named after the file.
   if (/\.(md|markdown)$/i.test(relPath)) {
     const title = path.posix.basename(relPath).replace(/\.(md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim();
@@ -841,6 +900,143 @@ function ganttTemplate() {
   return GanttCore.serializeToHtml(data, data.title || 'Gantt');
 }
 
+// --- Templates: built-in starters for every file type, plus the user's own
+// files in a workspace folder named "templates/". Placeholders in text
+// templates: {{title}} {{date}} {{weekday}} {{week}}.
+const USER_TEMPLATES_DIR = 'templates';
+const MD = (lines) => lines.join('\n') + '\n';
+const BUILTIN_TEMPLATES = [
+  { id: 'md-meeting', kind: 'markdown', ext: '.md', name: 'Meeting notes', description: 'Agenda, notes, decisions and action items.',
+    build: () => MD(['# {{title}}', '', '**Date:** {{weekday}}, {{date}}  ', '**Attendees:** ', '', '## Agenda', '', '- ', '', '## Notes', '', '', '## Decisions', '', '- ', '', '## Action items', '', '- [ ] Owner — task — due date']) },
+  { id: 'md-standup', kind: 'markdown', ext: '.md', name: 'Daily standup', description: 'Yesterday, today and blockers.',
+    build: () => MD(['# Standup — {{weekday}}, {{date}}', '', '## Yesterday', '', '- ', '', '## Today', '', '- ', '', '## Blockers', '', '- None']) },
+  { id: 'md-design', kind: 'markdown', ext: '.md', name: 'Design review', description: 'Context, goals, proposal, alternatives, risks.',
+    build: () => MD(['# {{title}}', '', '_Status: draft · {{date}}_', '', '## Context', '', '## Goals', '', '- ', '', '## Non-goals', '', '- ', '', '## Proposal', '', '## Alternatives considered', '', '| Option | Pros | Cons |', '| --- | --- | --- |', '|   |   |   |', '', '## Risks', '', '- ', '', '## Open questions', '', '- [ ] ']) },
+  { id: 'md-incident', kind: 'markdown', ext: '.md', name: 'Incident report', description: 'Summary, impact, timeline, root cause, follow-ups.',
+    build: () => MD(['# Incident: {{title}}', '', '**Date:** {{date}} · **Severity:** SEV-? · **Status:** investigating', '', '## Summary', '', '## Impact', '', '- Who / what was affected:', '- Duration:', '', '## Timeline', '', '| Time | Event |', '| --- | --- |', '|   |   |', '', '## Root cause', '', '## Resolution', '', '## Follow-ups', '', '- [ ] ']) },
+  { id: 'md-change', kind: 'markdown', ext: '.md', name: 'Network change plan', description: 'Devices, pre-checks, steps, verification, rollback.',
+    build: () => MD(['# Change: {{title}}', '', '**Window:** {{date}} · **Owner:** · **Ticket:**', '', '## Summary', '', '## Devices', '', '| Device | Role | Mgmt IP |', '| --- | --- | --- |', '|   |   |   |', '', '## Pre-checks', '', '- [ ] Backups taken', '- [ ] BGP sessions up', '- [ ] Interfaces / LLDP verified', '', '## Steps', '', '1. ', '', '## Verification', '', '- [ ] ', '', '## Rollback', '', '1. ']) },
+  { id: 'md-weekly', kind: 'markdown', ext: '.md', name: 'Weekly report', description: 'Highlights, progress, next week, risks.',
+    build: () => MD(['# Weekly report — week {{week}}', '', '_{{date}}_', '', '## Highlights', '', '- ', '', '## Progress', '', '- ', '', '## Next week', '', '- ', '', '## Risks / help needed', '', '- ']) },
+  { id: 'md-readme', kind: 'markdown', ext: '.md', name: 'Project README', description: 'Overview, setup, usage, links.',
+    build: () => MD(['# {{title}}', '', 'One-line description.', '', '## Overview', '', '## Setup', '', '```bash', '', '```', '', '## Usage', '', '## Links', '', '- ']) },
+  { id: 'slides-review', kind: 'slides', ext: '.html', name: 'Design review deck', description: 'Title, agenda, problem, proposal, risks, next steps.',
+    build: (c) => SlidesCore.serializeToHtml({ title: c.title, theme: 'light', slides: [
+      SlidesCore.createSlide('title', { title: c.title, subtitle: 'Design review · ' + c.date }),
+      SlidesCore.createSlide('bullets', { title: 'Agenda', body: 'Problem\nProposal\nAlternatives\nRisks\nNext steps' }),
+      SlidesCore.createSlide('title-visual', { title: 'Problem' }),
+      SlidesCore.createSlide('visual-text', { title: 'Proposal', body: 'Key idea\nHow it works\nWhat changes' }),
+      SlidesCore.createSlide('two-columns', { title: 'Alternatives', body: 'Option A\nPros / cons', body2: 'Option B\nPros / cons' }),
+      SlidesCore.createSlide('bullets', { title: 'Risks', body: 'Risk 1 — mitigation\nRisk 2 — mitigation' }),
+      SlidesCore.createSlide('bullets', { title: 'Next steps', body: 'Decision needed\nOwners\nTimeline' }),
+    ] }) },
+  { id: 'slides-status', kind: 'slides', ext: '.html', name: 'Status update deck', description: 'Summary number, progress, plan, risks.',
+    build: (c) => SlidesCore.serializeToHtml({ title: c.title, theme: 'light', slides: [
+      SlidesCore.createSlide('title', { title: c.title, subtitle: 'Status update · ' + c.date }),
+      SlidesCore.createSlide('big-number', { title: '80%', subtitle: 'Milestone progress', body: 'On track for the next release' }),
+      SlidesCore.createSlide('title-visual', { title: 'Plan' }),
+      SlidesCore.createSlide('two-columns', { title: 'Done / next', body: 'Done item\nDone item', body2: 'Next item\nNext item' }),
+      SlidesCore.createSlide('bullets', { title: 'Risks & asks', body: 'Risk\nAsk' }),
+    ] }) },
+  { id: 'kanban-sprint', kind: 'kanban', ext: '.html', name: 'Sprint board', description: 'Backlog → in progress → review → done.', build: () => kanbanTemplate('sprint') },
+  { id: 'kanban-bugs', kind: 'kanban', ext: '.html', name: 'Bug tracker', description: 'Triage, fixing, verifying, closed.', build: () => kanbanTemplate('bugs') },
+  { id: 'kanban-personal', kind: 'kanban', ext: '.html', name: 'Personal tasks', description: 'Simple to-do board.', build: () => kanbanTemplate('personal') },
+  { id: 'kanban-content', kind: 'kanban', ext: '.html', name: 'Content pipeline', description: 'Ideas to published.', build: () => kanbanTemplate('content') },
+  { id: 'gantt-plan', kind: 'gantt', ext: '.html', name: 'Project plan', description: 'Phases, tasks, milestones and dependencies.', build: () => ganttTemplate() },
+  { id: 'mindmap-brainstorm', kind: 'mindmap', ext: '.html', name: 'Brainstorm', description: 'Central idea with branches.', build: () => mindmapTemplate() },
+  { id: 'flow-process', kind: 'flow', ext: '.html', name: 'Process flow', description: 'Start, steps, decision, end.', build: () => flowTemplate() },
+  { id: 'mermaid-sequence', kind: 'mermaid', ext: '.mmd', name: 'Sequence diagram', description: 'Client / API / database exchange.',
+    build: () => MD(['sequenceDiagram', '  participant C as Client', '  participant A as API', '  participant D as Database', '  C->>A: Request', '  A->>D: Query', '  D-->>A: Rows', '  A-->>C: Response']) },
+  { id: 'mermaid-fabric', kind: 'mermaid', ext: '.mmd', name: 'Leaf-spine fabric', description: 'Two spines, four leaves.',
+    build: () => MD(['flowchart TB', '  subgraph Spines', '    s1[spine-1]', '    s2[spine-2]', '  end', '  subgraph Leaves', '    l1[leaf-1]', '    l2[leaf-2]', '    l3[leaf-3]', '    l4[leaf-4]', '  end', '  s1 --- l1 & l2 & l3 & l4', '  s2 --- l1 & l2 & l3 & l4']) },
+];
+const TEXT_TEMPLATE = /\.(md|markdown|mmd|mermaid|txt|json|ya?ml|csv)$/i;
+
+function templateContext(title) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const jan1 = new Date(now.getFullYear(), 0, 1);
+  const week = Math.ceil(((now - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+  return { title: title || 'Untitled', date, weekday: now.toLocaleDateString('en-US', { weekday: 'long' }), week: String(week) };
+}
+function fillPlaceholders(text, ctx) {
+  return String(text).replace(/\{\{\s*(title|date|weekday|week)\s*\}\}/g, (m, k) => ctx[k]);
+}
+
+app.get('/api/templates', (req, res) => {
+  const user = [];
+  const dir = path.join(DATA_ROOT, USER_TEMPLATES_DIR);
+  (function walk(d) {
+    for (const entry of safeReaddir(d)) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      const rel = path.relative(DATA_ROOT, full).split(path.sep).join('/');
+      user.push({ path: rel, name: entry.name.replace(/\.[^.]+$/, ''), kind: fileKind(full, entry.name), ext: path.extname(entry.name) });
+    }
+  })(dir);
+  res.json({
+    builtin: BUILTIN_TEMPLATES.map(({ id, kind, ext, name, description }) => ({ id, kind, ext, name, description })),
+    user,
+    folder: USER_TEMPLATES_DIR,
+  });
+});
+
+// Create a new file from a template: { id } (built-in) or { from } (a file
+// in templates/), at { path }. Refuses to overwrite.
+app.post('/api/templates/create', (req, res) => {
+  try {
+    const { id, from } = req.body || {};
+    let rel = String((req.body && req.body.path) || '').replace(/^\/+/, '');
+    if (!rel) return res.status(400).json({ error: 'path is required' });
+    const title = path.posix.basename(rel).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+    const ctx = templateContext(title.charAt(0).toUpperCase() + title.slice(1));
+    let content;
+    if (id) {
+      const t = BUILTIN_TEMPLATES.find((x) => x.id === id);
+      if (!t) return res.status(404).json({ error: 'Unknown template' });
+      if (!path.posix.extname(rel)) rel += t.ext;
+      content = t.build(ctx);
+      if (TEXT_TEMPLATE.test(rel)) content = fillPlaceholders(content, ctx);
+    } else if (from) {
+      const src = resolveSafe(String(from));
+      if (!fs.existsSync(src) || !fs.statSync(src).isFile()) return res.status(404).json({ error: 'Template file not found' });
+      if (!path.posix.extname(rel)) rel += path.extname(src);
+      content = fs.readFileSync(src);
+      if (TEXT_TEMPLATE.test(rel)) content = fillPlaceholders(content.toString('utf8'), ctx);
+    } else return res.status(400).json({ error: 'id or from is required' });
+    const full = resolveSafe(rel);
+    if (fs.existsSync(full)) return res.status(400).json({ error: 'A file already exists at ' + rel });
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content);
+    const commit = commitFile(rel, `Create ${rel} from template`);
+    res.json({ ok: true, path: rel, commit });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Copy a workspace file into templates/ (adds -2, -3… instead of overwriting).
+app.post('/api/templates/save', (req, res) => {
+  try {
+    const rel = String((req.body && req.body.path) || '').replace(/^\/+/, '');
+    const src = resolveSafe(rel);
+    if (!rel || !fs.existsSync(src) || !fs.statSync(src).isFile()) return res.status(404).json({ error: 'File not found' });
+    const ext = path.extname(src);
+    const base = path.basename(src, ext);
+    let dest = `${USER_TEMPLATES_DIR}/${base}${ext}`;
+    for (let i = 2; fs.existsSync(resolveSafe(dest)); i++) dest = `${USER_TEMPLATES_DIR}/${base}-${i}${ext}`;
+    const full = resolveSafe(dest);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.copyFileSync(src, full);
+    const commit = commitFile(dest, `Save ${rel} as template`);
+    res.json({ ok: true, path: dest, commit });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/file/create', (req, res) => {
   try {
     const { path: relPath, kind, template } = req.body;
@@ -891,6 +1087,28 @@ app.post('/api/file/delete', (req, res) => {
   }
 });
 
+app.get('/api/tags', (req, res) => {
+  res.json(readTags());
+});
+
+// Set the tags of one file (empty list removes them).
+app.post('/api/tags/set', (req, res) => {
+  try {
+    const rel = path.relative(DATA_ROOT, resolveSafe(String((req.body && req.body.path) || ''))).split(path.sep).join('/');
+    if (!rel) return res.status(400).json({ error: 'path is required' });
+    const store = readTags();
+    const seen = new Set();
+    const tags = (Array.isArray(req.body.tags) ? req.body.tags : []).map(cleanTag)
+      .filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, 30);
+    if (tags.length) store.files[rel] = tags;
+    else delete store.files[rel];
+    writeTags(store);
+    res.json(store);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/todos', (req, res) => {
   res.json(readTodos());
 });
@@ -915,6 +1133,73 @@ function putTodos(req, res) {
 }
 app.put('/api/todos', putTodos);
 app.post('/api/todos', putTodos);
+
+// --- Habits + daily standups (webapp/daily.json), saved with the same
+// revision check as to-dos.
+// { rev, habits: [{ id, name, created, archived }],
+//   checks: { "YYYY-MM-DD": [habitId] },
+//   standups: { "YYYY-MM-DD": { yesterday, today, blockers, notes } } }
+const DAILY_FILE = path.join(__dirname, 'daily.json');
+const STANDUP_FIELDS = ['yesterday', 'today', 'blockers', 'notes'];
+function normalizeDaily(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const habits = (Array.isArray(src.habits) ? src.habits : [])
+    .filter((h) => h && typeof h.id === 'string' && h.id && typeof h.name === 'string')
+    .slice(0, 200)
+    .map((h) => ({
+      id: h.id.slice(0, 40),
+      name: h.name.slice(0, 120),
+      created: DAY_KEY.test(h.created) ? h.created : null,
+      archived: !!h.archived,
+      // Periods the habit was disabled (not tracked): [[from, to|null]].
+      off: (Array.isArray(h.off) ? h.off : [])
+        .filter((r) => Array.isArray(r) && DAY_KEY.test(r[0]) && (r[1] == null || DAY_KEY.test(r[1])))
+        .slice(-200)
+        .map((r) => [r[0], r[1] || null]),
+    }));
+  const ids = new Set(habits.map((h) => h.id));
+  const checks = {};
+  Object.entries(src.checks && typeof src.checks === 'object' ? src.checks : {}).forEach(([k, list]) => {
+    if (!DAY_KEY.test(k) || !Array.isArray(list)) return;
+    const keep = [...new Set(list.filter((id) => ids.has(id)))];
+    if (keep.length) checks[k] = keep;
+  });
+  const standups = {};
+  Object.entries(src.standups && typeof src.standups === 'object' ? src.standups : {}).forEach(([k, v]) => {
+    if (!DAY_KEY.test(k) || !v || typeof v !== 'object') return;
+    const entry = {};
+    STANDUP_FIELDS.forEach((f) => { if (typeof v[f] === 'string' && v[f].trim()) entry[f] = v[f].slice(0, 20000); });
+    if (Object.keys(entry).length) standups[k] = entry;
+  });
+  return { rev: Number.isInteger(src.rev) ? src.rev : 0, habits, checks, standups };
+}
+function readDaily() {
+  try {
+    return normalizeDaily(JSON.parse(fs.readFileSync(DAILY_FILE, 'utf8')));
+  } catch (e) {
+    return normalizeDaily({});
+  }
+}
+app.get('/api/daily', (req, res) => {
+  res.json(readDaily());
+});
+function putDaily(req, res) {
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
+    const current = readDaily();
+    if (!body || !Number.isInteger(body.baseRev) || body.baseRev !== current.rev) {
+      return res.status(409).json({ error: 'Habits/standups changed elsewhere', current });
+    }
+    const store = normalizeDaily(body);
+    store.rev = current.rev + 1;
+    writeJsonAtomic(DAILY_FILE, store);
+    res.json(store);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}
+app.put('/api/daily', putDaily);
+app.post('/api/daily', putDaily);
 
 app.get('/api/favorites', (req, res) => {
   res.json(bookmarksPayload(readBookmarks()));
@@ -1483,6 +1768,74 @@ app.get('/api/frames', (req, res) => {
   }
 });
 
+// --- Backlinks: which notes / decks point at a file ---
+// Markdown links and images ([text](path), ![alt](path)) resolved relative to
+// the note, and slide visuals/images/backgrounds that use the file.
+const MD_LINK_RE = /(!?)\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+
+function resolveNoteLink(fromRel, href) {
+  if (!href || /^([a-z][\w+.-]*:|#|\/\/)/i.test(href)) return null;
+  const hashAt = href.indexOf('#');
+  const ref = hashAt >= 0 ? href.slice(hashAt + 1) : '';
+  let p = (hashAt >= 0 ? href.slice(0, hashAt) : href).split('?')[0];
+  if (!p) return null;
+  try { p = decodeURIComponent(p); } catch (e) { /* keep as written */ }
+  const base = p.startsWith('/') ? '' : path.posix.dirname(fromRel);
+  const resolved = path.posix.normalize(path.posix.join(base === '.' ? '' : base, p.replace(/^\/+/, '')));
+  if (resolved.startsWith('..')) return null;
+  return { path: resolved, ref };
+}
+
+app.get('/api/backlinks', (req, res) => {
+  try {
+    const target = path.relative(DATA_ROOT, resolveSafe(String(req.query.path || ''))).split(path.sep).join('/');
+    if (!target) return res.status(400).json({ error: 'path is required' });
+    const links = [];
+    (function walk(dir) {
+      for (const entry of safeReaddir(dir)) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        const rel = path.relative(DATA_ROOT, full).split(path.sep).join('/');
+        if (rel === target) continue;
+        let stat;
+        try { stat = fs.statSync(full); } catch (e) { continue; }
+        if (stat.size > 4 * 1024 * 1024) continue;
+        if (/\.(md|markdown)$/i.test(entry.name)) {
+          let text;
+          try { text = fs.readFileSync(full, 'utf8'); } catch (e) { continue; }
+          text.split('\n').forEach((line, i) => {
+            MD_LINK_RE.lastIndex = 0;
+            let m;
+            while ((m = MD_LINK_RE.exec(line))) {
+              const r = resolveNoteLink(rel, m[3]);
+              if (r && r.path === target) {
+                links.push({ from: rel, kind: 'markdown', line: i + 1, text: (m[2] || '').slice(0, 120), ref: r.ref, image: m[1] === '!' });
+              }
+            }
+          });
+        } else if (/\.html?$/i.test(entry.name) && peekFileKind(full, entry.name) === 'slides') {
+          let deck;
+          try { deck = SlidesCore.parseHtml(fs.readFileSync(full, 'utf8')); } catch (e) { continue; }
+          ((deck && deck.slides) || []).forEach((sl, i) => {
+            const uses = [];
+            (sl.visuals || []).forEach((v) => {
+              if (v.source && v.source.path === target) uses.push(v.source.frameId && v.source.frameId !== '__all__' ? 'visual (' + v.source.frameId + ')' : 'visual');
+              if (v.image && v.image.path === target) uses.push('image');
+            });
+            if (sl.background && sl.background.path === target) uses.push('background');
+            if (uses.length) links.push({ from: rel, kind: 'slides', slide: i + 1, text: (sl.title || 'Slide ' + (i + 1)).slice(0, 120), uses: [...new Set(uses)] });
+          });
+        }
+        if (links.length > 2000) return;
+      }
+    })(DATA_ROOT);
+    res.json({ path: target, links });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/convert', (req, res) => {
   try {
     const { content, from, to } = req.body;
@@ -1530,29 +1883,52 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: (err && err.message) || 'Server error' });
 });
 
-const server = app.listen(PORT, HOST, () => {
-  const actualPort = server.address().port;
+// Is something already accepting connections on this port (on either
+// localhost address)? Another copy of this app bound to a different
+// address would otherwise run alongside, and the browser could reach the
+// old one instead of this one.
+function portAnswers(host, port) {
+  return new Promise((resolve) => {
+    const sock = require('net').connect({ host, port });
+    const done = (v) => { sock.destroy(); resolve(v); };
+    sock.setTimeout(500);
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+    sock.once('timeout', () => done(false));
+  });
+}
+
+function onListening(srv) {
+  const actualPort = srv.address().port;
   const url = `http://localhost:${actualPort}`;
   printLink(url);
   console.log(`Serving files from: ${DATA_ROOT}`);
   openInBrowser(url);
   setImmediate(initGitRepo);
-});
-server.requestTimeout = 60000;
-server.headersTimeout = 30000;
-server.keepAliveTimeout = 5000;
+}
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.log(`Port ${PORT} is in use, picking a random free port instead...`);
-    const fallback = app.listen(0, HOST, () => {
-      const actualPort = fallback.address().port;
-      const url = `http://localhost:${actualPort}`;
-      printLink(url);
-      console.log(`Serving files from: ${DATA_ROOT}`);
-      openInBrowser(url);
-    });
-  } else {
-    throw err;
+function listenOn(port) {
+  const srv = app.listen(port, HOST, () => onListening(srv));
+  srv.requestTimeout = 60000;
+  srv.headersTimeout = 30000;
+  srv.keepAliveTimeout = 5000;
+  srv.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && port !== 0) {
+      console.log(`Port ${port} is in use, picking a random free port instead...`);
+      listenOn(0);
+    } else {
+      throw err;
+    }
+  });
+  return srv;
+}
+
+(async () => {
+  const busy = (await portAnswers('127.0.0.1', PORT)) || (await portAnswers('::1', PORT));
+  if (busy) {
+    console.log(`\n⚠  Port ${PORT} is already in use — probably an older copy of this app.`);
+    console.log(`   Stop it with:  lsof -ti tcp:${PORT} | xargs kill   (then start this again)`);
+    console.log('   Starting on a free port instead for now.\n');
   }
-});
+  listenOn(busy ? 0 : PORT);
+})();

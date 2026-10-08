@@ -7,7 +7,7 @@
 (function () {
   const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
   const TEXT_EXT = /\.(json|ya?ml|txt|csv|log|xml|ini|conf|cfg|toml|sh|bash|zsh|py|js|ts|go|rs|java|c|h|cpp|hpp|sql|css|env|properties|gradle|mk|makefile|dockerfile)$/i;
-  const KIND_LABEL = { mindmap: 'Mindmap', flow: 'Flow', kanban: 'Kanban', gantt: 'Gantt', slides: 'Slides', markdown: 'Markdown', pdf: 'PDF' };
+  const KIND_LABEL = { mindmap: 'Mindmap', flow: 'Flow', kanban: 'Kanban', gantt: 'Gantt', slides: 'Slides', markdown: 'Markdown', mermaid: 'Mermaid', pdf: 'PDF' };
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ---------- files ----------
@@ -34,6 +34,7 @@
   function kindOf(f) {
     if (BOARD_TYPES[f.kind]) return f.kind;
     if (isMarkdownPath(f.path)) return 'markdown';
+    if (isMermaidPath(f.path)) return 'mermaid';
     if (/\.pdf$/i.test(f.path)) return 'pdf';
     if (IMAGE_EXT.test(f.path)) return 'image';
     if (/\.html?$/i.test(f.path)) return 'html';
@@ -128,6 +129,11 @@
   async function markdownBody(p, source, linkFor) {
     await ensureMarkdownLibs();
     const tpl = markdownTemplate(source);
+    if (/```\s*mermaid/i.test(source)) {
+      let svgs = [];
+      try { svgs = await renderMermaidBlocks(source, false); } catch (e) { svgs = []; }
+      applyMermaidSvgs(tpl, svgs);
+    }
     for (const img of tpl.content.querySelectorAll('img[src]')) {
       const src = img.getAttribute('src');
       const t = boardTargetOf(p, src);
@@ -190,10 +196,17 @@
   const THEME_SCRIPT = '<script>if(matchMedia("(prefers-color-scheme: dark)").matches)document.documentElement.dataset.theme="dark";<\/script>';
 
   // ---------- website ----------
-  async function exportSite(folder) {
+  // In the single-file site, pages are shown in a frame; links to other
+  // pages ask the shell (parent) to switch page.
+  const SINGLE_LINK_SCRIPT = '<script>document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href^=\'#page=\']");if(!a)return;e.preventDefault();parent.postMessage({type:"site-open",path:decodeURIComponent(a.getAttribute("href").slice(6))},"*");});<\/script>';
+  const pageHref = (sp) => '#page=' + encodeURIComponent(sp);
+
+  // single: one self-contained .html file instead of a .zip of pages.
+  async function exportSite(folder, single) {
     cancelled = false;
     const ui = progress();
     const title = folder ? folder.split('/').pop() : 'Workspace';
+    const what = single ? 'a single-file website' : 'a website';
     try {
       framesIndex = null;
       if (renderer) renderer.clear();
@@ -205,8 +218,8 @@
       const siteOf = new Map();
       files.forEach((f) => {
         let sp = relOf(f.path);
-        if (kindOf(f) === 'markdown') {
-          const html = sp.replace(/\.(md|markdown)$/i, '.html');
+        if (kindOf(f) === 'markdown' || kindOf(f) === 'mermaid') {
+          const html = sp.replace(/\.(md|markdown|mmd|mermaid)$/i, '.html');
           sp = exported.has(html) ? sp + '.html' : html;
         }
         siteOf.set(f.path, sp);
@@ -219,7 +232,7 @@
         checkCancel();
         i++;
         const kind = kindOf(f);
-        ui.set('Exporting “' + title + '” as a website', i, files.length + 1, f.path);
+        ui.set('Exporting “' + title + '” as ' + what, i, files.length + 1, f.path);
         const sp = siteOf.get(f.path);
         if (BOARD_TYPES[kind]) {
           try {
@@ -229,11 +242,25 @@
           } catch (err) {
             copy.push(f.path); // fall back to the raw file
           }
+        } else if (kind === 'mermaid') {
+          let inner;
+          try {
+            inner = `<div class="md-mermaid">${await renderMermaidSvg(await readFile(f.path), false)}</div>`;
+          } catch (err) {
+            inner = `<p class="md-missing">Diagram error: ${esc((err && err.message) || err)}</p>`;
+          }
+          pages.push({
+            path: sp,
+            content: `<!DOCTYPE html><html lang="en" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(f.path.split('/').pop())}</title>`
+              + `<style>${MARKDOWN_CSS}${SITE_CSS}</style></head><body>`
+              + (single ? '' : `<nav class="site-nav"><a href="${relUrl(sp, indexName)}">← ${esc(title)}</a><span>${esc(relOf(f.path))}</span></nav>`)
+              + `<article class="md">${inner}</article></body></html>`,
+          });
         } else if (kind === 'markdown') {
           let body;
           try {
             const source = await readFile(f.path);
-            body = await markdownBody(f.path, source, (ws) => (siteOf.has(ws) ? relUrl(sp, siteOf.get(ws)) : null));
+            body = await markdownBody(f.path, source, (ws) => (siteOf.has(ws) ? (single ? pageHref(siteOf.get(ws)) : relUrl(sp, siteOf.get(ws))) : null));
           } catch (err) {
             body = `<p class="md-missing">Could not export this file: ${esc((err && err.message) || err)}</p>`;
           }
@@ -241,8 +268,8 @@
           pages.push({
             path: sp,
             content: `<!DOCTYPE html><html lang="en" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(name.replace(/\.(md|markdown)$/i, ''))}</title>`
-              + `<style>${MARKDOWN_CSS}${SITE_CSS}</style>${THEME_SCRIPT}</head><body>`
-              + `<nav class="site-nav"><a href="${relUrl(sp, indexName)}">← ${esc(title)}</a><span>${esc(relOf(f.path))}</span></nav>`
+              + `<style>${MARKDOWN_CSS}${SITE_CSS}</style>${THEME_SCRIPT}${single ? SINGLE_LINK_SCRIPT : ''}</head><body>`
+              + (single ? '' : `<nav class="site-nav"><a href="${relUrl(sp, indexName)}">← ${esc(title)}</a><span>${esc(relOf(f.path))}</span></nav>`)
               + `<article class="md">${body || '<p class="md-missing">This file is empty.</p>'}</article></body></html>`,
           });
         } else {
@@ -261,15 +288,22 @@
       const idx = [...groups].map(([dir, list]) => `<h2>${esc(dir || title)}</h2><ul>${list.map((f) => {
         const k = kindOf(f);
         const label = KIND_LABEL[k] || (f.path.split('.').pop() || 'file').toUpperCase().slice(0, 6);
-        return `<li><a href="${relUrl(indexName, siteOf.get(f.path))}"><span class="k">${esc(label)}</span>${esc(f.path.split('/').pop())}</a></li>`;
+        const href = single ? pageHref(siteOf.get(f.path)) : relUrl(indexName, siteOf.get(f.path));
+        return `<li><a href="${href}"><span class="k">${esc(label)}</span>${esc(f.path.split('/').pop())}</a></li>`;
       }).join('')}</ul>`).join('');
       pages.push({
         path: indexName,
         content: `<!DOCTYPE html><html lang="en" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>`
-          + `<style>${MARKDOWN_CSS}${SITE_CSS}</style>${THEME_SCRIPT}</head><body><main class="idx"><h1>${esc(title)}</h1>`
+          + `<style>${MARKDOWN_CSS}${SITE_CSS}</style>${THEME_SCRIPT}${single ? SINGLE_LINK_SCRIPT : ''}</head><body><main class="idx"><h1>${esc(title)}</h1>`
           + `<p class="sub">${files.length} file${files.length === 1 ? '' : 's'} · exported ${esc(new Date().toLocaleString())}</p>${idx}</main></body></html>`,
       });
-      ui.set('Exporting “' + title + '” as a website', files.length + 1, files.length + 1, 'Packing zip…');
+      if (single) {
+        const html = await buildSingleSite({ title, files, pages, copy, siteOf, indexName, relOf, ui });
+        downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8' }), title.replace(/[^\w.-]+/g, '-') + '-site.html');
+        setStatus('Website exported as one HTML file', 'ok');
+        return;
+      }
+      ui.set('Exporting “' + title + '” as ' + what, files.length + 1, files.length + 1, 'Packing zip…');
       const res = await fetch('/api/export-site', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -287,6 +321,149 @@
     } finally {
       ui.done();
     }
+  }
+
+  // ---------- single-file website ----------
+  const SINGLE_MAX_EMBED = 15 * 1024 * 1024; // per binary file
+  async function blobToB64(blob) {
+    const url = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+    return url.slice(url.indexOf(',') + 1);
+  }
+  async function fetchBlob(url) {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error('Could not read file');
+    return res.blob();
+  }
+
+  // Everything in one HTML file: a sidebar of all files and a frame that
+  // shows the selected page. Generated pages are embedded as HTML; copied
+  // files become pages too (images, text) or embedded downloads (PDF, other).
+  async function buildSingleSite({ title, files, pages, copy, siteOf, indexName, relOf, ui }) {
+    const entries = [];
+    const byPath = new Map(pages.map((p) => [p.path, p.content]));
+    const pageWrap = (inner, name) => `<!DOCTYPE html><html lang="en" data-theme="light"><head><meta charset="utf-8"><title>${esc(name)}</title>`
+      + `<style>${MARKDOWN_CSS}${SITE_CSS}</style>${THEME_SCRIPT}</head><body><article class="md">${inner}</article></body></html>`;
+    let i = 0;
+    for (const f of files) {
+      checkCancel();
+      i++;
+      const sp = siteOf.get(f.path);
+      const kind = kindOf(f);
+      const name = f.path.split('/').pop();
+      const label = KIND_LABEL[kind] || (name.split('.').pop() || 'file').toUpperCase().slice(0, 6);
+      const entry = { path: sp, dir: relOf(f.path).includes('/') ? relOf(f.path).slice(0, relOf(f.path).lastIndexOf('/')) : '', name, label };
+      if (byPath.has(sp)) {
+        entries.push(Object.assign(entry, { type: 'html', html: byPath.get(sp) }));
+        continue;
+      }
+      ui.set('Embedding files', i, files.length, f.path);
+      try {
+        if (kind === 'image') {
+          const blob = await fetchBlob('/api/raw?path=' + encodeURIComponent(f.path));
+          if (blob.size > SINGLE_MAX_EMBED) throw new Error('too large to embed');
+          const src = 'data:' + (blob.type || 'image/png') + ';base64,' + await blobToB64(blob);
+          entries.push(Object.assign(entry, { type: 'html', html: pageWrap(`<p><img alt="${esc(name)}" src="${src}"></p>`, name) }));
+        } else if (kind === 'text') {
+          const text = await readFile(f.path);
+          const clipped = text.length > 2000000 ? text.slice(0, 2000000) + '\n… (truncated)' : text;
+          entries.push(Object.assign(entry, { type: 'html', html: pageWrap(`<pre><code>${esc(clipped)}</code></pre>`, name) }));
+        } else {
+          const blob = await fetchBlob((kind === 'pdf' ? '/api/raw?path=' : '/api/download?path=') + encodeURIComponent(f.path));
+          if (blob.size > SINGLE_MAX_EMBED) throw new Error('too large to embed (' + Math.round(blob.size / 1048576) + ' MB)');
+          entries.push(Object.assign(entry, { type: kind === 'pdf' ? 'pdf' : 'file', mime: blob.type || 'application/octet-stream', b64: await blobToB64(blob) }));
+        }
+      } catch (err) {
+        entries.push(Object.assign(entry, { type: 'html', html: pageWrap(`<p class="md-missing">${esc(name)} is not included: ${esc((err && err.message) || err)}.</p>`, name) }));
+      }
+    }
+    // Top-level files first, then each folder once, names in order.
+    entries.sort((a, b) => ((a.dir ? 1 : 0) - (b.dir ? 1 : 0)) || a.dir.localeCompare(b.dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const home = { path: indexName, dir: '', name: 'Overview', label: 'Home', type: 'html', html: byPath.get(indexName) || pageWrap('', title), home: true };
+    const data = JSON.stringify({ title, exported: new Date().toLocaleString(), pages: [home].concat(entries) }).replace(/</g, '\\u003c');
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title>
+<style>
+:root{--bg:#f6f8fa;--panel:#fff;--fg:#1f2328;--muted:#59636e;--line:#d1d9e0;--accent:#0969da;--soft:#eaeef2}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#151b23;--fg:#e6edf3;--muted:#9198a1;--line:#3d444d;--accent:#4493f8;--soft:#212830}}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.app{display:flex;height:100%}
+aside{width:290px;flex-shrink:0;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line)}
+aside h1{margin:0;padding:16px 16px 4px;font-size:17px}
+aside .sub{padding:0 16px 10px;color:var(--muted);font-size:12px}
+aside input{margin:0 12px 10px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
+nav{flex:1;overflow-y:auto;padding:0 8px 16px}
+nav .dir{margin:12px 8px 4px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+nav a{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:7px;color:var(--fg);text-decoration:none;overflow:hidden}
+nav a span.n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+nav a:hover{background:var(--soft)}nav a.on{background:var(--accent);color:#fff}
+nav .k{flex-shrink:0;min-width:58px;padding:1px 6px;border-radius:999px;background:var(--soft);color:var(--muted);font-size:10px;font-weight:700;text-align:center}
+nav a.on .k{background:rgba(255,255,255,.25);color:#fff}
+main{flex:1;min-width:0;position:relative;background:var(--panel)}
+main iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+.dl{max-width:560px;margin:80px auto;padding:0 24px;text-align:center}
+.dl a{display:inline-block;margin-top:12px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#fff;text-decoration:none;font-weight:600}
+@media (max-width:760px){.app{flex-direction:column}aside{width:100%;max-height:40vh;border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<script type="application/json" id="site-data">${data}</script>
+<div class="app">
+  <aside>
+    <h1 id="t"></h1><div class="sub" id="sub"></div>
+    <input type="search" id="q" placeholder="Filter files…" aria-label="Filter files">
+    <nav id="nav"></nav>
+  </aside>
+  <main id="main"></main>
+</div>
+<script>
+(function(){
+  var site=JSON.parse(document.getElementById('site-data').textContent);
+  var pages=site.pages, byPath={}, urls={};
+  pages.forEach(function(p){byPath[p.path]=p;});
+  document.title=site.title;
+  document.getElementById('t').textContent=site.title;
+  document.getElementById('sub').textContent=(pages.length-1)+' files · exported '+site.exported;
+  var nav=document.getElementById('nav'), q=document.getElementById('q'), main=document.getElementById('main');
+  function el(tag,cls,text){var n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n;}
+  function drawNav(){
+    var f=q.value.trim().toLowerCase(); nav.innerHTML=''; var last=null;
+    pages.forEach(function(p){
+      if(f&&(p.path+' '+p.name).toLowerCase().indexOf(f)<0)return;
+      if(!p.home&&p.dir!==last){nav.appendChild(el('div','dir',p.dir||site.title));last=p.dir;}
+      var a=el('a');a.href='#page='+encodeURIComponent(p.path);a.dataset.path=p.path;
+      a.appendChild(el('span','k',p.label));a.appendChild(el('span','n',p.name));nav.appendChild(a);
+    });
+    mark();
+  }
+  function blobUrl(p){if(!urls[p.path]){var bin=atob(p.b64),buf=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);urls[p.path]=URL.createObjectURL(new Blob([buf],{type:p.mime}));}return urls[p.path];}
+  var current=null;
+  function mark(){[].forEach.call(nav.querySelectorAll('a'),function(a){a.classList.toggle('on',a.dataset.path===current);});}
+  function show(path){
+    var p=byPath[path]||pages[0]; current=p.path; mark(); main.innerHTML='';
+    if(p.type==='html'){var f=el('iframe');f.setAttribute('sandbox','allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');f.title=p.name;f.srcdoc=p.html;main.appendChild(f);}
+    else if(p.type==='pdf'){var g=el('iframe');g.title=p.name;g.src=blobUrl(p);main.appendChild(g);}
+    else{var d=el('div','dl');d.appendChild(el('h2',null,p.name));d.appendChild(el('p',null,'This file type cannot be shown here.'));var a=el('a',null,'Download');a.href=blobUrl(p);a.download=p.name;d.appendChild(a);main.appendChild(d);}
+    document.title=(p.home?'':p.name+' — ')+site.title;
+  }
+  function fromHash(){var m=/^#page=(.*)$/.exec(location.hash);show(m?decodeURIComponent(m[1]):pages[0].path);}
+  window.addEventListener('hashchange',fromHash);
+  window.addEventListener('message',function(e){var d=e.data;if(d&&d.type==='site-open'&&typeof d.path==='string'&&byPath[d.path])location.hash='page='+encodeURIComponent(d.path);});
+  q.addEventListener('input',drawNav);
+  drawNav();fromHash();
+})();
+<\/script>
+</body>
+</html>
+`;
   }
 
   // ---------- PDF ----------
@@ -360,6 +537,9 @@ html, body { background: #fff !important; color: #1f2328; }
         document.body.appendChild(holder);
       }
       return slidesHtml.map((h) => `<div class="pdf-slide">${h}</div>`).join('');
+    }
+    if (kind === 'mermaid') {
+      return `<div class="md"><div class="md-mermaid">${await renderMermaidSvg(await readFile(f.path), false)}</div></div>`;
     }
     if (kind === 'image') return fig(await toDataUrl('/api/raw?path=' + encodeURIComponent(f.path)), '');
     if (kind === 'text') {
@@ -454,6 +634,7 @@ html, body { background: #fff !important; color: #1f2328; }
     });
   }
 
-  window.exportFolderSite = exportSite;
+  window.exportFolderSite = (folder) => exportSite(folder, false);
+  window.exportFolderSiteSingle = (folder) => exportSite(folder, true);
   window.exportFolderPdf = exportPdf;
 })();

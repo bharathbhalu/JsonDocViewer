@@ -18,7 +18,9 @@
   window.syncMarkdownToolbar = function syncMarkdownToolbar() {
     const on = !!currentPath && isMarkdownPath(currentPath) && (viewMode === 'code' || viewMode === 'render');
     bar.classList.toggle('hidden', !on);
+    syncOutline(on);
     if (!on) closeDialog();
+    else ensureTurndown().catch(() => {}); // ready before the first paste
     if (editor) requestAnimationFrame(() => editor.layout());
   };
 
@@ -156,6 +158,80 @@
     return String(v || '').replace(/([\[\]\\])/g, '\\$1');
   }
 
+  // ---------- table of contents & outline ----------
+  // Insert "- [Heading](#slug)" for every heading after the cursor's position
+  // ignores the TOC's own heading; nested by level.
+  function insertToc() {
+    const heads = markdownHeadings(editor.getValue());
+    if (!heads.length) {
+      if (typeof setStatus === 'function') setStatus('Add some headings first (# Title, ## Section …)', 'dirty');
+      return;
+    }
+    const min = Math.min(...heads.map((h) => h.level));
+    const lines = heads.map((h) => '  '.repeat(h.level - min) + '- [' + mdText(h.text) + '](#' + h.slug + ')');
+    insertBlock('**Contents**\n\n' + lines.join('\n'));
+  }
+
+  const OUTLINE_KEY = 'docviewer-md-outline';
+  let outlineOpen = false;
+  try { outlineOpen = localStorage.getItem(OUTLINE_KEY) === '1'; } catch (e) { /* ignore */ }
+  const area = document.getElementById('editor-area');
+  const outline = document.createElement('aside');
+  outline.id = 'md-outline';
+  outline.className = 'hidden';
+  outline.setAttribute('aria-label', 'Outline');
+  area.appendChild(outline);
+  let outlineTimer = null;
+
+  function toggleOutline() {
+    outlineOpen = !outlineOpen;
+    try { localStorage.setItem(OUTLINE_KEY, outlineOpen ? '1' : '0'); } catch (e) { /* ignore */ }
+    syncOutline(true);
+  }
+  function syncOutline(mdActive) {
+    const show = mdActive && outlineOpen;
+    outline.classList.toggle('hidden', !show);
+    area.classList.toggle('has-outline', show);
+    const btn = bar.querySelector('[data-md="outline"]');
+    if (btn) btn.classList.toggle('is-on', show);
+    if (show) renderOutline();
+    if (editor) requestAnimationFrame(() => editor.layout());
+  }
+  function renderOutline() {
+    if (!editor || !editor.getModel()) return;
+    const heads = markdownHeadings(editor.getValue());
+    const pos = editor.getPosition();
+    let current = -1;
+    heads.forEach((h, i) => { if (pos && h.line <= pos.lineNumber) current = i; });
+    const min = heads.length ? Math.min(...heads.map((h) => h.level)) : 1;
+    outline.innerHTML = '<div class="mo-head">Outline</div>' + (heads.length
+      ? heads.map((h, i) => `<button type="button" class="mo-item mo-l${h.level - min + 1}${i === current && viewMode === 'code' ? ' on' : ''}" data-i="${i}" title="${escHtml(h.text)}">${escHtml(h.text)}</button>`).join('')
+      : '<div class="mo-empty">No headings yet. Start a line with # for a title, ## for a section.</div>');
+    outline.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => {
+      const i = Number(b.getAttribute('data-i'));
+      const h = heads[i];
+      if (viewMode === 'render') {
+        const frame = document.getElementById('html-preview-frame');
+        if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: 'docviewer-scroll', index: i }, '*');
+      } else {
+        editor.revealLineNearTop(h.line);
+        editor.setPosition({ lineNumber: h.line, column: 1 });
+        editor.focus();
+      }
+    }));
+  }
+  (function hookOutline() {
+    if (!editor || !window.monaco) { setTimeout(hookOutline, 300); return; }
+    const later = () => {
+      if (outline.classList.contains('hidden')) return;
+      clearTimeout(outlineTimer);
+      outlineTimer = setTimeout(renderOutline, 250);
+    };
+    editor.onDidChangeModelContent(later);
+    editor.onDidChangeModel(later);
+    editor.onDidChangeCursorPosition(later);
+  })();
+
   // ---------- toolbar ----------
   const ACTIONS = {
     h1: () => prefixLines(() => '# ', /^[ \t]*#[ \t]+/, HEADING),
@@ -172,6 +248,9 @@
     hr: () => insertBlock('---'),
     codeblock: () => codeBlock(),
     table: () => openTableDialog(),
+    toc: () => insertToc(),
+    outline: () => toggleOutline(),
+    mermaid: () => insertBlock('```mermaid\nflowchart LR\n  A[Start] --> B{Decision}\n  B -->|Yes| C[Do it]\n  B -->|No| D[Skip]\n```'),
     link: () => openLinkDialog(),
     image: () => openImageDialog(),
     file: () => openFileDialog(),
@@ -608,6 +687,72 @@
 
   // Monaco's onDidPaste fires for every paste (a DOM paste listener can be
   // pre-empted while the editor has focus); fix the pasted range in place.
+  // ---------- rich paste: HTML (web pages, ChatGPT, docs) -> Markdown ----------
+  let turndownP = null;
+  function ensureTurndown() {
+    if (!turndownP) {
+      turndownP = ensureMarkdownLibs()
+        .then(() => loadGlobalScript('/vendor/turndown.js', () => !!window.TurndownService, ['TurndownService']))
+        .then(() => loadGlobalScript('/vendor/turndown-plugin-gfm.js', () => !!window.turndownPluginGfm, ['turndownPluginGfm']));
+      turndownP.catch(() => { turndownP = null; });
+    }
+    return turndownP;
+  }
+  let turndown = null;
+  function htmlToMarkdown(html) {
+    if (!turndown) {
+      turndown = new window.TurndownService({
+        headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-', emDelimiter: '_', strongDelimiter: '**', hr: '---',
+      });
+      turndown.use(window.turndownPluginGfm.gfm);
+      // "- item" (turndown's default pads list markers to 4 characters).
+      turndown.addRule('tightListItem', {
+        filter: 'li',
+        replacement: (content, node, options) => {
+          const text = content.replace(/^\n+/, '').replace(/\n+$/, '\n').replace(/\n/gm, '\n  ');
+          const parent = node.parentNode;
+          let prefix = options.bulletListMarker + ' ';
+          if (parent && parent.nodeName === 'OL') {
+            const start = Number(parent.getAttribute('start')) || 1;
+            prefix = (start + Array.prototype.indexOf.call(parent.children, node)) + '. ';
+          }
+          const isTask = /^\[[ xX]\] /.test(text);
+          return (isTask ? '- ' : prefix) + text + (node.nextSibling && !/\n$/.test(text) ? '\n' : '');
+        },
+      });
+      // Copy buttons, icons and styles from the source page aren't content.
+      turndown.remove(['script', 'style', 'button', 'noscript', 'svg', 'canvas', 'iframe']);
+      // Code blocks: keep only the code (ChatGPT adds a header with the
+      // language name and a "Copy code" button inside <pre>).
+      turndown.addRule('fencedPre', {
+        filter: (node) => node.nodeName === 'PRE',
+        replacement: (content, node) => {
+          const code = node.querySelector('code') || node;
+          const lang = ((code.getAttribute('class') || '') + ' ' + (node.getAttribute('class') || '')).match(/(?:language|lang)-([\w+#.-]+)/);
+          const text = code.textContent.replace(/\n+$/, '');
+          const fence = text.includes('```') ? '~~~' : '```';
+          return '\n\n' + fence + (lang ? lang[1] : '') + '\n' + text + '\n' + fence + '\n\n';
+        },
+      });
+    }
+    const clean = window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    return turndown.turndown(clean).replace(/\n{3,}/g, '\n\n').trim();
+  }
+  // Worth converting: the HTML has structure, and the plain text isn't
+  // already markdown (e.g. ChatGPT's copy button gives markdown text).
+  function isRichHtml(html, text) {
+    if (!html || !/<(h[1-6]|table|ul|ol|pre|blockquote|strong|b|em|i|a\s|img|code)\b/i.test(html)) return false;
+    if (/^\s{0,3}(#{1,6}\s|```|~~~|- \[[ x]\]|\|.*\|\s*$)|\*\*\S|\]\(\S+\)/m.test(text || '')) return false;
+    return true;
+  }
+  function replaceRange(range, text) {
+    const lines = text.split('\n');
+    const endLine = range.startLineNumber + lines.length - 1;
+    const endCol = (lines.length === 1 ? range.startColumn : 1) + lines[lines.length - 1].length;
+    editor.executeEdits('md-paste', [{ range, text, forceMoveMarkers: true }], [new monaco.Selection(endLine, endCol, endLine, endCol)]);
+    editor.pushUndoStop();
+  }
+
   (function hookPaste() {
     if (!editor || !window.monaco) { setTimeout(hookPaste, 300); return; }
     editor.onDidPaste((e) => {
@@ -617,6 +762,27 @@
       const range = e.range;
       const raw = m.getValueInRange(range);
       if (!raw) return;
+      // Rich HTML on the clipboard (read now: it's gone after the event).
+      const cd = e.clipboardEvent && e.clipboardEvent.clipboardData;
+      const html = cd ? cd.getData('text/html') : '';
+      if (html && isRichHtml(html, raw) && !insideCodeFence(range.startLineNumber)) {
+        const path = currentPath;
+        ensureTurndown().then(() => {
+          if (currentPath !== path || m !== model() || m.getValueInRange(range) !== raw) return; // changed meanwhile
+          let md = P.normalize(htmlToMarkdown(html));
+          if (!md || md === raw) return;
+          // Block content (several lines) gets blank lines around it when it
+          // lands next to other text, so it doesn't merge into that line.
+          if (md.includes('\n')) {
+            const lineBefore = m.getLineContent(range.startLineNumber).slice(0, range.startColumn - 1);
+            const lineAfter = m.getLineContent(range.endLineNumber).slice(range.endColumn - 1);
+            if (lineBefore.trim()) md = '\n\n' + md;
+            if (lineAfter.trim()) md += '\n\n';
+          }
+          replaceRange(range, md);
+        }).catch(() => { /* keep the plain-text paste */ });
+        return;
+      }
       const fence = P.isDiagram(raw) && !insideCodeFence(range.startLineNumber);
       let text = fence ? '```text\n' + P.cleanDiagram(raw) + '\n```' : P.normalize(raw);
       if (!fence && text === raw) return;

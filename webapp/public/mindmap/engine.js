@@ -6351,6 +6351,20 @@
       });
     }
 
+    // Markdown link to a frame of this board, e.g.
+    // [Architecture](/notes/map.html#frame=f_123) — paste it in a note.
+    _copyFrameLink(id) {
+      const f = (this.data.frames || []).find((fr) => fr.id === id);
+      const path = this.opts && typeof this.opts.getPath === 'function' ? this.opts.getPath() : '';
+      if (!f || !path) return;
+      const title = String(f.title || 'Frame').replace(/([\[\]\\])/g, '\\$1');
+      const href = '/' + path.split('/').map((seg) => encodeURIComponent(seg)).join('/') + '#frame=' + encodeURIComponent(id);
+      const text = '[' + title + '](' + href + ')';
+      const done = (ok) => { if (typeof global.setStatus === 'function') global.setStatus(ok ? 'Frame link copied — paste it in a note' : 'Could not copy the link', ok ? 'ok' : 'dirty'); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+      else done(false);
+    }
+
     _openFrameMenu(id, x, y) {
       const f = (this.data.frames || []).find((fr) => fr.id === id);
       if (!f) return;
@@ -6379,6 +6393,7 @@
         <button type="button" data-m="fit"${f.locked ? ' disabled' : ''}>Fit to content</button>
         <button type="button" data-m="expand">Expand all children</button>
         <button type="button" data-m="duplicate">Duplicate</button>
+        ${this.opts && this.opts.getPath ? '<button type="button" data-m="copylink">Copy link</button>' : ''}
         <button type="button" data-m="front">Bring to front</button>
         <button type="button" data-m="back">Send to back</button>
         <div class="mm-menu-sep"></div>
@@ -6812,6 +6827,7 @@
       if (m === 'fit') this.fitFrameToContent(id);
       if (m === 'expand') this.expandFrame(id);
       if (m === 'duplicate') this.duplicateFrame(id);
+      if (m === 'copylink') this._copyFrameLink(id);
       if (m === 'front') this._frameZ(id, 'front');
       if (m === 'back') this._frameZ(id, 'back');
       if (m === 'cat') {

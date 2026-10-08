@@ -2278,6 +2278,7 @@
         }
         return;
       }
+      if (m === 'copylink' && this.selectedFrameId) this._copyFrameLink(this.selectedFrameId);
       if (m === 'delete') this._deleteSelected();
       if (m === 'duplicate') this._duplicateSelected();
       if (m === 'copy') this._copySelected();
@@ -2349,6 +2350,20 @@
       }
     }
 
+    // Markdown link to a frame of this board, e.g.
+    // [Architecture](/notes/map.html#frame=f_123) — paste it in a note.
+    _copyFrameLink(id) {
+      const f = (this.data.frames || []).find((fr) => fr.id === id);
+      const path = this.opts && typeof this.opts.getPath === 'function' ? this.opts.getPath() : '';
+      if (!f || !path) return;
+      const title = String(f.title || 'Frame').replace(/([\[\]\\])/g, '\\$1');
+      const href = '/' + path.split('/').map((seg) => encodeURIComponent(seg)).join('/') + '#frame=' + encodeURIComponent(id);
+      const text = '[' + title + '](' + href + ')';
+      const done = (ok) => { if (typeof global.setStatus === 'function') global.setStatus(ok ? 'Frame link copied — paste it in a note' : 'Could not copy the link', ok ? 'ok' : 'dirty'); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+      else done(false);
+    }
+
     _frameMenuHtml(f) {
       const locked = !!(f && f.locked);
       const catBtns = this._frameCatList().length
@@ -2365,6 +2380,7 @@
           <button type="button" data-m="copy">Copy</button>
           <button type="button" data-m="paste">Paste</button>
           <button type="button" data-m="duplicate">Duplicate</button>
+          ${this.opts && this.opts.getPath ? '<button type="button" data-m="copylink">Copy link</button>' : ''}
           <div class="fl-menu-sep"></div>
           <button type="button" data-m="export" data-format="png">Export PNG</button>
           <button type="button" data-m="export" data-format="svg">Export SVG</button>

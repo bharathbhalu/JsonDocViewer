@@ -203,7 +203,7 @@ function applyAppTheme(theme, persist) {
   if (window.monaco) monaco.editor.setTheme(theme === 'light' ? 'vs' : 'vs-dark');
   // A rendered markdown preview is themed too. (Throws harmlessly during
   // start-up, before the view state below exists.)
-  try { if (viewMode === 'render' && isMarkdownPath(currentPath)) setViewMode('render'); } catch (e) { /* not ready yet */ }
+  try { if (viewMode === 'render' && (isMarkdownPath(currentPath) || isMermaidPath(currentPath))) setViewMode('render'); } catch (e) { /* not ready yet */ }
 }
 applyAppTheme(storedTheme());
 let themeToggledByUser = false;
@@ -252,6 +252,69 @@ function isMarkdownPath(p) {
   return /\.(md|markdown)$/i.test(p || '');
 }
 
+function isMermaidPath(p) {
+  return /\.(mmd|mermaid)$/i.test(p || '');
+}
+
+// --- Mermaid diagrams (```mermaid blocks in markdown, and .mmd files) ---
+// Large library: loaded from the CDN only when a diagram is shown.
+const MERMAID_URL = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+let mermaidP = null;
+let mermaidSeq = 0;
+function ensureMermaid() {
+  if (!mermaidP) {
+    mermaidP = loadGlobalScript(MERMAID_URL, () => !!(window.mermaid && window.mermaid.render));
+    mermaidP.catch(() => { mermaidP = null; });
+  }
+  return mermaidP;
+}
+// Render one diagram to SVG markup. Labels are sanitised by mermaid
+// (securityLevel "strict"). Throws with mermaid's syntax error message.
+async function renderMermaidSvg(code, dark) {
+  await ensureMermaid();
+  window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default', fontFamily: 'ui-sans-serif, system-ui, sans-serif' });
+  const id = 'mmd-' + (++mermaidSeq);
+  try {
+    const { svg } = await window.mermaid.render(id, String(code || ''));
+    return svg;
+  } finally {
+    // mermaid leaves a temporary element behind on errors
+    ['d' + id, id].forEach((x) => { const n = document.getElementById(x); if (n && n.closest('body') && !n.closest('#editor-area')) n.remove(); });
+  }
+}
+// SVGs for every ```mermaid block of a markdown source, in order
+// ({ error } for a block that doesn't parse).
+async function renderMermaidBlocks(source, dark) {
+  const tpl = markdownTemplate(source);
+  const blocks = [...tpl.content.querySelectorAll('pre > code.language-mermaid')];
+  const out = [];
+  for (const code of blocks) {
+    try { out.push(await renderMermaidSvg(code.textContent, dark)); } catch (err) { out.push({ error: String((err && err.message) || err).split('\n')[0] }); }
+  }
+  return out;
+}
+// Replace ```mermaid code blocks in a parsed markdown template with SVGs.
+function applyMermaidSvgs(tpl, svgs) {
+  [...tpl.content.querySelectorAll('pre > code.language-mermaid')].forEach((code, i) => {
+    const r = (svgs || [])[i];
+    const box = document.createElement('div');
+    box.className = 'md-mermaid';
+    if (typeof r === 'string') box.innerHTML = r;
+    else {
+      box.classList.add('is-error');
+      box.textContent = 'Mermaid: ' + ((r && r.error) || 'diagram could not be rendered');
+    }
+    code.parentElement.replaceWith(box);
+  });
+}
+
+function mermaidPageDoc(inner, isError) {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;min-height:100%;background:${dark ? '#0d1117' : '#ffffff'};color:${dark ? '#e6edf3' : '#1f2328'};font:14px/1.5 ui-sans-serif,system-ui,sans-serif}`
+    + `.wrap{padding:32px;display:flex;justify-content:center}.wrap svg{max-width:100%;height:auto}.err{color:${dark ? '#f97066' : '#d92d20'};white-space:pre-wrap;max-width:760px;margin:48px auto;padding:0 24px}</style></head>`
+    + `<body>${isError ? '<div class="err"></div>' : '<div class="wrap">' + inner + '</div>'}</body></html>`;
+}
+
 // --- Markdown preview ---
 // marked (parser) + DOMPurify (sanitizer), served with the app (public/vendor)
 // so the preview never waits on a CDN; the CDN is only a fallback.
@@ -267,7 +330,9 @@ let markdownRenderToken = 0;
 // Run a UMD bundle so it defines a global. The page has Monaco's AMD
 // `define`, which a UMD bundle would use instead; it is shadowed for this
 // script only (hiding window.define would break Monaco's own loads).
-async function loadGlobalScript(src, ready) {
+// `names`: top-level `var`s the bundle declares (they would stay local to
+// the wrapper below); they are copied onto window.
+async function loadGlobalScript(src, ready, names) {
   if (ready()) return;
   // A stalled request must not leave the preview waiting forever.
   const ctl = new AbortController();
@@ -283,7 +348,8 @@ async function loadGlobalScript(src, ready) {
   if (!res.ok) throw new Error('Failed to load ' + src);
   const code = await res.text();
   // eslint-disable-next-line no-new-func
-  new Function('define', 'module', 'exports', code + '\n//# sourceURL=' + src).call(window, undefined, undefined, undefined);
+  const exportVars = (names || []).map((n) => `if(typeof ${n}!=='undefined')window.${n}=${n};`).join('');
+  new Function('define', 'module', 'exports', code + '\n;' + exportVars + '\n//# sourceURL=' + src).call(window, undefined, undefined, undefined);
   if (!ready()) throw new Error('Loaded ' + src + ' without its API');
 }
 
@@ -360,6 +426,9 @@ body { font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter
 .md img { max-width: 100%; border-radius: 4px; }
 .md hr { height: 1px; border: 0; background: var(--line); margin: 1.5em 0; }
 .md .md-missing { color: var(--muted); font-style: italic; }
+.md .md-mermaid { margin: 0 0 1em; padding: 12px; border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; text-align: center; }
+.md .md-mermaid svg { max-width: 100%; height: auto; }
+.md .md-mermaid.is-error { color: #d92d20; text-align: left; font-size: 13px; white-space: pre-wrap; }
 .md img.md-board-img { display: block; max-width: 100%; max-height: 70vh; width: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
 `;
 
@@ -408,8 +477,9 @@ async function renderMarkdownBoardImages(source, relPath) {
 
 // Build the sandboxed preview document for a markdown file. `boardImages`
 // comes from renderMarkdownBoardImages().
-function renderMarkdownDoc(source, relPath, boardImages) {
+function renderMarkdownDoc(source, relPath, boardImages, mermaidSvgs) {
   const tpl = markdownTemplate(source);
+  applyMermaidSvgs(tpl, mermaidSvgs);
   const origin = location.origin;
   // Images relative to the .md file load from the workspace; board frame
   // images use the live renders.
@@ -447,12 +517,60 @@ function renderMarkdownDoc(source, relPath, boardImages) {
       a.setAttribute('rel', 'noopener noreferrer');
     }
   });
+  addHeadingIds(tpl.content);
   const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   const body = tpl.innerHTML.trim() || '<p class="md-missing">This file is empty.</p>';
   return `<!DOCTYPE html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${MARKDOWN_CSS}</style></head>`
     + `<body><article class="md">${body}</article>`
     + `<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[data-open]');if(!a)return;e.preventDefault();parent.postMessage({type:'docviewer-open',path:a.getAttribute('data-open')},'*');});<\/script>`
+    // In-page "#heading" links and outline clicks (the app sends the heading's index).
+    + `<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(!a||a.hasAttribute('data-open'))return;var t=document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));if(t){e.preventDefault();t.scrollIntoView({block:'start'});}});`
+    + `window.addEventListener('message',function(e){var d=e.data;if(!d||d.type!=='docviewer-scroll')return;var hs=document.querySelectorAll('.md h1,.md h2,.md h3,.md h4,.md h5,.md h6');var h=hs[d.index];if(h)h.scrollIntoView({block:'start',behavior:'smooth'});});<\/script>`
     + `</body></html>`;
+}
+
+// --- Headings: ids for links, outline and table of contents ---
+// GitHub-style slug: lower case, punctuation dropped, spaces to dashes;
+// repeats get -1, -2 ….
+function headingSlug(text) {
+  return String(text || '').toLowerCase().trim().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s+/g, '-');
+}
+function addHeadingIds(root) {
+  const seen = new Map();
+  root.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => {
+    const base = headingSlug(h.textContent) || 'section';
+    const n = seen.get(base) || 0;
+    seen.set(base, n + 1);
+    if (!h.id) h.id = n ? base + '-' + n : base;
+  });
+}
+// Headings of a markdown source (not inside code fences), with the text as
+// it renders (inline markdown removed), level, line and slug.
+function markdownHeadings(source) {
+  const out = [];
+  const seen = new Map();
+  let fence = null;
+  String(source || '').split('\n').forEach((line, i) => {
+    const f = line.match(/^\s{0,3}(```+|~~~+)/);
+    if (f) {
+      if (!fence) fence = f[1][0];
+      else if (f[1][0] === fence) fence = null;
+      return;
+    }
+    if (fence) return;
+    const m = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+    if (!m || !m[2]) return;
+    const text = m[2]
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/(\*\*|__|\*|_|~~|`)/g, '')
+      .trim();
+    const base = headingSlug(text) || 'section';
+    const n = seen.get(base) || 0;
+    seen.set(base, n + 1);
+    out.push({ level: m[1].length, text, line: i + 1, slug: n ? base + '-' + n : base });
+  });
+  return out;
 }
 
 // Links in the markdown preview ask the app to open a workspace file.
@@ -536,6 +654,12 @@ function applyFileIcon(el, p, kind) {
   if (fmt === 'yaml') {
     el.classList.add('icon-yaml');
     el.textContent = 'YML';
+    return;
+  }
+  if (isMermaidPath(p)) {
+    el.classList.add('icon-md');
+    el.textContent = 'MMD';
+    el.title = 'Mermaid diagram';
     return;
   }
   if (isMarkdownPath(p)) {
@@ -772,6 +896,7 @@ async function loadTree() {
     dataRootPath = data.rootPath || '';
     treeEl.innerHTML = '';
     treeEl.appendChild(renderNodes(data.children));
+    if (typeof decorateTreeTags === 'function') decorateTreeTags();
     renderFavorites();
   })().finally(() => {
     loadTreeInflight = null;
@@ -1282,6 +1407,8 @@ function treeMenuItems(node, row) {
       bookmark,
       { label: 'Export as zip', action: () => downloadHref(p) },
       { label: 'Export as website (.zip)', action: () => exportFolderSite(p) },
+      { label: 'Export as website (single HTML)', action: () => exportFolderSiteSingle(p) },
+      { label: 'Build network topology…', action: () => buildTopology(p) },
       { label: 'Export as PDF', action: () => exportFolderPdf(p) },
       { label: 'Copy path', action: () => copyPath(p) },
       'sep',
@@ -1290,6 +1417,9 @@ function treeMenuItems(node, row) {
   }
   return [
     { label: 'Open', action: () => openFile(p) },
+    { label: 'Tags…', action: () => openTagEditor(p) },
+    { label: 'Save as template', action: () => saveAsTemplate(p) },
+    ...(/\.json$/i.test(p) ? [{ label: 'Build network topology…', action: () => buildTopology(p) }] : []),
     'sep',
     { label: 'Rename…', action: () => renamePath(p, false) },
     ...toTop,
@@ -1319,6 +1449,7 @@ document.getElementById('tree').addEventListener('contextmenu', (e) => {
     { label: 'Import…', action: () => pickImport('') },
     'sep',
     { label: 'Export workspace as website (.zip)', action: () => exportFolderSite('') },
+    { label: 'Export workspace as website (single HTML)', action: () => exportFolderSiteSingle('') },
     { label: 'Export workspace as PDF', action: () => exportFolderPdf('') },
     'sep',
     { label: 'Refresh', action: () => loadTree() },
@@ -1403,12 +1534,14 @@ const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
   { id: 'markdown', label: 'Markdown', hint: 'Markdown document. .md is added if you omit it', placeholder: 'notes' },
+  { id: 'mermaid', label: 'Mermaid', hint: 'Text-defined diagram (flowchart, sequence, …). .mmd is added if you omit it', placeholder: 'diagram' },
   { id: 'mindmap', label: 'Mindmap', hint: 'Tree board. .html is added if you omit it', placeholder: 'ideas' },
   { id: 'flow', label: 'Flow', hint: 'Flowchart board. .html is added if you omit it', placeholder: 'process' },
   { id: 'kanban', label: 'Kanban', hint: 'Task board with columns. .html is added if you omit it', placeholder: 'sprint' },
   { id: 'gantt', label: 'Gantt', hint: 'Timeline of tasks and dependencies. .html is added if you omit it', placeholder: 'roadmap' },
   { id: 'slides', label: 'Slides', hint: 'Presentation built from mindmap/flow frames and gantt charts. .html is added if you omit it', placeholder: 'deck' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
+  { id: 'template', label: 'From template…', hint: 'Pick a starter: meeting notes, standup, design review, sprint board, project plan, decks… Press Create to browse.', needsName: false },
 ];
 
 let askResolver = null;
@@ -1571,8 +1704,13 @@ async function openCreateDialog(parentPath) {
     confirmLabel: 'Create',
     kinds: CREATE_KINDS,
   });
+  if (result && result.kind === 'template') return openTemplateGallery(parentPath);
   if (!result || !result.name) return;
   if (result.kind === 'folder') return createFolder(parentPath, result.name);
+  if (result.kind === 'mermaid') {
+    const name = result.name.trim();
+    return createFile(parentPath, /\.(mmd|mermaid)$/i.test(name) ? name : name + '.mmd');
+  }
   if (result.kind === 'markdown') {
     const name = result.name.trim();
     return createFile(parentPath, /\.(md|markdown)$/i.test(name) ? name : name + '.md');
@@ -2162,13 +2300,13 @@ function ensureStylesheet(href, flag) {
 
 function ensureMindmapAssets() {
   ensureStylesheet('/mindmap/engine.css?v=97', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=134', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  return ensureScript('/mindmap/engine.js?v=135', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=24', 'data-fl-css');
   return ensureScript('/flow/core.js?v=21', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=37', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=38', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function ensureKanbanAssets() {
@@ -2434,7 +2572,7 @@ async function openFile(relPath, lineToReveal, opts) {
     try {
       await ensureMindmapAssets();
       if (token !== openToken) return;
-      boardEngine = new window.MindmapEngine(mindmapStage, { onChange: onBoardChange });
+      boardEngine = new window.MindmapEngine(mindmapStage, { onChange: onBoardChange, getPath: () => currentPath });
       boardEngine.loadFromHtml(data.content);
       setViewMode('board');
     } catch (err) {
@@ -2448,7 +2586,7 @@ async function openFile(relPath, lineToReveal, opts) {
     try {
       await ensureFlowAssets();
       if (token !== openToken) return;
-      boardEngine = new window.FlowEngine(mindmapStage, { onChange: onBoardChange });
+      boardEngine = new window.FlowEngine(mindmapStage, { onChange: onBoardChange, getPath: () => currentPath });
       boardEngine.loadFromHtml(data.content);
       setViewMode('board');
     } catch (err) {
@@ -2499,7 +2637,7 @@ async function openFile(relPath, lineToReveal, opts) {
       alert('Slides failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
-  } else if (isHtml || isMarkdownPath(relPath)) {
+  } else if (isHtml || isMarkdownPath(relPath) || isMermaidPath(relPath)) {
     // HTML and markdown open rendered; the toggle shows the raw file.
     viewToggleBtn.classList.remove('hidden');
     setViewMode('render');
@@ -2550,18 +2688,32 @@ function setViewMode(mode) {
       const stillWanted = () => token === markdownRenderToken && viewMode === 'render' && currentPath === path;
       const ready = MARKDOWN_LIBS.every((lib) => lib.ready());
       if (!ready) setPreviewDoc(markdownStatusDoc('Rendering…'));
+      const dark = document.documentElement.dataset.theme === 'dark';
       ensureMarkdownLibs()
-        .then(() => renderMarkdownBoardImages(source, path).catch(() => ({})))
-        .then((boardImages) => {
+        .then(() => Promise.all([
+          renderMarkdownBoardImages(source, path).catch(() => ({})),
+          /```\s*mermaid/i.test(source) ? renderMermaidBlocks(source, dark).catch((e) => [{ error: 'Mermaid could not load: ' + ((e && e.message) || e) }]) : [],
+        ]))
+        .then(([boardImages, mermaidSvgs]) => {
         if (!stillWanted()) return;
         try {
-          setPreviewDoc(renderMarkdownDoc(source, path, boardImages));
+          setPreviewDoc(renderMarkdownDoc(source, path, boardImages, mermaidSvgs));
         } catch (err) {
           setPreviewDoc(markdownStatusDoc('Could not render this file: ' + ((err && err.message) || err) + '. Use View Source to see it.', true));
         }
       }).catch((err) => {
         if (!stillWanted()) return;
         setPreviewDoc(markdownStatusDoc('Could not load the markdown renderer (' + ((err && err.message) || err) + '). Use View Source to see the file, or reopen it to retry.', true));
+      });
+    } else if (isMermaidPath(currentPath)) {
+      const path = currentPath;
+      const token = ++markdownRenderToken;
+      setPreviewDoc(markdownStatusDoc('Rendering diagram…'));
+      renderMermaidSvg(editor.getValue(), document.documentElement.dataset.theme === 'dark').then((svg) => {
+        if (token === markdownRenderToken && viewMode === 'render' && currentPath === path) setPreviewDoc(mermaidPageDoc(svg));
+      }).catch((err) => {
+        if (token !== markdownRenderToken || viewMode !== 'render' || currentPath !== path) return;
+        setPreviewDoc(markdownStatusDoc('Diagram error: ' + String((err && err.message) || err) + ' — use View Source to fix it.', true));
       });
     } else {
       setPreviewDoc(editor.getValue());
@@ -2578,6 +2730,8 @@ function setViewMode(mode) {
     }
   }
   if (typeof syncMarkdownToolbar === 'function') syncMarkdownToolbar();
+  if (typeof refreshBacklinks === 'function') refreshBacklinks();
+  if (typeof refreshFileTags === 'function') refreshFileTags();
 }
 
 viewToggleBtn.addEventListener('click', () => {
@@ -2632,6 +2786,8 @@ async function saveCurrentFile() {
       setStatus('Modified (unsaved)', 'dirty');
     }
     runValidation();
+    // A saved note may add or remove links to other files.
+    if (typeof refreshBacklinks === 'function' && isMarkdownPath(savedPath)) setTimeout(() => refreshBacklinks(true), 0);
     return true;
   })().finally(() => {
     saveInFlight = null;

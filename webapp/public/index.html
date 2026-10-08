@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <title>Accretion</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="style.css?v=20" />
+  <link rel="stylesheet" href="style.css?v=30" />
 </head>
 <body>
   <div id="app">
@@ -39,6 +39,7 @@
           <button type="button" class="search-filter" data-search-type="pdf">PDFs</button>
         </div>
         <div id="search-results" class="hidden"></div>
+        <div id="tag-filter" class="hidden" aria-label="Filter files by tag"></div>
       </div>
       <div id="favorites-section">
         <div id="favorites-header">
@@ -65,6 +66,8 @@
             <span id="current-path">No file open</span>
           </div>
           <span id="status" class="status"></span>
+          <span id="file-tags"></span>
+          <button type="button" id="backlinks-btn" class="hidden" aria-haspopup="dialog"></button>
         </div>
         <div class="spacer"></div>
 
@@ -118,8 +121,11 @@
         <button type="button" data-md="quote" title="Quote">❝ Quote</button>
         <button type="button" data-md="codeblock" title="Code block">{ } Code</button>
         <button type="button" data-md="hr" title="Divider">— Divider</button>
+        <button type="button" data-md="toc" title="Insert a table of contents (links to every heading)">≣ TOC</button>
+        <button type="button" data-md="outline" title="Show or hide the outline panel">☰ Outline</button>
         <span class="md-sep"></span>
         <button type="button" data-md="table" title="Insert table">▦ Table</button>
+        <button type="button" data-md="mermaid" title="Insert a Mermaid diagram">◇ Mermaid</button>
         <button type="button" data-md="link" title="Insert web link (Cmd/Ctrl+K)">🔗 Link</button>
         <button type="button" data-md="image" title="Insert image">🖼 Image</button>
         <button type="button" data-md="file" title="Link to a workspace file">📄 File</button>
@@ -193,9 +199,15 @@
     </div>
   </div>
   <script src="paste-utils.js?v=2"></script>
-  <script src="app.js?v=207"></script>
-  <script src="md-tools.js?v=5"></script>
-  <script src="calendar.js?v=3"></script>
-  <script src="folder-export.js?v=2"></script>
+  <script src="app.js?v=210"></script>
+  <script src="md-tools.js?v=7"></script>
+  <script src="daily.js?v=9"></script>
+  <script src="calendar.js?v=5"></script>
+  <script src="folder-export.js?v=6"></script>
+  <script src="backlinks.js?v=1"></script>
+  <script src="tags.js?v=1"></script>
+  <script src="templates.js?v=1"></script>
+  <script src="topology-core.js?v=2"></script>
+  <script src="topology.js?v=2"></script>
 </body>
 </html>
