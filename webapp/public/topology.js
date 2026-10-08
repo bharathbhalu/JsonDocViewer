@@ -105,7 +105,7 @@
     }
     const inTree = (nodes, p) => (nodes || []).some((n) => n.path === p || (n.type === 'dir' && p.startsWith(n.path + '/') && inTree(n.children, p)));
     const exists = inTree(lastTreeChildren, choice.out);
-    if (exists && !confirm(choice.out + ' already exists. Replace it?')) return;
+    if (exists && !(await uiConfirm(choice.out + ' already exists. Replace it?', { title: 'Replace file', okLabel: 'Replace', danger: true }))) return;
     const title = 'Topology — ' + (srcPath || 'workspace');
     const html = window.FlowCore.serializeToHtml(result.data, title);
     const { res, data } = await postFileContent(choice.out, html);

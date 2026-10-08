@@ -37,7 +37,7 @@
     }
     let name = target.suggested || ('flow.' + ext);
     try {
-      const typed = window.prompt('File name', name);
+      const typed = window.uiPrompt ? await window.uiPrompt('File name', name, { title: 'Save as', okLabel: 'Save' }) : name;
       if (typed == null) return;
       name = typed.trim() || name;
     } catch (e) { /* ignore */ }

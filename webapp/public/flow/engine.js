@@ -129,7 +129,7 @@
         dataId: 'flow-data',
         json,
         cssUrls: ['/flow/engine.css'],
-        jsUrls: ['/flow/core.js', '/flow/engine.js', '/flow/export.js'],
+        jsUrls: ['/popup.js', '/flow/core.js', '/flow/engine.js', '/flow/export.js'],
       });
       if (opts && opts.returnHtml) return html;
       downloadStandalone(html, filename || safeStandaloneName(title, 'flow'));
@@ -213,7 +213,7 @@
       if (!global.FlowExport) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/flow/export.js?v=13';
+          s.src = '/flow/export.js?v=14';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Export module failed to load'));
           document.body.appendChild(s);
@@ -1135,11 +1135,11 @@
       this._emit();
     }
 
-    _deleteFrameCat(id) {
+    async _deleteFrameCat(id) {
       if (this.readOnly) return;
       const cat = this._frameCatList().find((c) => c.id === id);
       if (!cat) return;
-      if (!confirm('Remove “' + cat.name + '”? Frames move to the parent category.')) return;
+      if (!(await global.uiConfirm('Remove “' + cat.name + '”? Frames move to the parent category.', { title: 'Remove category', okLabel: 'Remove', danger: true }))) return;
       this._pushUndo();
       const parentId = cat.parentId || null;
       this._frameCatList().forEach((c) => {

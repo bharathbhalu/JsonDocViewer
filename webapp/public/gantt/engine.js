@@ -2414,7 +2414,7 @@
         dataId: 'gantt-data',
         json,
         cssUrls: ['/gantt/engine.css'],
-        jsUrls: ['/gantt/core.js', '/gantt/engine.js', '/gantt/export.js'],
+        jsUrls: ['/popup.js', '/gantt/core.js', '/gantt/engine.js', '/gantt/export.js'],
       });
       if (opts && opts.returnHtml) return html;
       downloadStandalone(html, filename || safeStandaloneName(title, 'gantt'));

@@ -307,10 +307,10 @@
       else deleteHabit(id);
     });
   }
-  function deleteHabit(id) {
+  async function deleteHabit(id) {
     const h = habitOf(id);
     const count = Object.values(store.checks).filter((l) => l.includes(id)).length;
-    if (!confirm(`Delete the habit "${h.name}"${count ? ` and its ${count} check-in${count === 1 ? '' : 's'}` : ''}? This can't be undone.\n\nTip: Disable keeps its history instead.`)) return;
+    if (!(await uiConfirm(`Delete the habit "${h.name}"${count ? ` and its ${count} check-in${count === 1 ? '' : 's'}` : ''}? This can't be undone.\n\nTip: Disable keeps its history instead.`, { title: 'Delete habit', okLabel: 'Delete', danger: true }))) return;
     change((st) => {
       st.habits = st.habits.filter((y) => y.id !== id);
       Object.keys(st.checks).forEach((k) => {

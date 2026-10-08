@@ -9,8 +9,8 @@
   const WHOLE = '__all__';
   const SOURCE_KINDS = { mindmap: 'Mindmap', flow: 'Flow', gantt: 'Gantt' };
   const EXPORT_URLS = {
-    mindmap: '/mindmap/export.js?v=24',
-    flow: '/flow/export.js?v=13',
+    mindmap: '/mindmap/export.js?v=25',
+    flow: '/flow/export.js?v=14',
   };
 
   const esc = (s) => C.escapeHtml(s == null ? '' : s);

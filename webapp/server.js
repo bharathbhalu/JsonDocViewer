@@ -11,11 +11,61 @@ const { execFile, execFileSync } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 4321;
-const DATA_ROOT = path.resolve(__dirname, '..', 'data');
-
-if (!fs.existsSync(DATA_ROOT)) {
-  fs.mkdirSync(DATA_ROOT, { recursive: true });
+// --- Where the data lives. The app folder holds only code; the data folder
+// (any directory) holds the files, their git history and the app's state
+// for that workspace (<data>/.accretion/). Chosen by, in order: the
+// DATA_DIR env var, ~/.accretion/config.json, or ../data next to the app.
+const APP_CONFIG_DIR = path.join(require('os').homedir(), '.accretion');
+const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'config.json');
+const DEFAULT_DATA_ROOT = path.resolve(__dirname, '..', 'data');
+const STATE_DIR_NAME = '.accretion';
+function expandHome(p) {
+  const s = String(p || '').trim();
+  if (s === '~') return require('os').homedir();
+  if (s.startsWith('~/')) return path.join(require('os').homedir(), s.slice(2));
+  return s;
 }
+function readAppConfig() {
+  try {
+    const c = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf8'));
+    return {
+      dataDir: typeof c.dataDir === 'string' && c.dataDir ? c.dataDir : null,
+      recent: Array.isArray(c.recent) ? c.recent.filter((x) => typeof x === 'string').slice(0, 10) : [],
+      openAs: c.openAs === 'window' ? 'window' : c.openAs === 'browser' ? 'browser' : undefined,
+    };
+  } catch (e) {
+    return { dataDir: null, recent: [], openAs: undefined };
+  }
+}
+function writeAppConfig(cfg) {
+  fs.mkdirSync(APP_CONFIG_DIR, { recursive: true });
+  writeJsonAtomic(APP_CONFIG_FILE, cfg);
+}
+const DATA_SOURCE = process.env.DATA_DIR ? 'env' : readAppConfig().dataDir ? 'config' : 'default';
+let DATA_ROOT = path.resolve(expandHome(process.env.DATA_DIR || readAppConfig().dataDir || DEFAULT_DATA_ROOT));
+fs.mkdirSync(DATA_ROOT, { recursive: true });
+
+// Per-workspace state files live in <data>/.accretion/.
+const stateFile = (name) => path.join(DATA_ROOT, STATE_DIR_NAME, name);
+const LEGACY_STATE = ['favorites.json', 'todos.json', 'tags.json', 'ui-settings.json', 'daily.json', 'ideas.json'];
+function prepareStateDir() {
+  fs.mkdirSync(path.join(DATA_ROOT, STATE_DIR_NAME), { recursive: true });
+  // One-time move of state that used to sit in the app folder.
+  for (const name of LEGACY_STATE) {
+    const old = path.join(__dirname, name);
+    const dest = stateFile(name);
+    try {
+      if (fs.existsSync(old) && !fs.existsSync(dest)) {
+        fs.copyFileSync(old, dest);
+        fs.renameSync(old, old + '.migrated');
+        console.log(`Moved ${name} into ${path.dirname(dest)}`);
+      }
+    } catch (e) {
+      console.error('Could not move ' + name + ':', e.message);
+    }
+  }
+}
+prepareStateDir();
 
 // --literal-pathspecs: file names are names, never patterns like "*.md".
 const GIT_ENV_ARGS = ['--literal-pathspecs', '-c', 'user.email=docviewer@local', '-c', 'user.name=JsonDocViewer'];
@@ -93,28 +143,46 @@ function sendFileStream(full, res) {
 
 function gitRepoOk() {
   try {
-    execFileSync('git', [...GIT_ENV_ARGS, 'rev-parse', '--is-inside-work-tree'], {
+    // The repository must be the data folder itself, never a parent repo
+    // that happens to contain it.
+    if (!fs.existsSync(path.join(DATA_ROOT, '.git'))) return false;
+    const top = execFileSync('git', [...GIT_ENV_ARGS, 'rev-parse', '--show-toplevel'], {
       cwd: DATA_ROOT,
       encoding: 'utf8',
       timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return true;
+    }).trim();
+    return fs.realpathSync(top) === fs.realpathSync(DATA_ROOT);
   } catch (e) {
     return false;
   }
 }
 
+// The app's own state is not part of the file history.
+function excludeStateFromGit() {
+  try {
+    const f = path.join(DATA_ROOT, '.git', 'info', 'exclude');
+    const cur = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+    if (!cur.split(/\r?\n/).includes('/' + STATE_DIR_NAME + '/')) {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.appendFileSync(f, (cur && !cur.endsWith('\n') ? '\n' : '') + '/' + STATE_DIR_NAME + '/\n');
+    }
+  } catch (e) { /* best effort */ }
+}
+
 function initGitRepo() {
   try {
-    if (gitRepoOk()) return;
+    if (gitRepoOk()) { excludeStateFromGit(); return; }
     const gitDir = path.join(DATA_ROOT, '.git');
     if (fs.existsSync(gitDir)) {
       // A leftover incomplete .git (e.g. interrupted init) makes every git
       // call fail and, without a timeout, can stall the whole HTTP server.
+      // Only remove it when it is clearly broken — never a real history.
+      if (fs.existsSync(path.join(gitDir, 'HEAD'))) throw new Error('existing .git in ' + DATA_ROOT + ' is not usable');
       fs.rmSync(gitDir, { recursive: true, force: true });
     }
     git(['init']);
+    excludeStateFromGit();
     try {
       git(['add', '-A']);
       git(['commit', '-m', 'Initial commit']);
@@ -206,7 +274,8 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
-const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
+// Path depends on the current data folder.
+const FAVORITES_FILE_NAME = 'favorites.json';
 
 function bookmarkId() {
   return 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -237,7 +306,8 @@ function normalizeBookmarks(raw) {
 }
 
 // --- Calendar to-dos: { days: { "YYYY-MM-DD": [{ id, text, done }] } } ---
-const TODOS_FILE = path.join(__dirname, 'todos.json');
+// Path depends on the current data folder.
+const TODOS_FILE_NAME = 'todos.json';
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
 function normalizeTodos(raw) {
@@ -280,7 +350,7 @@ function normalizeTodos(raw) {
 
 function readTodos() {
   try {
-    return normalizeTodos(JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8')));
+    return normalizeTodos(JSON.parse(fs.readFileSync(stateFile(TODOS_FILE_NAME), 'utf8')));
   } catch (e) {
     return { version: 1, rev: 0, days: {} };
   }
@@ -288,13 +358,13 @@ function readTodos() {
 
 function writeTodos(store) {
   // Write to a temp file then rename, so a crash never leaves half a file.
-  writeJsonAtomic(TODOS_FILE, store);
+  writeJsonAtomic(stateFile(TODOS_FILE_NAME), store);
 }
 
 function readBookmarks() {
   let text;
   try {
-    text = fs.readFileSync(FAVORITES_FILE, 'utf8');
+    text = fs.readFileSync(stateFile(FAVORITES_FILE_NAME), 'utf8');
   } catch (e) {
     return { categories: [], items: [] }; // no bookmarks yet
   }
@@ -305,13 +375,13 @@ function readBookmarks() {
     return store;
   } catch (e) {
     // Unreadable file: keep a copy instead of letting the next write wipe it.
-    try { fs.copyFileSync(FAVORITES_FILE, FAVORITES_FILE + '.corrupt-' + Date.now()); } catch (err) { /* ignore */ }
+    try { fs.copyFileSync(stateFile(FAVORITES_FILE_NAME), stateFile(FAVORITES_FILE_NAME) + '.corrupt-' + Date.now()); } catch (err) { /* ignore */ }
     return { categories: [], items: [] };
   }
 }
 
 function writeBookmarks(store) {
-  writeJsonAtomic(FAVORITES_FILE, store);
+  writeJsonAtomic(stateFile(FAVORITES_FILE_NAME), store);
 }
 
 function bookmarksPayload(store) {
@@ -323,13 +393,14 @@ function bookmarksPayload(store) {
 }
 
 // --- File tags: { files: { "path": ["tag", …] } } in webapp/tags.json ---
-const TAGS_FILE = path.join(__dirname, 'tags.json');
+// Path depends on the current data folder.
+const TAGS_FILE_NAME = 'tags.json';
 function cleanTag(t) {
   return String(t || '').trim().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^\p{L}\p{N}_./-]/gu, '').slice(0, 40);
 }
 function readTags() {
   let raw;
-  try { raw = JSON.parse(fs.readFileSync(TAGS_FILE, 'utf8')); } catch (e) { return { files: {} }; }
+  try { raw = JSON.parse(fs.readFileSync(stateFile(TAGS_FILE_NAME), 'utf8')); } catch (e) { return { files: {} }; }
   const files = {};
   const src = raw && raw.files && typeof raw.files === 'object' ? raw.files : {};
   Object.keys(src).forEach((p) => {
@@ -341,7 +412,7 @@ function readTags() {
   return { files };
 }
 function writeTags(store) {
-  writeJsonAtomic(TAGS_FILE, store);
+  writeJsonAtomic(stateFile(TAGS_FILE_NAME), store);
 }
 function removeTagsUnder(relPath) {
   const store = readTags();
@@ -664,11 +735,12 @@ function buildTree(dir) {
 
 // --- UI settings (e.g. sidebar width), kept on disk so they survive the
 // server falling back to a random port, which gives the browser a fresh origin.
-const UI_SETTINGS_FILE = path.join(__dirname, 'ui-settings.json');
+// Path depends on the current data folder.
+const UI_SETTINGS_FILE_NAME = 'ui-settings.json';
 
 function readUiSettings() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(UI_SETTINGS_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(stateFile(UI_SETTINGS_FILE_NAME), 'utf8'));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch (e) {
     return {};
@@ -693,7 +765,7 @@ app.post('/api/ui-settings', (req, res) => {
       if (lf === null || lf === '') delete next.lastFile;
       else if (typeof lf === 'string') { resolveSafe(lf); next.lastFile = lf; }
     }
-    writeJsonAtomic(UI_SETTINGS_FILE, next);
+    writeJsonAtomic(stateFile(UI_SETTINGS_FILE_NAME), next);
     res.json(next);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -785,11 +857,14 @@ function reconcileWatchedFiles() {
   if (added.length || removed.length) broadcastRefresh();
 }
 
+let dataWatcher = null;
+function startWatcher() {
 try {
-  fs.watch(DATA_ROOT, { recursive: true }, (eventType, filename) => {
+  if (dataWatcher) dataWatcher.close();
+  dataWatcher = fs.watch(DATA_ROOT, { recursive: true }, (eventType, filename) => {
     if (!filename) return;
     const parts = filename.split(path.sep);
-    if (parts.some((part) => part === '.git')) return;
+    if (parts.some((part) => part === '.git' || part === STATE_DIR_NAME)) return;
     const rel = parts.join('/');
     if (writingFiles.has(rel) || writingFiles.has(filename)) return;
     clearTimeout(watchDebounce);
@@ -797,6 +872,130 @@ try {
   });
 } catch (err) {
   console.error('File watching unavailable on this platform:', err.message);
+}
+}
+startWatcher();
+
+// --- Data folder settings
+function dataFolderInfo() {
+  const cfg = readAppConfig();
+  return { openAs: readAppConfig().openAs === 'window' ? 'window' : 'browser', windowAvailable: !!findAppBrowser(), dataDir: DATA_ROOT, source: process.env.DATA_DIR ? 'env' : DATA_SOURCE === 'env' ? 'env' : cfg.dataDir ? 'config' : 'default', recent: cfg.recent.filter((r) => r !== DATA_ROOT), defaultDir: DEFAULT_DATA_ROOT, configFile: APP_CONFIG_FILE, gitEnabled: !gitDisabled };
+}
+app.get('/api/config', (req, res) => res.json(dataFolderInfo()));
+
+// Open the UI again as a window or a browser tab (from inside the app).
+app.post('/api/open', (req, res) => {
+  const mode = req.body && req.body.as;
+  if (!['window', 'browser'].includes(mode)) return res.status(400).json({ error: 'as must be window or browser' });
+  if (mode === 'window' && !findAppBrowser()) return res.status(400).json({ error: 'Opening as a window needs Google Chrome, Microsoft Edge or Brave installed.' });
+  openUi(serverUrl || `http://localhost:${PORT}`, mode);
+  res.json({ ok: true });
+});
+
+// Remember how the app opens on start.
+app.post('/api/config/open-as', (req, res) => {
+  const mode = req.body && req.body.openAs;
+  if (!['window', 'browser'].includes(mode)) return res.status(400).json({ error: 'openAs must be window or browser' });
+  const cfg = readAppConfig();
+  writeAppConfig(Object.assign({}, cfg, { openAs: mode }));
+  res.json(dataFolderInfo());
+});
+
+// Switch to another data folder (created if asked) and remember it.
+app.post('/api/config/data-dir', (req, res) => {
+  try {
+    if (process.env.DATA_DIR) return res.status(400).json({ error: 'The data folder is set by the DATA_DIR environment variable; unset it to choose here.' });
+    const raw = expandHome((req.body && req.body.path) || '');
+    if (!raw || !path.isAbsolute(raw)) return res.status(400).json({ error: 'Enter a full path, e.g. /Users/me/Ideas or ~/Ideas' });
+    const target = path.resolve(raw);
+    if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) return res.status(400).json({ error: 'That path is a file, not a folder' });
+    if (!fs.existsSync(target)) {
+      if (!(req.body && req.body.create)) return res.status(404).json({ error: 'Folder does not exist', missing: true });
+      fs.mkdirSync(target, { recursive: true });
+    }
+    // The app's own folder is not a data folder.
+    const appDir = path.resolve(__dirname);
+    if (target === appDir || target.startsWith(appDir + path.sep)) return res.status(400).json({ error: 'Choose a folder outside the app folder' });
+    fs.accessSync(target, fs.constants.R_OK | fs.constants.W_OK);
+    const cfg = readAppConfig();
+    const recent = [DATA_ROOT, ...cfg.recent].filter((r, i, a) => r !== target && a.indexOf(r) === i).slice(0, 10);
+    writeAppConfig(Object.assign({}, cfg, { dataDir: target, recent }));
+    switchDataRoot(target);
+    res.json(dataFolderInfo());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Folder browser for choosing a data folder (the page can't read real
+// paths from the browser's own picker). Lists sub-folders only.
+app.get('/api/fs/list', (req, res) => {
+  try {
+    const os = require('os');
+    const home = os.homedir();
+    const dir = path.resolve(expandHome(req.query.path || '') || home);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return res.status(404).json({ error: 'Not a folder: ' + dir });
+    const showHidden = req.query.hidden === '1';
+    const appDir = path.resolve(__dirname);
+    const dirs = safeReaddir(dir)
+      .filter((e) => (e.isDirectory() || (e.isSymbolicLink() && (() => { try { return fs.statSync(path.join(dir, e.name)).isDirectory(); } catch (x) { return false; } })()))
+        && (showHidden || !e.name.startsWith('.')))
+      .map((e) => {
+        const full = path.join(dir, e.name);
+        return { name: e.name, path: full, isGit: fs.existsSync(path.join(full, '.git')), isWorkspace: fs.existsSync(path.join(full, STATE_DIR_NAME)) };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    let writable = true;
+    try { fs.accessSync(dir, fs.constants.W_OK); } catch (e) { writable = false; }
+    const places = [
+      { name: 'Home', path: home },
+      ...['Documents', 'Desktop', 'Downloads', 'Library/Mobile Documents/com~apple~CloudDocs', 'Dropbox', 'OneDrive']
+        .map((n) => ({ name: n.includes('CloudDocs') ? 'iCloud Drive' : n, path: path.join(home, n) }))
+        .filter((pl) => fs.existsSync(pl.path)),
+      ...(process.platform === 'darwin' && fs.existsSync('/Volumes') ? [{ name: 'Volumes', path: '/Volumes' }] : []),
+      { name: process.platform === 'win32' ? path.parse(dir).root : 'Computer (/)', path: path.parse(dir).root },
+    ];
+    const parent = path.dirname(dir);
+    res.json({
+      path: dir,
+      parent: parent !== dir ? parent : null,
+      sep: path.sep,
+      writable,
+      isAppFolder: dir === appDir || dir.startsWith(appDir + path.sep),
+      isWorkspace: fs.existsSync(path.join(dir, STATE_DIR_NAME)),
+      isGit: fs.existsSync(path.join(dir, '.git')),
+      dirs: dirs.slice(0, 2000),
+      places,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/fs/mkdir', (req, res) => {
+  try {
+    const parent = path.resolve(expandHome((req.body && req.body.parent) || ''));
+    const name = String((req.body && req.body.name) || '').trim();
+    if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return res.status(400).json({ error: 'Enter a folder name without slashes' });
+    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return res.status(404).json({ error: 'Parent folder not found' });
+    const full = path.join(parent, name);
+    if (fs.existsSync(full)) return res.status(400).json({ error: 'Already exists: ' + name });
+    fs.mkdirSync(full);
+    res.json({ path: full });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+function switchDataRoot(target) {
+  DATA_ROOT = target;
+  prepareStateDir();
+  knownFiles = new Set(listAllFiles(DATA_ROOT, []));
+  startWatcher();
+  gitDisabled = false;
+  initGitRepo();
+  console.log(`Serving files from: ${DATA_ROOT}`);
+  broadcastRefresh();
 }
 
 app.post('/api/folder', (req, res) => {
@@ -1139,7 +1338,8 @@ app.post('/api/todos', putTodos);
 // { rev, habits: [{ id, name, created, archived }],
 //   checks: { "YYYY-MM-DD": [habitId] },
 //   standups: { "YYYY-MM-DD": { yesterday, today, blockers, notes } } }
-const DAILY_FILE = path.join(__dirname, 'daily.json');
+// Path depends on the current data folder.
+const DAILY_FILE_NAME = 'daily.json';
 const STANDUP_FIELDS = ['yesterday', 'today', 'blockers', 'notes'];
 function normalizeDaily(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -1175,7 +1375,7 @@ function normalizeDaily(raw) {
 }
 function readDaily() {
   try {
-    return normalizeDaily(JSON.parse(fs.readFileSync(DAILY_FILE, 'utf8')));
+    return normalizeDaily(JSON.parse(fs.readFileSync(stateFile(DAILY_FILE_NAME), 'utf8')));
   } catch (e) {
     return normalizeDaily({});
   }
@@ -1192,7 +1392,7 @@ function putDaily(req, res) {
     }
     const store = normalizeDaily(body);
     store.rev = current.rev + 1;
-    writeJsonAtomic(DAILY_FILE, store);
+    writeJsonAtomic(stateFile(DAILY_FILE_NAME), store);
     res.json(store);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1200,6 +1400,60 @@ function putDaily(req, res) {
 }
 app.put('/api/daily', putDaily);
 app.post('/api/daily', putDaily);
+
+// --- Ideas inbox (webapp/ideas.json), same revision check as to-dos.
+// { rev, ideas: [{ id, text, tags, status, created, updated, remindAt,
+//   repeat, note }] }  remindAt: epoch ms or null; repeat: '', 'daily',
+//   '3d', 'weekly'; note: workspace path of the idea's markdown note.
+// Path depends on the current data folder.
+const IDEAS_FILE_NAME = 'ideas.json';
+const IDEA_STATUS = ['inbox', 'exploring', 'parked', 'done'];
+const IDEA_REPEAT = ['', 'daily', '3d', 'weekly'];
+function normalizeIdeas(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const ideas = (Array.isArray(src.ideas) ? src.ideas : [])
+    .filter((i) => i && typeof i.id === 'string' && i.id && typeof i.text === 'string')
+    .slice(0, 5000)
+    .map((i) => ({
+      id: i.id.slice(0, 40),
+      text: i.text.slice(0, 20000),
+      tags: (Array.isArray(i.tags) ? i.tags : []).map(cleanTag).filter(Boolean).slice(0, 20),
+      status: IDEA_STATUS.includes(i.status) ? i.status : 'inbox',
+      created: Number.isFinite(i.created) ? i.created : Date.now(),
+      updated: Number.isFinite(i.updated) ? i.updated : null,
+      remindAt: Number.isFinite(i.remindAt) ? i.remindAt : null,
+      repeat: IDEA_REPEAT.includes(i.repeat) ? i.repeat : '',
+      note: typeof i.note === 'string' && i.note ? i.note.slice(0, 500) : null,
+    }));
+  return { rev: Number.isInteger(src.rev) ? src.rev : 0, ideas };
+}
+function readIdeas() {
+  try {
+    return normalizeIdeas(JSON.parse(fs.readFileSync(stateFile(IDEAS_FILE_NAME), 'utf8')));
+  } catch (e) {
+    return normalizeIdeas({});
+  }
+}
+app.get('/api/ideas', (req, res) => {
+  res.json(readIdeas());
+});
+function putIdeas(req, res) {
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
+    const current = readIdeas();
+    if (!body || !Number.isInteger(body.baseRev) || body.baseRev !== current.rev) {
+      return res.status(409).json({ error: 'Ideas changed elsewhere', current });
+    }
+    const store = normalizeIdeas(body);
+    store.rev = current.rev + 1;
+    writeJsonAtomic(stateFile(IDEAS_FILE_NAME), store);
+    res.json(store);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}
+app.put('/api/ideas', putIdeas);
+app.post('/api/ideas', putIdeas);
 
 app.get('/api/favorites', (req, res) => {
   res.json(bookmarksPayload(readBookmarks()));
@@ -1869,6 +2123,71 @@ function printLink(url) {
   console.log(`Accretion running at ${hyperlink}`);
 }
 
+// --- How the UI opens: 'window' (its own app window via Chrome/Edge/Brave
+// app mode — no tabs or address bar), 'browser' (a normal tab) or 'none'.
+// Order: --window / --browser / --no-open flag, ACCRETION_OPEN env var,
+// then openAs in ~/.accretion/config.json; default 'browser'.
+function launchMode() {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--window')) return 'window';
+  if (argv.includes('--browser')) return 'browser';
+  if (argv.includes('--no-open')) return 'none';
+  const env = String(process.env.ACCRETION_OPEN || '').toLowerCase();
+  if (['window', 'browser', 'none'].includes(env)) return env;
+  const cfg = readAppConfig();
+  return cfg.openAs === 'window' ? 'window' : 'browser';
+}
+
+// Chromium-family browsers that support --app windows.
+function findAppBrowser() {
+  const home = require('os').homedir();
+  const candidates = process.platform === 'darwin' ? [
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    path.join(home, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Vivaldi.app/Contents/MacOS/Vivaldi',
+  ] : process.platform === 'win32' ? [
+    path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Microsoft/Edge/Application/msedge.exe'),
+    path.join(process.env['PROGRAMFILES'] || 'C:\\Program Files', 'Microsoft/Edge/Application/msedge.exe'),
+  ] : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge', '/usr/bin/brave-browser', '/snap/bin/chromium'];
+  return candidates.find((c) => { try { return fs.existsSync(c); } catch (e) { return false; } }) || null;
+}
+
+function openAsWindow(url) {
+  const exe = findAppBrowser();
+  if (!exe) {
+    console.log('(No Chrome / Edge / Brave found for a window — opening in the browser instead.)');
+    return openInBrowser(url);
+  }
+  // A separate profile gives the app its own Dock/taskbar window that
+  // remembers its size and position, independent of normal browsing.
+  const profile = path.join(APP_CONFIG_DIR, 'window-profile');
+  // First launch fills the screen; after that the window keeps whatever
+  // size and position you leave it at.
+  const firstRun = !fs.existsSync(profile);
+  const child = require('child_process').spawn(exe, [
+    '--app=' + url,
+    '--user-data-dir=' + profile,
+    '--no-first-run',
+    '--no-default-browser-check',
+    ...(firstRun ? ['--start-maximized'] : []),
+  ], { detached: true, stdio: 'ignore' });
+  child.on('error', (err) => { console.log('(Could not open a window: ' + err.message + ' — using the browser.)'); openInBrowser(url); });
+  child.unref();
+}
+
+function openUi(url, mode) {
+  const m = mode || launchMode();
+  if (m === 'none') return;
+  if (m === 'window') openAsWindow(url);
+  else openInBrowser(url);
+}
+
 function openInBrowser(url) {
   const platform = process.platform;
   const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
@@ -1898,12 +2217,14 @@ function portAnswers(host, port) {
   });
 }
 
+let serverUrl = null;
 function onListening(srv) {
   const actualPort = srv.address().port;
   const url = `http://localhost:${actualPort}`;
   printLink(url);
   console.log(`Serving files from: ${DATA_ROOT}`);
-  openInBrowser(url);
+  serverUrl = url;
+  openUi(url);
   setImmediate(initGitRepo);
 }
 
@@ -1926,6 +2247,17 @@ function listenOn(port) {
 (async () => {
   const busy = (await portAnswers('127.0.0.1', PORT)) || (await portAnswers('::1', PORT));
   if (busy) {
+    // Already running? Then just open it (as a window or tab) and exit.
+    try {
+      const r = await fetch(`http://localhost:${PORT}/api/config`, { signal: AbortSignal.timeout(1500) });
+      const d = r.ok ? await r.json() : null;
+      if (d && d.dataDir) {
+        console.log(`Accretion is already running at http://localhost:${PORT} — opening it.`);
+        openUi(`http://localhost:${PORT}`);
+        setTimeout(() => process.exit(0), 500);
+        return;
+      }
+    } catch (e) { /* not ours */ }
     console.log(`\n⚠  Port ${PORT} is already in use — probably an older copy of this app.`);
     console.log(`   Stop it with:  lsof -ti tcp:${PORT} | xargs kill   (then start this again)`);
     console.log('   Starting on a free port instead for now.\n');

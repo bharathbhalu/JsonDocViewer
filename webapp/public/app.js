@@ -2080,9 +2080,10 @@ async function movePath(fromPath, toPath, verb) {
   }
 
   const past = verb === 'Rename' ? 'Renamed' : 'Moved';
-  const commitMsg = prompt(
-    `${past} "${fromPath}" to "${toPath}". Commit this ${verb.toLowerCase()} to history?\nEnter a commit message, or cancel to leave it uncommitted:`,
-    `${verb} ${fromPath} -> ${toPath}`
+  const commitMsg = await uiPrompt(
+    `${past} "${fromPath}" to "${toPath}". Enter a commit message to save this ${verb.toLowerCase()} to history, or skip to leave it uncommitted.`,
+    `${verb} ${fromPath} -> ${toPath}`,
+    { title: `Commit ${verb.toLowerCase()}?`, okLabel: 'Commit', cancelLabel: 'Skip' }
   );
   if (commitMsg === null) return;
   const commitRes = await fetch('/api/commit', {
@@ -2300,31 +2301,31 @@ function ensureStylesheet(href, flag) {
 
 function ensureMindmapAssets() {
   ensureStylesheet('/mindmap/engine.css?v=97', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=135', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  return ensureScript('/mindmap/engine.js?v=136', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=24', 'data-fl-css');
   return ensureScript('/flow/core.js?v=21', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=38', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=39', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function ensureKanbanAssets() {
   ensureStylesheet('/kanban/engine.css?v=2', 'data-kb-css');
   return ensureScript('/kanban/core.js?v=2', 'data-kb-core', () => !!window.KanbanCore)
-    .then(() => ensureScript('/kanban/engine.js?v=5', 'data-kb-js', () => typeof window.KanbanEngine === 'function'));
+    .then(() => ensureScript('/kanban/engine.js?v=6', 'data-kb-js', () => typeof window.KanbanEngine === 'function'));
 }
 
 function ensureGanttAssets() {
   ensureStylesheet('/gantt/engine.css?v=18', 'data-gt-css');
   return ensureScript('/gantt/core.js?v=8', 'data-gt-core', () => !!window.GanttCore)
-    .then(() => ensureScript('/gantt/engine.js?v=24', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
+    .then(() => ensureScript('/gantt/engine.js?v=25', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
 }
 
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
   return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
-    .then(() => ensureScript('/slides/engine.js?v=10', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
+    .then(() => ensureScript('/slides/engine.js?v=11', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
 }
 
 // Slides render live windows of mindmap/flow frames and gantt charts, so
@@ -2857,7 +2858,7 @@ commitBtn.addEventListener('click', async () => {
   if (!currentPath) return;
   if (isDirty) await saveCurrentFile();
 
-  const message = prompt('Commit message for this version:', defaultCommitMessage());
+  const message = await uiPrompt('Commit message for this version:', defaultCommitMessage(), { title: 'Commit', okLabel: 'Commit' });
   if (message === null) return; // cancelled
 
   const res = await fetch('/api/commit', {

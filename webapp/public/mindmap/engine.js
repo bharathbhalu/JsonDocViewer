@@ -1547,7 +1547,7 @@
         dataId: 'mindmap-data',
         json,
         cssUrls: ['/mindmap/engine.css'],
-        jsUrls: ['/mindmap/engine.js', '/mindmap/export.js'],
+        jsUrls: ['/popup.js', '/mindmap/engine.js', '/mindmap/export.js'],
       });
       const name = filename || safeStandaloneName(title, 'mindmap');
       if (opts && opts.returnHtml) return html;
@@ -2117,11 +2117,11 @@
       this._emit();
     }
 
-    _deleteFrameCat(id) {
+    async _deleteFrameCat(id) {
       if (this.readOnly) return;
       const cat = this._frameCatList().find((c) => c.id === id);
       if (!cat) return;
-      if (!confirm('Remove “' + cat.name + '”? Frames move to the parent category.')) return;
+      if (!(await global.uiConfirm('Remove “' + cat.name + '”? Frames move to the parent category.', { title: 'Remove category', okLabel: 'Remove', danger: true }))) return;
       const parentId = cat.parentId || null;
       this._frameCatList().forEach((c) => {
         if (c.parentId === id) c.parentId = parentId;
@@ -5794,7 +5794,7 @@
     async _doExport(format, rect) {
       // A standalone file has export.js inlined and no server to fetch from.
       const stale = !isStandaloneDoc() && global.MindmapExport && global.MindmapExport._v !== EXPORT_V;
-      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=24');
+      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=25');
       if (!global.MindmapExport) throw new Error('Export module failed to load');
       const scene = this._exportScene();
       return global.MindmapExport.run(format, rect, scene, this.els);

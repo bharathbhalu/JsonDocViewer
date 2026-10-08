@@ -1676,14 +1676,14 @@
       });
     }
 
-    deleteColumn(id) {
+    async deleteColumn(id) {
       const col = this._column(id);
       if (!col) return;
       const cards = C.cardList(this.data, id);
       if (cards.length) {
         const other = this.data.columns.find((c) => c.id !== id);
         if (!other) return;
-        const ok = global.confirm(`Delete "${col.title || 'column'}"? Its ${cards.length} card(s) move to "${other.title}".`);
+        const ok = await global.uiConfirm(`Delete "${col.title || 'column'}"? Its ${cards.length} card(s) move to "${other.title}".`, { title: 'Delete column', okLabel: 'Delete', danger: true });
         if (!ok) return;
         this._mutate(() => {
           cards.forEach((card) => {
@@ -1820,11 +1820,11 @@
       this._toast(archiving ? 'Card archived' : 'Card restored', 'Undo', () => this.undo());
     }
 
-    deleteCard(id) {
+    async deleteCard(id) {
       const card = this.data.cards[id];
       if (!card || this.readOnly) return;
       const label = card.title ? `"${card.title.slice(0, 60)}"` : 'this card';
-      if (!global.confirm(`Delete ${label}? Archiving keeps it recoverable on the board.`)) return;
+      if (!(await global.uiConfirm(`Delete ${label}? Archiving keeps it recoverable on the board.`, { title: 'Delete card', okLabel: 'Delete', danger: true }))) return;
       const columnId = card.columnId;
       this._mutate(() => {
         delete this.data.cards[id];
@@ -2163,8 +2163,8 @@
       this.drawerEls.linkEntry.style.display = 'none';
     }
 
-    _promptNewMember() {
-      const name = global.prompt('Name of the person');
+    async _promptNewMember() {
+      const name = await global.uiPrompt('Name of the person', '', { title: 'Add person', okLabel: 'Add' });
       this.drawerEls.whoSel.value = this.data.cards[this.detailId] ? (this.data.cards[this.detailId].assignee || '') : '';
       if (!name || !name.trim()) return;
       const member = C.defaultMember(name.trim(), C.MEMBER_COLORS[this.data.members.length % C.MEMBER_COLORS.length]);
@@ -2380,7 +2380,7 @@
       if (!global.KanbanExport || stale) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/kanban/export.js?v=2';
+          s.src = '/kanban/export.js?v=3';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Export module failed to load'));
           document.body.appendChild(s);
@@ -2427,7 +2427,7 @@
         dataId: 'kanban-data',
         json,
         cssUrls: ['/kanban/engine.css'],
-        jsUrls: ['/kanban/core.js', '/kanban/engine.js', '/kanban/export.js'],
+        jsUrls: ['/popup.js', '/kanban/core.js', '/kanban/engine.js', '/kanban/export.js'],
       });
       if (opts && opts.returnHtml) return html;
       downloadStandalone(html, filename || safeStandaloneName(title, 'kanban'));

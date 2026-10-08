@@ -517,7 +517,7 @@ html, body { background: #fff !important; color: #1f2328; }
       if (!window.KanbanExport) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/kanban/export.js?v=2';
+          s.src = '/kanban/export.js?v=3';
           s.onload = resolve;
           s.onerror = () => reject(new Error('Kanban export failed to load'));
           document.body.appendChild(s);
