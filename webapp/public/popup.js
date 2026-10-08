@@ -118,6 +118,15 @@
     if (input) input.select();
   }
 
+  // Over the network: an expired sign-in sends the page back to /login.
+  if (global.fetch && global.location && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(global.location.hostname)) {
+    const realFetch = global.fetch.bind(global);
+    global.fetch = async (...args) => {
+      const res = await realFetch(...args);
+      if (res.status === 401 && !/\/login$/.test(global.location.pathname)) global.location.href = '/login';
+      return res;
+    };
+  }
   global.uiAlert = (message, opts) => open('alert', message, null, opts);
   global.uiConfirm = (message, opts) => open('confirm', message, null, opts);
   global.uiPrompt = (message, value, opts) => open('prompt', message, value, opts);

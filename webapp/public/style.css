@@ -1674,3 +1674,9 @@ html[data-theme="dark"] .rem-actions .rem-primary { color: #10141c; }
 .df-install img { border-radius: 9px; flex-shrink: 0; }
 .df-install > div { flex: 1; min-width: 0; }
 .df-install button { padding: 5px 12px; border: 1px solid var(--accent); border-radius: 7px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+.df-net { display: flex; flex-direction: column; gap: 8px; }
+.df-switch { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.df-net-urls { display: flex; flex-wrap: wrap; gap: 6px; }
+.df-net-urls code { padding: 3px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 12px; user-select: all; }
+.df-pw { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.df-net .df-row button { padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; white-space: nowrap; font-size: 12px; }

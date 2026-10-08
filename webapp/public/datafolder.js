@@ -42,7 +42,12 @@
 
   async function open() {
     await load();
-    if (!info) { uiAlert('Could not read the data folder settings.'); return; }
+    if (!info) {
+      uiAlert('Settings can only be changed on the computer running Accretion.\n\nYou are connected over the network.', { title: 'Settings' });
+      return;
+    }
+    let net = null;
+    try { const r = await fetch('/api/network', { cache: 'no-store' }); if (r.ok) net = await r.json(); } catch (e) { /* ignore */ }
     const locked = info.source === 'env';
     const ov = document.createElement('div');
     ov.className = 'topo-overlay';
@@ -71,6 +76,13 @@
             ${info.installedApp ? '' : '<button type="button" data-install>Install…</button>'}
           </div>
           <p class="md-note">${info.windowAvailable ? 'Used when you start the app (<code>./run.sh</code>). <code>--window</code> or <code>--browser</code> overrides it once.' : 'A separate window needs Google Chrome, Microsoft Edge or Brave.'}</p>
+          ${net ? `<p class="df-label">Network access</p>
+          <div class="df-net">
+            <label class="df-switch"><input type="checkbox" data-net${net.enabled ? ' checked' : ''}${net.envHost ? ' disabled' : ''}> Allow other devices on my network</label>
+            <div class="df-net-urls">${net.enabled || net.envHost ? (net.urls.length ? net.urls.map((u) => `<code>${esc(u)}</code>`).join(' ') : '<span class="md-note">No network connection found.</span>') : ''}</div>
+            <div class="df-row"><input type="password" class="df-pw" placeholder="${net.hasPassword ? 'New password (leave empty to keep)' : 'Password for other devices (8+ characters)'}" autocomplete="new-password"${net.envHost ? ' disabled' : ''}><button type="button" data-pw${net.envHost ? ' disabled' : ''}>${net.hasPassword ? 'Change' : 'Set'} password</button>${net.hasPassword ? '<button type="button" data-signout title="Sign out every other device">Sign out all</button>' : ''}</div>
+            <p class="md-note">This computer never needs the password. Other devices sign in once (30 days). They can use your workspace but can't change these settings or browse this computer's disk. Traffic is not encrypted (plain http) — use it only on networks you trust.${net.envHost ? '<br><b>Set by the HOST environment variable.</b>' : ''}</p>
+          </div>` : ''}
           <p class="df-label">Switch to</p>
           <div class="df-row"><input type="text" class="df-input" placeholder="/Users/you/Ideas or ~/Ideas" spellcheck="false"${locked ? ' disabled' : ''}><button type="button" data-browse${locked ? ' disabled' : ''}>📂 Browse…</button><button type="button" class="md-primary" data-go${locked ? ' disabled' : ''}>Switch</button></div>
           <p class="md-note">Any folder on this computer. Existing files there show up as-is; a git history is started if the folder doesn't have one.</p>
@@ -88,6 +100,36 @@
       if (res.ok) setStatus('Opens as ' + (r.value === 'window' ? 'a window' : 'a browser tab') + ' from now on', 'ok');
       else uiAlert('Could not save that setting.');
     }));
+    const netPost = async (body) => {
+      const r = await fetch('/api/network', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { await uiAlert(d.error || 'Could not change network access', { title: 'Network access' }); return null; }
+      return d;
+    };
+    const netBox = ov.querySelector('[data-net]');
+    if (netBox) netBox.addEventListener('change', async () => {
+      const pw = ov.querySelector('.df-pw');
+      if (netBox.checked && !net.hasPassword) {
+        if (!pw.value) { netBox.checked = false; pw.focus(); uiAlert('Set a password first — other devices will need it to sign in.', { title: 'Network access' }); return; }
+        if (!(await netPost({ password: pw.value }))) { netBox.checked = false; return; }
+      }
+      const d = await netPost({ enabled: netBox.checked });
+      if (!d) { netBox.checked = !netBox.checked; return; }
+      setStatus(d.enabled ? 'Other devices can connect' : 'This computer only', 'ok');
+      setTimeout(() => { close(); open(); }, 600);
+    });
+    const pwBtn = ov.querySelector('[data-pw]');
+    if (pwBtn) pwBtn.addEventListener('click', async () => {
+      const pw = ov.querySelector('.df-pw');
+      if (!pw.value) { pw.focus(); return; }
+      const d = await netPost({ password: pw.value });
+      if (d) { pw.value = ''; setStatus('Password saved — other devices sign in again', 'ok'); close(); open(); }
+    });
+    const so = ov.querySelector('[data-signout]');
+    if (so) so.addEventListener('click', async () => {
+      if (!(await uiConfirm('Sign out every other device? They will need the password again.', { title: 'Sign out all', okLabel: 'Sign out' }))) return;
+      if (await netPost({ signOutAll: true })) setStatus('All other devices signed out', 'ok');
+    });
     const inst = ov.querySelector('[data-install]');
     if (inst) inst.addEventListener('click', async () => {
       if (installEvent) {

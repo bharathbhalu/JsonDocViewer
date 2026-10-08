@@ -10,7 +10,10 @@ const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
 const app = express();
-const PORT = process.env.PORT || 4321;
+// Always port 4321: bookmarks, the installed app window and other devices
+// rely on a fixed address. The PORT env var is ignored on purpose.
+const PORT = 4321;
+if (process.env.PORT && Number(process.env.PORT) !== PORT) console.log(`(PORT=${process.env.PORT} ignored — Accretion always uses port ${PORT}.)`);
 // --- Where the data lives. The app folder holds only code; the data folder
 // (any directory) holds the files, their git history and the app's state
 // for that workspace (<data>/.accretion/). Chosen by, in order: the
@@ -32,6 +35,7 @@ function readAppConfig() {
       dataDir: typeof c.dataDir === 'string' && c.dataDir ? c.dataDir : null,
       recent: Array.isArray(c.recent) ? c.recent.filter((x) => typeof x === 'string').slice(0, 10) : [],
       openAs: c.openAs === 'window' ? 'window' : c.openAs === 'browser' ? 'browser' : undefined,
+      network: c.network && typeof c.network === 'object' ? c.network : undefined,
     };
   } catch (e) {
     return { dataDir: null, recent: [], openAs: undefined };
@@ -233,18 +237,120 @@ function commitFile(relPathOrPaths, message) {
   }
 }
 
-// Listen on this computer only (set HOST=0.0.0.0 to share on the network).
-const HOST = process.env.HOST || '127.0.0.1';
+// --- Network access. By default only this computer can connect. With
+// "Allow other devices" on (Settings, or HOST=0.0.0.0), the server listens
+// on all interfaces and every device except this computer must sign in
+// with a password. Settings that touch this computer (data folder, disk
+// browsing, launch options, network) can only be changed from this computer.
+const crypto = require('crypto');
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+function networkConfig() {
+  const n = readAppConfig().network || {};
+  return {
+    enabled: !!n.enabled && !!n.passwordHash,
+    passwordHash: n.passwordHash || null,
+    salt: n.salt || null,
+    secret: n.secret || null,
+  };
+}
+function listenHost() {
+  if (process.env.HOST) return process.env.HOST;
+  return networkConfig().enabled ? '0.0.0.0' : '127.0.0.1';
+}
+const isLoopbackAddr = (a) => /^(127\.|::1$|::ffff:127\.)/.test(String(a || ''));
+// This computer: connection from loopback AND addressed to a loopback name
+// (a DNS-rebinding page on this computer uses another Host, so it is not).
+function isLocalRequest(req) {
+  const hostname = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+  return isLoopbackAddr(req.socket.remoteAddress) && LOOPBACK_HOSTS.has(hostname);
+}
+function hashPassword(pw, salt) {
+  return crypto.scryptSync(String(pw), salt, 32).toString('hex');
+}
+const SESSION_DAYS = 30;
+function sessionToken() {
+  const { secret } = networkConfig();
+  const exp = Date.now() + SESSION_DAYS * 864e5;
+  const mac = crypto.createHmac('sha256', secret).update(String(exp)).digest('hex');
+  return exp + '.' + mac;
+}
+function validSession(req) {
+  const { secret, enabled } = networkConfig();
+  if (!enabled || !secret) return false;
+  const m = /(?:^|;\s*)acc_session=([^;]+)/.exec(req.headers.cookie || '');
+  if (!m) return false;
+  const [exp, mac] = decodeURIComponent(m[1]).split('.');
+  if (!exp || !mac || Number(exp) < Date.now()) return false;
+  const want = crypto.createHmac('sha256', secret).update(String(exp)).digest('hex');
+  return mac.length === want.length && crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(want));
+}
+// Brute-force guard: 8 tries per 5 minutes per address.
+const loginTries = new Map();
+function tooManyTries(ip) {
+  const now = Date.now();
+  const list = (loginTries.get(ip) || []).filter((t) => now - t < 5 * 60000);
+  loginTries.set(ip, list);
+  return list.length >= 8;
+}
+const LOGIN_PAGE = (msg) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Accretion · Sign in</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><style>
+:root{--bg:#f3f5f8;--panel:#fff;--ink:#1c2330;--muted:#667085;--line:rgba(28,35,48,.14);--accent:#4f6ef7}
+@media (prefers-color-scheme:dark){:root{--bg:#10141c;--panel:#171c26;--ink:#e8ecf3;--muted:#9aa3b2;--line:rgba(255,255,255,.14);--accent:#8aa8d4}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+form{width:min(360px,100%);padding:28px;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.12);text-align:center}
+img{width:72px;height:72px;border-radius:18px;margin-bottom:10px}h1{margin:0 0 4px;font-size:22px}p{margin:0 0 18px;color:var(--muted);font-size:13px}
+input{width:100%;padding:10px 12px;font:inherit;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:inherit;margin-bottom:12px}
+button{width:100%;padding:10px;font:inherit;font-weight:600;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer}.err{color:#d64545;margin:-4px 0 12px;font-size:13px}
+</style></head><body><form method="post" action="/login"><img src="/icon.svg" alt=""><h1>Accretion</h1><p>This workspace is shared on the network.<br>Enter the password to continue.</p>
+${msg ? `<div class="err">${msg}</div>` : ''}<input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" required><button type="submit">Sign in</button></form></body></html>`;
+
+app.post('/login', express.urlencoded({ extended: false, limit: '4kb' }), (req, res) => {
+  const net = networkConfig();
+  if (!net.enabled) return res.redirect('/');
+  const ip = req.socket.remoteAddress;
+  if (tooManyTries(ip)) return res.status(429).type('html').send(LOGIN_PAGE('Too many attempts — wait a few minutes.'));
+  const pw = String((req.body && req.body.password) || '');
+  const got = Buffer.from(hashPassword(pw, net.salt), 'hex');
+  const want = Buffer.from(net.passwordHash, 'hex');
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) {
+    loginTries.get(ip).push(Date.now());
+    console.log('Network sign-in failed from ' + ip);
+    return res.status(401).type('html').send(LOGIN_PAGE('Wrong password.'));
+  }
+  loginTries.delete(ip);
+  console.log('Network sign-in from ' + ip);
+  res.setHeader('Set-Cookie', `acc_session=${encodeURIComponent(sessionToken())}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}`);
+  res.redirect('/');
+});
+app.get('/login', (req, res) => {
+  if (isLocalRequest(req) || validSession(req) || !networkConfig().enabled) return res.redirect('/');
+  res.type('html').send(LOGIN_PAGE(''));
+});
+app.get('/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'acc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  res.redirect('/login');
+});
+
+const LOCAL_ONLY = [/^\/api\/fs\//, /^\/api\/config\//, /^\/api\/open$/, /^\/api\/network/];
+app.use((req, res, next) => {
+  if (isLocalRequest(req)) return next();
+  // Remote device (or a non-loopback Host): password required.
+  if (!networkConfig().enabled) {
+    if (!process.env.HOST) return res.status(403).json({ error: 'Forbidden host' });
+    return res.status(403).type('text').send('Network access needs a password. On the computer running Accretion, open Settings and turn on "Allow other devices".');
+  }
+  if (req.path === '/login' || /^\/(icon\.svg|icon-\d+\.png|manifest\.webmanifest)$/.test(req.path)) return next();
+  if (!validSession(req)) {
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Sign in required' });
+    return res.status(401).type('html').send(LOGIN_PAGE(''));
+  }
+  if (LOCAL_ONLY.some((re) => re.test(req.path))) return res.status(403).json({ error: 'Only available on the computer running Accretion' });
+  next();
+});
+
 // Other websites must not be able to drive this API from the browser:
-// - Host must be this machine (blocks DNS-rebinding),
-// - state-changing requests must come from this app's own pages.
+// state-changing requests must come from this app's own pages.
 app.use((req, res, next) => {
   const host = String(req.headers.host || '').toLowerCase();
-  const hostname = host.replace(/:\d+$/, '');
-  if (LOOPBACK_HOSTS.has(HOST) && !LOOPBACK_HOSTS.has(hostname)) {
-    return res.status(403).json({ error: 'Forbidden host' });
-  }
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
     const origin = req.headers.origin;
     if (origin) {
@@ -882,6 +988,69 @@ function dataFolderInfo() {
   return { openAs: readAppConfig().openAs === 'window' ? 'window' : 'browser', windowAvailable: !!findAppBrowser(), installedApp: findInstalledWebApp(), dataDir: DATA_ROOT, source: process.env.DATA_DIR ? 'env' : DATA_SOURCE === 'env' ? 'env' : cfg.dataDir ? 'config' : 'default', recent: cfg.recent.filter((r) => r !== DATA_ROOT), defaultDir: DEFAULT_DATA_ROOT, configFile: APP_CONFIG_FILE, gitEnabled: !gitDisabled };
 }
 app.get('/api/config', (req, res) => res.json(dataFolderInfo()));
+
+// --- Network access settings (this computer only; see LOCAL_ONLY).
+function lanUrls(port) {
+  const out = [];
+  const ifs = require('os').networkInterfaces();
+  for (const [name, list] of Object.entries(ifs)) {
+    for (const a of list || []) {
+      if (a.internal || a.family !== 'IPv4') continue;
+      out.push(`http://${a.address}:${port}`);
+    }
+  }
+  return out;
+}
+function networkInfo() {
+  const n = networkConfig();
+  const port = currentPort || PORT;
+  return {
+    enabled: n.enabled,
+    hasPassword: !!n.passwordHash,
+    listening: listenHost(),
+    envHost: process.env.HOST || null,
+    port,
+    urls: lanUrls(port),
+  };
+}
+app.get('/api/network', (req, res) => res.json(networkInfo()));
+app.post('/api/network', (req, res) => {
+  try {
+    if (process.env.HOST) return res.status(400).json({ error: 'Network access is set by the HOST environment variable; unset it to manage it here.' });
+    const body = req.body || {};
+    const cfg = readAppConfig();
+    const net = Object.assign({}, cfg.network || {});
+    if (typeof body.password === 'string' && body.password) {
+      if (body.password.length < 8) return res.status(400).json({ error: 'Use a password of at least 8 characters.' });
+      net.salt = crypto.randomBytes(16).toString('hex');
+      net.passwordHash = hashPassword(body.password, net.salt);
+      // New password signs every device out.
+      net.secret = crypto.randomBytes(32).toString('hex');
+    }
+    if (body.signOutAll) net.secret = crypto.randomBytes(32).toString('hex');
+    if (typeof body.enabled === 'boolean') {
+      if (body.enabled && !net.passwordHash) return res.status(400).json({ error: 'Set a password first.' });
+      net.enabled = body.enabled;
+    }
+    if (!net.secret) net.secret = crypto.randomBytes(32).toString('hex');
+    const before = listenHost();
+    writeAppConfig(Object.assign({}, cfg, { network: net }));
+    const after = listenHost();
+    res.json(networkInfo());
+    // Rebind on the new address (all interfaces vs this computer only).
+    if (before !== after && currentServer) {
+      const port = currentPort;
+      setTimeout(() => {
+        relistening = true;
+        const old = currentServer;
+        old.close(() => listenOn(port));
+        if (old.closeAllConnections) old.closeAllConnections();
+      }, 150);
+    }
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // Open the UI again as a window or a browser tab (from inside the app).
 app.post('/api/open', (req, res) => {
@@ -2247,6 +2416,12 @@ let serverUrl = null;
 function onListening(srv) {
   const actualPort = srv.address().port;
   const url = `http://localhost:${actualPort}`;
+  if (relistening) {
+    relistening = false;
+    console.log(listenHost() === '127.0.0.1' ? 'Network access off — this computer only.' : 'Network access on: ' + lanUrls(actualPort).join('  '));
+    return;
+  }
+  if (listenHost() !== '127.0.0.1') console.log('Network access on: ' + lanUrls(actualPort).join('  '));
   printLink(url);
   console.log(`Serving files from: ${DATA_ROOT}`);
   serverUrl = url;
@@ -2254,20 +2429,33 @@ function onListening(srv) {
   setImmediate(initGitRepo);
 }
 
-function listenOn(port) {
-  const srv = app.listen(port, HOST, () => onListening(srv));
+let relistening = false;
+let currentServer = null;
+let currentPort = null;
+function listenOn(port, attempt = 0) {
+  const srv = app.listen(port, listenHost(), () => { currentServer = srv; currentPort = srv.address().port; onListening(srv); });
   srv.requestTimeout = 60000;
   srv.headersTimeout = 30000;
   srv.keepAliveTimeout = 5000;
   srv.on('error', (err) => {
-    if (err.code === 'EADDRINUSE' && port !== 0) {
-      console.log(`Port ${port} is in use, picking a random free port instead...`);
-      listenOn(0);
+    if (err.code === 'EADDRINUSE') {
+      // Never move to another port. Retry briefly (e.g. while switching
+      // network access the old socket may still be closing), then give up.
+      if (attempt < 10) { setTimeout(() => listenOn(port, attempt + 1), 300); return; }
+      portBusyExit();
     } else {
       throw err;
     }
   });
   return srv;
+}
+
+function portBusyExit() {
+  console.error(`\n✖  Port ${PORT} is in use by another program, and Accretion only runs on port ${PORT}.`);
+  console.error(`   See what is using it:  lsof -nP -iTCP:${PORT} -sTCP:LISTEN`);
+  console.error(`   Stop it:               lsof -ti tcp:${PORT} | xargs kill`);
+  console.error('   Then start Accretion again.\n');
+  process.exit(1);
 }
 
 (async () => {
@@ -2284,9 +2472,8 @@ function listenOn(port) {
         return;
       }
     } catch (e) { /* not ours */ }
-    console.log(`\n⚠  Port ${PORT} is already in use — probably an older copy of this app.`);
-    console.log(`   Stop it with:  lsof -ti tcp:${PORT} | xargs kill   (then start this again)`);
-    console.log('   Starting on a free port instead for now.\n');
+    portBusyExit();
+    return;
   }
-  listenOn(busy ? 0 : PORT);
+  listenOn(PORT);
 })();
