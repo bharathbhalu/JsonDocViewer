@@ -6,6 +6,7 @@ const FlowCore = require(path.join(__dirname, 'public', 'flow', 'core.js'));
 const KanbanCore = require(path.join(__dirname, 'public', 'kanban', 'core.js'));
 const GanttCore = require(path.join(__dirname, 'public', 'gantt', 'core.js'));
 const SlidesCore = require(path.join(__dirname, 'public', 'slides', 'core.js'));
+const StocksCore = require(path.join(__dirname, 'public', 'stocks', 'core.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
@@ -810,6 +811,7 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="kanban"')) return 'kanban';
     if (head.includes('data-docviewer="gantt"')) return 'gantt';
     if (head.includes('data-docviewer="slides"')) return 'slides';
+    if (head.includes('data-docviewer="stocks"')) return 'stocks';
   } catch (e) {
     return undefined;
   }
@@ -1191,6 +1193,7 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'kanban') return kanbanTemplate(template);
   if (kind === 'gantt') return ganttTemplate();
   if (kind === 'slides') return SlidesCore.serializeToHtml(SlidesCore.createStarter());
+  if (kind === 'stocks') return StocksCore.serializeToHtml(StocksCore.createStarter());
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
   // New Mermaid files start with a small example diagram.
@@ -1313,6 +1316,7 @@ const BUILTIN_TEMPLATES = [
   { id: 'gantt-plan', kind: 'gantt', ext: '.html', name: 'Project plan', description: 'Phases, tasks, milestones and dependencies.', build: () => ganttTemplate() },
   { id: 'mindmap-brainstorm', kind: 'mindmap', ext: '.html', name: 'Brainstorm', description: 'Central idea with branches.', build: () => mindmapTemplate() },
   { id: 'flow-process', kind: 'flow', ext: '.html', name: 'Process flow', description: 'Start, steps, decision, end.', build: () => flowTemplate() },
+  { id: 'stocks-watchlist', kind: 'stocks', ext: '.html', name: 'Stock watchlist', description: 'NSE / BSE / US tickers with live prices and alerts.', build: () => StocksCore.serializeToHtml(StocksCore.createStarter()) },
   { id: 'mermaid-sequence', kind: 'mermaid', ext: '.mmd', name: 'Sequence diagram', description: 'Client / API / database exchange.',
     build: () => MD(['sequenceDiagram', '  participant C as Client', '  participant A as API', '  participant D as Database', '  C->>A: Request', '  A->>D: Query', '  D-->>A: Rows', '  A-->>C: Response']) },
   { id: 'mermaid-fabric', kind: 'mermaid', ext: '.mmd', name: 'Leaf-spine fabric', description: 'Two spines, four leaves.',
@@ -1603,6 +1607,16 @@ function readIdeas() {
     return normalizeIdeas({});
   }
 }
+require('./stocks-server.js')(app, {
+  dataRoot: () => DATA_ROOT,
+  stateFile,
+  writeJsonAtomic,
+  safeReaddir,
+  peekFileKind,
+  commitFile,
+  resolveSafe,
+});
+
 app.get('/api/ideas', (req, res) => {
   res.json(readIdeas());
 });
@@ -2087,6 +2101,7 @@ function kindLabel(kind) {
   if (kind === 'kanban') return 'Kanban';
   if (kind === 'gantt') return 'Gantt';
   if (kind === 'slides') return 'Slides';
+  if (kind === 'stocks') return 'Stocks';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
   if (kind === 'markdown') return 'Markdown';

@@ -1680,3 +1680,13 @@ html[data-theme="dark"] .rem-actions .rem-primary { color: #10141c; }
 .df-net-urls code { padding: 3px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 12px; user-select: all; }
 .df-pw { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .df-net .df-row button { padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; white-space: nowrap; font-size: 12px; }
+
+/* ---------- stocks ---------- */
+.tree-row .icon.icon-stocks { width: auto; min-width: 22px; padding: 2px 5px; border-radius: 5px; font-size: 9px; font-weight: 800; letter-spacing: 0.06em; background: #0f9d76; color: #fff; opacity: 1; }
+html[data-theme="dark"] .tree-row .icon.icon-stocks { color: #10141c; }
+.stock-toast { border-left: 3px solid #12b76a; }
+.stock-toast.down { border-left-color: #e5484d; }
+.stock-toast .st-mk { font-size: 10px; font-weight: 700; padding: 0 4px; border-radius: 4px; background: var(--line); color: var(--muted); }
+.stock-toast .st-pct.up { color: #12b76a; font-weight: 600; }
+.stock-toast .st-pct.down { color: #e5484d; font-weight: 600; }
+.stock-toast .st-sub { color: var(--muted); font-size: 12px; }

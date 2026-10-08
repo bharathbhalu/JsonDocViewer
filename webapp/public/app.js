@@ -608,7 +608,7 @@ function isPdfPath(p) {
 }
 
 function applyFileIcon(el, p, kind) {
-  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
+  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-stocks', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
   if (kind === 'pdf' || isPdfPath(p)) {
     el.classList.add('icon-pdf');
     el.textContent = 'PDF';
@@ -643,6 +643,12 @@ function applyFileIcon(el, p, kind) {
     el.classList.add('icon-slides');
     el.textContent = 'SL';
     el.title = 'Slides';
+    return;
+  }
+  if (kind === 'stocks') {
+    el.classList.add('icon-stocks');
+    el.textContent = 'ST';
+    el.title = 'Stocks';
     return;
   }
   const fmt = langForPath(p);
@@ -1529,7 +1535,7 @@ async function createBoardFile(parentPath, name, kind) {
   await openFile(fullPath);
 }
 
-const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides' };
+const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides', stocks: 'stock watchlist' };
 
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
@@ -1540,6 +1546,7 @@ const CREATE_KINDS = [
   { id: 'kanban', label: 'Kanban', hint: 'Task board with columns. .html is added if you omit it', placeholder: 'sprint' },
   { id: 'gantt', label: 'Gantt', hint: 'Timeline of tasks and dependencies. .html is added if you omit it', placeholder: 'roadmap' },
   { id: 'slides', label: 'Slides', hint: 'Presentation built from mindmap/flow frames and gantt charts. .html is added if you omit it', placeholder: 'deck' },
+  { id: 'stocks', label: 'Stocks', hint: 'Watchlist of NSE / BSE / US tickers with live prices and price alerts. .html is added if you omit it', placeholder: 'watchlist' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
   { id: 'template', label: 'From template…', hint: 'Pick a starter: meeting notes, standup, design review, sprint board, project plan, decks… Press Create to browse.', needsName: false },
 ];
@@ -1720,6 +1727,7 @@ async function openCreateDialog(parentPath) {
   if (result.kind === 'kanban') return createBoardFile(parentPath, result.name, 'kanban');
   if (result.kind === 'gantt') return createBoardFile(parentPath, result.name, 'gantt');
   if (result.kind === 'slides') return createBoardFile(parentPath, result.name, 'slides');
+  if (result.kind === 'stocks') return createBoardFile(parentPath, result.name, 'stocks');
   return createFile(parentPath, result.name);
 }
 
@@ -2239,6 +2247,7 @@ function boardKindFromHtml(content) {
   if (/data-docviewer\s*=\s*["']kanban["']/.test(content)) return 'kanban';
   if (/data-docviewer\s*=\s*["']gantt["']/.test(content)) return 'gantt';
   if (/data-docviewer\s*=\s*["']slides["']/.test(content)) return 'slides';
+  if (/data-docviewer\s*=\s*["']stocks["']/.test(content)) return 'stocks';
   return null;
 }
 
@@ -2322,6 +2331,12 @@ function ensureGanttAssets() {
     .then(() => ensureScript('/gantt/engine.js?v=25', 'data-gt-js', () => typeof window.GanttEngine === 'function'));
 }
 
+function ensureStocksAssets() {
+  ensureStylesheet('/stocks/engine.css?v=1', 'data-stk-css');
+  return ensureScript('/stocks/core.js?v=1', 'data-stk-core', () => !!window.StocksCore)
+    .then(() => ensureScript('/stocks/engine.js?v=2', 'data-stk-js', () => typeof window.StocksEngine === 'function'));
+}
+
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
   return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
@@ -2338,6 +2353,7 @@ const BOARD_TYPES = {
   kanban: { engine: 'KanbanEngine', ensure: ensureKanbanAssets },
   gantt: { engine: 'GanttEngine', ensure: ensureGanttAssets },
   slides: { engine: 'SlidesEngine', ensure: ensureSlidesAssets, opts: { ensureAssets: SLIDES_SOURCE_ASSETS } },
+  stocks: { engine: 'StocksEngine', ensure: ensureStocksAssets, opts: { getPath: () => currentPath } },
 };
 
 function getSaveContent() {
@@ -2638,6 +2654,20 @@ async function openFile(relPath, lineToReveal, opts) {
       alert('Slides failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
+  } else if (boardKind === 'stocks') {
+    viewToggleBtn.classList.remove('hidden');
+    try {
+      await ensureStocksAssets();
+      if (token !== openToken) return;
+      boardEngine = new window.StocksEngine(mindmapStage, { onChange: onBoardChange, getPath: () => currentPath });
+      boardEngine.loadFromHtml(data.content);
+      setViewMode('board');
+    } catch (err) {
+      if (token !== openToken) return;
+      console.error(err);
+      alert('Stocks failed to load: ' + ((err && err.message) || err));
+      setViewMode('code');
+    }
   } else if (isHtml || isMarkdownPath(relPath) || isMermaidPath(relPath)) {
     // HTML and markdown open rendered; the toggle shows the raw file.
     viewToggleBtn.classList.remove('hidden');
@@ -2646,7 +2676,7 @@ async function openFile(relPath, lineToReveal, opts) {
     viewToggleBtn.classList.add('hidden');
     setViewMode('code');
   }
-  setStandaloneVisible(!!boardKind);
+  setStandaloneVisible(!!boardKind && boardKind !== 'stocks');
   if (token !== openToken) return;
   markClean();
 }
@@ -2724,7 +2754,7 @@ function setViewMode(mode) {
   } else {
     if (boardEngine) syncBoardIntoEditor();
     document.getElementById('editor').classList.remove('hidden');
-    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : 'View Rendered';
+    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : boardKind === 'stocks' ? 'View Stocks' : 'View Rendered';
     findInFileBtn.disabled = !currentPath;
     if (boardEngine && editor) {
       editor.layout();
@@ -2969,6 +2999,7 @@ async function runSearch(q, type) {
       else if (r.kind === 'kanban') bits.push('Kanban');
       else if (r.kind === 'gantt') bits.push('Gantt');
       else if (r.kind === 'slides') bits.push('Slides');
+      else if (r.kind === 'stocks') bits.push('Stocks');
       else if (r.kind === 'json') bits.push('JSON');
       else if (r.kind === 'yaml') bits.push('YAML');
       else if (r.kind === 'markdown') bits.push('Markdown');
