@@ -879,7 +879,7 @@ startWatcher();
 // --- Data folder settings
 function dataFolderInfo() {
   const cfg = readAppConfig();
-  return { openAs: readAppConfig().openAs === 'window' ? 'window' : 'browser', windowAvailable: !!findAppBrowser(), dataDir: DATA_ROOT, source: process.env.DATA_DIR ? 'env' : DATA_SOURCE === 'env' ? 'env' : cfg.dataDir ? 'config' : 'default', recent: cfg.recent.filter((r) => r !== DATA_ROOT), defaultDir: DEFAULT_DATA_ROOT, configFile: APP_CONFIG_FILE, gitEnabled: !gitDisabled };
+  return { openAs: readAppConfig().openAs === 'window' ? 'window' : 'browser', windowAvailable: !!findAppBrowser(), installedApp: findInstalledWebApp(), dataDir: DATA_ROOT, source: process.env.DATA_DIR ? 'env' : DATA_SOURCE === 'env' ? 'env' : cfg.dataDir ? 'config' : 'default', recent: cfg.recent.filter((r) => r !== DATA_ROOT), defaultDir: DEFAULT_DATA_ROOT, configFile: APP_CONFIG_FILE, gitEnabled: !gitDisabled };
 }
 app.get('/api/config', (req, res) => res.json(dataFolderInfo()));
 
@@ -2158,7 +2158,33 @@ function findAppBrowser() {
   return candidates.find((c) => { try { return fs.existsSync(c); } catch (e) { return false; } }) || null;
 }
 
+// An installed web app (Chrome/Edge "Install Accretion", or Safari "Add to
+// Dock") has its own Dock icon. Prefer it over a plain --app window.
+function findInstalledWebApp() {
+  if (process.platform !== 'darwin') return null;
+  const apps = path.join(require('os').homedir(), 'Applications');
+  const dirs = [apps, path.join(apps, 'Chrome Apps.localized'), path.join(apps, 'Chrome Apps'), path.join(apps, 'Edge Apps.localized'), path.join(apps, 'Brave Browser Apps.localized')];
+  for (const dir of dirs) {
+    for (const e of safeReaddir(dir)) {
+      if (!e.name.endsWith('.app')) continue;
+      const plist = path.join(dir, e.name, 'Contents', 'Info.plist');
+      try {
+        const info = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8', timeout: 2000 }));
+        const name = info.CFBundleName || info.CFBundleDisplayName || '';
+        // Our own launcher (an AppleScript applet) is not the web app.
+        if (/^accretion$/i.test(name) && info.CFBundleExecutable !== 'applet') return path.join(dir, e.name);
+      } catch (err) { /* not readable */ }
+    }
+  }
+  return null;
+}
+
 function openAsWindow(url) {
+  const installed = findInstalledWebApp();
+  if (installed) {
+    execFile('open', ['-a', installed], (err) => { if (err) console.log('(Could not open ' + installed + ': ' + err.message + ')'); });
+    return;
+  }
   const exe = findAppBrowser();
   if (!exe) {
     console.log('(No Chrome / Edge / Brave found for a window — opening in the browser instead.)');

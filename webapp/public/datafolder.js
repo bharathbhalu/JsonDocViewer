@@ -7,6 +7,11 @@
   const kicker = document.querySelector('#sidebar-header .sidebar-kicker');
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let info = null;
+  // Chrome/Edge offer to install the app (own Dock icon) via this event.
+  let installEvent = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
+  window.addEventListener('appinstalled', () => { installEvent = null; setStatus('Installed — Accretion now has its own Dock icon', 'ok'); });
+  const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: window-controls-overlay)').matches;
 
   async function load() {
     try {
@@ -57,6 +62,14 @@
             <button type="button" data-open="window"${info.windowAvailable ? '' : ' disabled'}>⧉ Open window now</button>
             <button type="button" data-open="browser">↗ Open in browser</button>
           </div>
+          <div class="df-install">
+            <img src="icon.svg" alt="" width="40" height="40">
+            <div>
+              ${info.installedApp ? `<b>Installed with its own Dock icon.</b><br><span class="md-note">The window opens as <code>${esc(info.installedApp.split('/').pop())}</code>.</span>`
+                : `<b>Dock icon</b><br><span class="md-note">Install Accretion as an app so its window shows this logo in the Dock and app switcher.</span>`}
+            </div>
+            ${info.installedApp ? '' : '<button type="button" data-install>Install…</button>'}
+          </div>
           <p class="md-note">${info.windowAvailable ? 'Used when you start the app (<code>./run.sh</code>). <code>--window</code> or <code>--browser</code> overrides it once.' : 'A separate window needs Google Chrome, Microsoft Edge or Brave.'}</p>
           <p class="df-label">Switch to</p>
           <div class="df-row"><input type="text" class="df-input" placeholder="/Users/you/Ideas or ~/Ideas" spellcheck="false"${locked ? ' disabled' : ''}><button type="button" data-browse${locked ? ' disabled' : ''}>📂 Browse…</button><button type="button" class="md-primary" data-go${locked ? ' disabled' : ''}>Switch</button></div>
@@ -75,6 +88,21 @@
       if (res.ok) setStatus('Opens as ' + (r.value === 'window' ? 'a window' : 'a browser tab') + ' from now on', 'ok');
       else uiAlert('Could not save that setting.');
     }));
+    const inst = ov.querySelector('[data-install]');
+    if (inst) inst.addEventListener('click', async () => {
+      if (installEvent) {
+        // Chrome/Edge show their own install confirmation here — it's the
+        // browser installing the app, so it can't be an in-page popup.
+        installEvent.prompt();
+        const choice = await installEvent.userChoice.catch(() => null);
+        installEvent = null;
+        if (choice && choice.outcome === 'accepted') { close(); setTimeout(() => fetch('/api/config/open-as', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ openAs: 'window' }) }), 0); }
+        return;
+      }
+      uiAlert(isStandalone()
+        ? 'This window is already running as an installed app.'
+        : 'To install with a Dock icon:\n\n• Chrome or Edge: open the ⋮ menu → "Cast, save and share" → "Install page as app…" (or the install icon at the right of the address bar).\n• Safari: File → "Add to Dock…".\n\nAfter that, the Accretion launcher and "Open window now" open the installed app.', { title: 'Install Accretion' });
+    });
     ov.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', async () => {
       const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ as: b.dataset.open }) });
       const d = await res.json().catch(() => ({}));

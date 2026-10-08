@@ -18,16 +18,31 @@ OSA
 rm -rf "$APP"
 osacompile -o "$APP" "$TMP/launch.applescript"
 
-# Icon from public/icon-512.png
-if [ -f "$SCRIPT_DIR/public/icon-512.png" ]; then
+# Icon: the accretion-disk logo (padded macOS version when present)
+ICON_SRC="$SCRIPT_DIR/public/icon-mac-1024.png"
+[ -f "$ICON_SRC" ] || ICON_SRC="$SCRIPT_DIR/public/icon-512.png"
+if [ -f "$ICON_SRC" ]; then
   ICONSET="$TMP/icon.iconset"
   mkdir -p "$ICONSET"
-  for s in 16 32 64 128 256 512; do
-    sips -z $s $s "$SCRIPT_DIR/public/icon-512.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-    d=$((s * 2)); [ $d -le 512 ] && sips -z $d $d "$SCRIPT_DIR/public/icon-512.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  for s in 16 32 128 256 512; do
+    sips -z $s $s "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    d=$((s * 2)); sips -z $d $d "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
   done
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/applet.icns"
-  touch "$APP"
+  # osacompile also ships a default icon catalog that newer macOS prefers
+  # over applet.icns — remove it so our icon is used.
+  rm -f "$APP/Contents/Resources/Assets.car"
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$APP/Contents/Info.plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile applet" "$APP/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string applet" "$APP/Contents/Info.plist"
+  # Finder caches icons; nudge it.
+  touch "$APP" "$APP/Contents/Info.plist"
 fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Accretion" "$APP/Contents/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.accretion.launcher" "$APP/Contents/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string local.accretion.launcher" "$APP/Contents/Info.plist"
+# Edits above invalidate osacompile's signature; sign again (ad hoc).
+codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+# Refresh Finder/Dock's icon cache for this app.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 echo "Built $APP"
