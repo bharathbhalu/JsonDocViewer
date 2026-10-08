@@ -668,7 +668,10 @@
     });
     add('bold', 'Bold', [K.CtrlCmd | C.KeyB], ACTIONS.bold);
     add('italic', 'Italic', [K.CtrlCmd | C.KeyI], ACTIONS.italic);
-    add('link', 'Insert link', [K.CtrlCmd | C.KeyK], ACTIONS.link);
+    // Cmd+K is shared with the command palette: it inserts a link only when
+    // text is selected in markdown (palette.js decides).
+    add('link', 'Insert link', [], ACTIONS.link);
+    window.mdInsertLink = () => ACTIONS.link();
     add('frame', 'Insert frame', [K.CtrlCmd | K.Shift | C.KeyF], ACTIONS.frame);
   })();
 

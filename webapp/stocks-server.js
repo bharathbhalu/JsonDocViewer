@@ -375,6 +375,30 @@ module.exports = function setupStocks(app, deps) {
     }
   });
 
+  // Summary across every watchlist (for the Today screen).
+  app.get('/api/stocks/overview', async (req, res) => {
+    try {
+      const files = stocksFiles();
+      const seen = new Map();
+      files.forEach((f) => f.data.tickers.forEach((t) => {
+        const k = StocksCore.keyOf(t);
+        if (!seen.has(k)) seen.set(k, { key: k, symbol: t.symbol, market: t.market, name: t.name, file: f.rel, alerts: 0 });
+        seen.get(k).alerts += t.alerts.filter((a) => a.enabled).length;
+      }));
+      const keys = [...seen.keys()].slice(0, 60);
+      const got = await quotes(keys, true);
+      const list = keys.map((k) => {
+        const q = got[k] && got[k].quote;
+        return Object.assign({}, seen.get(k), q ? { price: q.price, change: q.change, pct: q.pct, currency: q.currency, name: seen.get(k).name || q.name, open: marketOpen(q), points: (q.points || []).filter((p, i, a) => i % Math.max(1, Math.floor(a.length / 40)) === 0), prevClose: q.prevClose } : { error: got[k] && got[k].error });
+      });
+      const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+      const events = readState().events.filter((e) => e.time >= dayStart.getTime());
+      res.json({ files: files.map((f) => ({ path: f.rel, title: f.data.title, count: f.data.tickers.length })), tickers: list, events });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Check now (after the stocks view saves new alerts).
   app.post('/api/stocks/check', (req, res) => { res.json({ ok: true }); setTimeout(checkAlerts, 100); });
 

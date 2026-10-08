@@ -74,6 +74,7 @@
       if (pending.length) flush();
     } catch (e) { setTimeout(load, 5000); }
     refreshBadge();
+    document.dispatchEvent(new CustomEvent('accretion:ideas-changed'));
   }
   function change(fn) {
     fn(store);
@@ -82,6 +83,7 @@
     if (loaded) saveTimer = setTimeout(flush, 300);
     refreshBadge();
     if (panel) drawPanel();
+    document.dispatchEvent(new CustomEvent('accretion:ideas-changed'));
   }
   async function flush() {
     if (saving || !pending.length || !loaded) return;
@@ -488,5 +490,15 @@
 
   window.openIdeaCapture = openCapture;
   window.openIdeas = openPanel;
+  // For the Today screen.
+  window.ideasApi = {
+    isLoaded: () => loaded,
+    list: () => store.ideas.slice(),
+    whenLabel,
+    setStatus: (id, status) => setIdeaStatus(id, status),
+    snooze: (id, when) => patch(id, { remindAt: when }),
+    tomorrow: () => at(1, 9),
+    openNote: (id) => openNote(id),
+  };
   load().then(checkReminders);
 })();

@@ -1272,34 +1272,7 @@ async function deleteItem(relPath, { endpoint, kind, confirmMessage }) {
   expandedFolders.forEach((p) => {
     if (p === relPath || p.startsWith(relPath + '/')) expandedFolders.delete(p);
   });
-  if (currentPath && (currentPath === relPath || currentPath.startsWith(relPath + '/'))) {
-    currentPath = null;
-    previewMode = null;
-    markClean();
-    setWelcomeVisible(true);
-    rememberLastFile(null);
-    currentLang = null;
-    currentDataFormat = null;
-    currentPathEl.textContent = 'No file open';
-    saveBtn.disabled = true;
-    saveAsBtn.disabled = true;
-    if (exportFileBtn) exportFileBtn.disabled = true;
-    setStandaloneVisible(false);
-    if (fullscreenBtn) fullscreenBtn.disabled = true;
-    if (document.fullscreenElement === mainEl || document.webkitFullscreenElement === mainEl) {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
-      if (exit) exit.call(document);
-    }
-    convertBtn.disabled = true;
-    historyBtn.disabled = true;
-    commitBtn.disabled = true;
-    findInFileBtn.disabled = true;
-    collapseAllBtn.disabled = true;
-    expandAllBtn.disabled = true;
-    viewToggleBtn.classList.add('hidden');
-    destroyBoard();
-    setViewMode('code');
-  }
+  if (currentPath && (currentPath === relPath || currentPath.startsWith(relPath + '/'))) closeOpenFile();
   await loadTree();
 
   const commitMsg = await showAsk({
@@ -2422,6 +2395,36 @@ function syncBoardIntoEditor() {
   requestAnimationFrame(() => { suppressEditorChange = false; });
 }
 
+// Leave the open file and show the Today screen (no file open).
+function closeOpenFile() {
+  currentPath = null;
+  previewMode = null;
+  markClean();
+  setWelcomeVisible(true);
+  rememberLastFile(null);
+  currentLang = null;
+  currentDataFormat = null;
+  currentPathEl.textContent = 'No file open';
+  saveBtn.disabled = true;
+  saveAsBtn.disabled = true;
+  if (exportFileBtn) exportFileBtn.disabled = true;
+  setStandaloneVisible(false);
+  if (fullscreenBtn) fullscreenBtn.disabled = true;
+  if (document.fullscreenElement === mainEl || document.webkitFullscreenElement === mainEl) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document);
+  }
+  convertBtn.disabled = true;
+  historyBtn.disabled = true;
+  commitBtn.disabled = true;
+  findInFileBtn.disabled = true;
+  collapseAllBtn.disabled = true;
+  expandAllBtn.disabled = true;
+  viewToggleBtn.classList.add('hidden');
+  destroyBoard();
+  setViewMode('code');
+}
+
 // --- Welcome banner & last opened file ---
 const welcomeEl = document.getElementById('welcome');
 const LAST_FILE_KEY = 'docviewer-last-file';
@@ -2433,7 +2436,31 @@ function setWelcomeVisible(on) {
 }
 
 // Saved in localStorage and on the server (survives port/origin changes).
+// Recently opened files (for the Today screen and Cmd+K).
+const RECENT_KEY = 'docviewer-recent';
+function recentFiles() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]').filter((x) => x && x.path); } catch (e) { return []; }
+}
+function noteRecent(relPath) {
+  if (!relPath) return;
+  try {
+    const list = recentFiles().filter((x) => x.path !== relPath);
+    list.unshift({ path: relPath, at: Date.now() });
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 30)));
+  } catch (e) { /* ignore */ }
+}
+
+// Show Today: asks about unsaved changes first.
+async function showToday() {
+  if (currentPath) {
+    if (!(await confirmLeaveIfDirty())) return;
+    closeOpenFile();
+  } else setWelcomeVisible(true);
+  highlightActiveRow(null);
+}
+
 function rememberLastFile(relPath) {
+  noteRecent(relPath);
   try {
     if (relPath) localStorage.setItem(LAST_FILE_KEY, relPath);
     else localStorage.removeItem(LAST_FILE_KEY);
@@ -2474,6 +2501,7 @@ async function restoreLastFile() {
 }
 
 document.getElementById('welcome-new').addEventListener('click', () => openCreateDialog(''));
+document.getElementById('today-btn').addEventListener('click', () => showToday());
 document.getElementById('welcome-import').addEventListener('click', () => pickImport(''));
 
 function hidePdfFrame() {

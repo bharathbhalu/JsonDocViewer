@@ -40,6 +40,7 @@
     pending.push(fn);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flush, 400);
+    document.dispatchEvent(new CustomEvent('accretion:daily-changed'));
   }
   async function flush() {
     if (saving || !pending.length) return;
@@ -557,4 +558,15 @@
   }
 
   window.openDaily = open;
+  // For the Today screen.
+  window.dailyApi = {
+    async ready() { if (!loaded) { try { await load(); } catch (e) { /* offline */ } } return loaded; },
+    habits: () => active(),
+    isDone,
+    isOff,
+    isDisabled,
+    streak,
+    toggle: (k, id) => toggle(k, id),
+    standup: (k) => store.standups[k] || null,
+  };
 })();

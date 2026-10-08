@@ -356,6 +356,7 @@
   }
 
   function render() {
+    document.dispatchEvent(new CustomEvent('accretion:todos-changed'));
     // Re-rendering (e.g. when a reminder fires) must not throw away what
     // the user is typing.
     const addIn = root.querySelector('.cal-add input');
@@ -813,6 +814,19 @@
       render();
     }
   }, 60 * 1000);
+
+  // For the Today screen.
+  window.calendarApi = {
+    todayKey,
+    itemsOn: (k) => itemsOn(k),
+    overdue: () => overdue(),
+    toggle: (k, id, done) => updateTodo(k, id, { done }),
+    add: (k, text) => addTodo(k, text),
+    carryOver: () => carryOver(),
+    dueAt: (k, t) => dueAt(k, t),
+    isLoaded: () => loaded,
+    open: (k) => { ui.open = true; if (k) { selected = k; shownMonth = monthStart(fromKey(k)); } rememberUi(); render(); root.scrollIntoView({ block: 'end' }); },
+  };
 
   render();
   load().then(checkReminders);
