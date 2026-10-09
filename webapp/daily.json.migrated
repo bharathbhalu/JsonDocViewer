@@ -1,0 +1,55 @@
+{
+  "rev": 81,
+  "habits": [
+    {
+      "id": "h_46jnrit9",
+      "name": "Boxing",
+      "created": "2026-10-08",
+      "archived": false
+    },
+    {
+      "id": "h_s60fh96l",
+      "name": "Agentic Reading",
+      "created": "2026-10-08",
+      "archived": false
+    },
+    {
+      "id": "h_vrt1nzyv",
+      "name": "startUp Idea",
+      "created": "2026-10-08",
+      "archived": false
+    },
+    {
+      "id": "h_os84tla2",
+      "name": "Coding",
+      "created": "2026-10-08",
+      "archived": false
+    },
+    {
+      "id": "h_39ne7r3g",
+      "name": "music",
+      "created": "2026-10-08",
+      "archived": false
+    },
+    {
+      "id": "h_hy2y3q6m",
+      "name": "dance",
+      "created": "2026-10-08",
+      "archived": false
+    },
+    {
+      "id": "h_6wfptd2w",
+      "name": "Networking",
+      "created": "2026-10-08",
+      "archived": false
+    }
+  ],
+  "checks": {
+    "2026-10-08": [
+      "h_46jnrit9",
+      "h_s60fh96l",
+      "h_vrt1nzyv"
+    ]
+  },
+  "standups": {}
+}

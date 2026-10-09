@@ -1,0 +1,492 @@
+// Data folder: shows where the workspace lives and switches it to any folder
+// on disk. The choice is remembered by the server (~/.accretion/config.json).
+// Files, their git history and the workspace's state (<data>/.accretion/)
+// all live in that folder; the app folder holds only code.
+(function () {
+  const btn = document.getElementById('data-folder-btn');
+  const kicker = document.querySelector('#sidebar-header .sidebar-kicker');
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let info = null;
+  // Chrome/Edge offer to install the app (own Dock icon) via this event.
+  let installEvent = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
+  window.addEventListener('appinstalled', () => { installEvent = null; setStatus('Installed — Accretion now has its own Dock icon', 'ok'); });
+  const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: window-controls-overlay)').matches;
+
+  async function load() {
+    try {
+      const r = await fetch('/api/config', { cache: 'no-store' });
+      if (r.ok) info = await r.json();
+    } catch (e) { /* offline */ }
+    if (info && kicker) {
+      kicker.textContent = info.dataDir.split(/[\\/]/).filter(Boolean).pop() || 'Workspace';
+      kicker.title = 'Data folder: ' + info.dataDir;
+    }
+    return info;
+  }
+
+  async function switchTo(p, create) {
+    const r = await fetch('/api/config/data-dir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p, create: !!create }) });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 404 && data.missing) {
+      if (await uiConfirm(`${p}\n\ndoesn't exist. Create it and use it as the data folder?`, { title: 'Create folder', okLabel: 'Create' })) return switchTo(p, true);
+      return false;
+    }
+    if (!r.ok) { await uiAlert(data.error || 'Could not switch the data folder', { title: 'Data folder' }); return false; }
+    // Everything (tree, bookmarks, to-dos, habits, ideas…) belongs to the
+    // folder, so start fresh.
+    try { localStorage.removeItem('docviewer-last-file'); } catch (e) { /* ignore */ }
+    location.reload();
+    return true;
+  }
+
+  async function open() {
+    await load();
+    if (!info) {
+      uiAlert('Settings can only be changed on the computer running Accretion.\n\nYou are connected over the network.', { title: 'Settings' });
+      return;
+    }
+    let net = null;
+    try { const r = await fetch('/api/network', { cache: 'no-store' }); if (r.ok) net = await r.json(); } catch (e) { /* ignore */ }
+    const locked = info.source === 'env';
+    const ov = document.createElement('div');
+    ov.className = 'topo-overlay';
+    ov.innerHTML = `
+      <div class="md-dialog-box df-box" role="dialog" aria-modal="true" aria-label="Settings">
+        <div class="md-dialog-head"><span>⚙ Settings</span><button type="button" data-x aria-label="Close">×</button></div>
+        <div class="md-dialog-body">
+          <p class="df-label">Data folder</p>
+          <div class="df-current"><code>${esc(info.dataDir)}</code><button type="button" data-copy title="Copy path">Copy</button></div>
+          <p class="md-note">Your files, their version history (git), bookmarks, tags, to-dos, habits, standups and ideas all live in this folder${info.gitEnabled ? '' : ' · <b>git history is unavailable here</b>'}. The app's own folder holds only code.
+            ${info.source === 'env' ? '<br><b>Set by the DATA_DIR environment variable</b> — unset it to choose here.' : info.source === 'default' ? '<br>Using the default folder next to the app.' : ''}</p>
+          <p class="df-label">Opens as</p>
+          <div class="df-open">
+            <label><input type="radio" name="df-open" value="window"${info.openAs === 'window' ? ' checked' : ''}${info.windowAvailable ? '' : ' disabled'}> Its own window</label>
+            <label><input type="radio" name="df-open" value="browser"${info.openAs !== 'window' ? ' checked' : ''}> A browser tab</label>
+            <span class="md-spacer"></span>
+            <button type="button" data-open="window"${info.windowAvailable ? '' : ' disabled'}>⧉ Open window now</button>
+            <button type="button" data-open="browser">↗ Open in browser</button>
+          </div>
+          <div class="df-install">
+            <img src="icon.svg" alt="" width="40" height="40">
+            <div>
+              ${info.installedApp ? `<b>Installed with its own Dock icon.</b><br><span class="md-note">The window opens as <code>${esc(info.installedApp.split('/').pop())}</code>.</span>`
+                : `<b>Dock icon</b><br><span class="md-note">Install Accretion as an app so its window shows this logo in the Dock and app switcher.</span>`}
+            </div>
+            ${info.installedApp ? '<div class="df-inst-btns"><button type="button" class="df-ghost" data-reinstall>Reinstall…</button></div>' : '<button type="button" data-install>Install…</button>'}
+          </div>
+          <p class="md-note">${info.windowAvailable ? 'Used when you start the app (<code>./run.sh</code>). <code>--window</code> or <code>--browser</code> overrides it once.' : 'A separate window needs Google Chrome, Microsoft Edge or Brave.'}</p>
+          ${net ? `<p class="df-label">Network access</p>
+          <div class="df-net">
+            <label class="df-switch"><input type="checkbox" data-net${net.enabled ? ' checked' : ''}${net.envHost ? ' disabled' : ''}> Allow other devices on my network</label>
+            <div class="df-net-urls">${net.enabled || net.envHost ? (net.urls.length ? net.urls.map((u) => `<code>${esc(u)}</code>`).join(' ') : '<span class="md-note">No network connection found.</span>') : ''}</div>
+            <div class="df-row"><input type="password" class="df-pw" placeholder="${net.hasPassword ? 'New password (leave empty to keep)' : 'Password for other devices (8+ characters)'}" autocomplete="new-password"${net.envHost ? ' disabled' : ''}><button type="button" data-pw${net.envHost ? ' disabled' : ''}>${net.hasPassword ? 'Change' : 'Set'} password</button>${net.hasPassword ? '<button type="button" data-signout title="Sign out every other device">Sign out all</button>' : ''}</div>
+            <p class="md-note">This computer never needs the password. Other devices sign in once (30 days). They can use your workspace but can't change these settings or browse this computer's disk. Traffic is not encrypted (plain http) — use it only on networks you trust.${net.envHost ? '<br><b>Set by the HOST environment variable.</b>' : ''}</p>
+          </div>` : ''}
+          <p class="df-label">HTTPS</p>
+          <div class="df-https"><p class="md-note">Checking…</p></div>
+          <p class="df-label">Terminals</p>
+          <div class="df-net"><label class="df-switch"><input type="checkbox" data-term-on> Enable terminals (local &amp; SSH sessions, runbooks)</label>
+            <p class="md-note df-term-info">Checking…</p>
+            <label class="df-switch"><input type="checkbox" data-term-net> Allow terminals over the network <span class="df-warn">full control of this computer</span></label>
+            <div class="df-term-net hidden">
+              <label class="df-check"><input type="checkbox" data-term-http> Also over plain http (not encrypted — only on a network you fully trust)</label>
+              <p class="md-note">Signed-in devices (Network access above) can then open terminals and runbooks here. Without plain http they need an <b>HTTPS</b> address — easiest with <a href="https://tailscale.com/kb/1312/serve" target="_blank" rel="noopener">Tailscale Serve</a>: run <code>tailscale serve --bg 4321</code> on this computer and open the <code>https://…ts.net</code> address it prints. You'll get a notification here every time another device opens a terminal.</p>
+            </div></div>
+          <p class="df-label">Application</p>
+          <label class="df-switch df-autostart hidden"><input type="checkbox" data-autostart> Start Accretion at login <span class="md-note">— runs in the background so the Dock app and reminders always work</span></label>
+          <div class="df-quit"><button type="button" data-quitapp>⏻ Quit Accretion</button><span class="md-note">Saves, then stops the server (⌘⇧Q). Start again with Accretion.app or ./run.sh.</span></div>
+          <p class="df-label">Switch to</p>
+          <div class="df-row"><input type="text" class="df-input" placeholder="/Users/you/Ideas or ~/Ideas" spellcheck="false"${locked ? ' disabled' : ''}><button type="button" data-browse${locked ? ' disabled' : ''}>📂 Browse…</button><button type="button" class="md-primary" data-go${locked ? ' disabled' : ''}>Switch</button></div>
+          <p class="md-note">Any folder on this computer. Existing files there show up as-is; a git history is started if the folder doesn't have one.</p>
+          ${info.recent.length || info.dataDir !== info.defaultDir ? `<p class="df-label">Recent</p><div class="df-recent">${[...info.recent, ...(info.recent.includes(info.defaultDir) || info.dataDir === info.defaultDir ? [] : [info.defaultDir])].map((r) => `<button type="button" data-p="${esc(r)}"${locked ? ' disabled' : ''}>📁 ${esc(r)}${r === info.defaultDir ? ' <em>default</em>' : ''}</button>`).join('')}</div>` : ''}
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    ov.querySelector('[data-x]').addEventListener('click', close);
+    ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+    ov.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    ov.querySelector('[data-copy]').addEventListener('click', () => { navigator.clipboard.writeText(info.dataDir).then(() => setStatus('Path copied', 'ok'), () => {}); });
+    ov.querySelectorAll('input[name="df-open"]').forEach((r) => r.addEventListener('change', async () => {
+      const res = await fetch('/api/config/open-as', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ openAs: r.value }) });
+      if (res.ok) setStatus('Opens as ' + (r.value === 'window' ? 'a window' : 'a browser tab') + ' from now on', 'ok');
+      else uiAlert('Could not save that setting.');
+    }));
+    const netPost = async (body) => {
+      const r = await fetch('/api/network', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { await uiAlert(d.error || 'Could not change network access', { title: 'Network access' }); return null; }
+      return d;
+    };
+    const netBox = ov.querySelector('[data-net]');
+    if (netBox) netBox.addEventListener('change', async () => {
+      const pw = ov.querySelector('.df-pw');
+      if (netBox.checked && !net.hasPassword) {
+        if (!pw.value) { netBox.checked = false; pw.focus(); uiAlert('Set a password first — other devices will need it to sign in.', { title: 'Network access' }); return; }
+        if (!(await netPost({ password: pw.value }))) { netBox.checked = false; return; }
+      }
+      const d = await netPost({ enabled: netBox.checked });
+      if (!d) { netBox.checked = !netBox.checked; return; }
+      setStatus(d.enabled ? 'Other devices can connect' : 'This computer only', 'ok');
+      setTimeout(() => { close(); open(); }, 600);
+    });
+    const pwBtn = ov.querySelector('[data-pw]');
+    if (pwBtn) pwBtn.addEventListener('click', async () => {
+      const pw = ov.querySelector('.df-pw');
+      if (!pw.value) { pw.focus(); return; }
+      const d = await netPost({ password: pw.value });
+      if (d) { pw.value = ''; setStatus('Password saved — other devices sign in again', 'ok'); close(); open(); }
+    });
+    const so = ov.querySelector('[data-signout]');
+    if (so) so.addEventListener('click', async () => {
+      if (!(await uiConfirm('Sign out every other device? They will need the password again.', { title: 'Sign out all', okLabel: 'Sign out' }))) return;
+      if (await netPost({ signOutAll: true })) setStatus('All other devices signed out', 'ok');
+    });
+    (async () => {
+      const box = ov.querySelector('[data-term-on]');
+      const infoEl = ov.querySelector('.df-term-info');
+      if (!box) return;
+      try {
+        const ti = await (await fetch('/api/term/info', { cache: 'no-store' })).json();
+        box.checked = !!ti.enabled;
+        infoEl.innerHTML = (ti.pty ? '✓ Terminal support installed' : '✘ Terminal support missing: ' + esc(ti.ptyError || 'node-pty') + ' — run <code>npm install</code> in the app folder') + ' · ' + (ti.tmux ? '✓ ' + esc(ti.tmux) : '✘ tmux not installed (<code>brew install tmux</code>) — sessions won’t survive closing') + '<br>By default only this computer can use terminals.';
+      } catch (e) { infoEl.textContent = 'Could not read terminal status.'; }
+      const netBox2 = ov.querySelector('[data-term-net]');
+      const httpBox = ov.querySelector('[data-term-http]');
+      const netPanel = ov.querySelector('.df-term-net');
+      try {
+        const ti2 = await (await fetch('/api/term/info', { cache: 'no-store' })).json();
+        netBox2.checked = !!ti2.network; httpBox.checked = !!ti2.allowHttp;
+        netPanel.classList.toggle('hidden', !ti2.network);
+      } catch (e) { /* shown unchecked */ }
+      const saveNet = async (body) => {
+        const r = await fetch('/api/term/network', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return r.ok ? r.json() : null;
+      };
+      netBox2.addEventListener('change', async () => {
+        if (netBox2.checked) {
+          const net = await fetch('/api/network', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({}));
+          const msg = 'Signed-in devices on your network will be able to run any command on this computer, as you.'
+            + (net.enabled ? '' : '\n\nNetwork access is off — turn on "Allow other devices" (with a password) as well, or this has no effect.')
+            + '\n\nYou get a notification here each time another device opens a terminal.';
+          if (!(await uiConfirm(msg, { title: 'Allow terminals over the network?', okLabel: 'Allow', danger: true }))) { netBox2.checked = false; return; }
+        }
+        const r = await saveNet({ network: netBox2.checked });
+        netPanel.classList.toggle('hidden', !(r && r.network));
+        setStatus(r && r.network ? 'Terminals allowed over the network' : 'Terminals: this computer only', 'ok');
+      });
+      httpBox.addEventListener('change', async () => {
+        if (httpBox.checked && !(await uiConfirm('Over plain http, everything typed in the terminal — including passwords — crosses the network unencrypted. Only allow this on a network you fully trust.', { title: 'Allow plain http?', okLabel: 'Allow http', danger: true }))) { httpBox.checked = false; return; }
+        await saveNet({ allowHttp: httpBox.checked });
+      });
+      box.addEventListener('change', async () => {
+        await fetch('/api/term/enabled', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+        setStatus(box.checked ? 'Terminals enabled' : 'Terminals disabled', 'ok');
+      });
+    })();
+    // ---------- HTTPS mode ----------
+    const httpsBox = ov.querySelector('.df-https');
+    const drawHttps = (h, err) => {
+      if (!httpsBox) return;
+      const copyBtn = (u) => `<button type="button" class="df-mini" data-copy-url="${esc(u)}" title="Copy">⧉</button>`;
+      httpsBox.innerHTML = `
+        <label class="df-switch"><input type="checkbox" data-https-on${h.enabled ? ' checked' : ''}${h.openssl ? '' : ' disabled'}> HTTPS mode <span class="df-pill ${h.running ? 'on' : h.enabled ? 'err' : ''}">${h.running ? 'on' : h.enabled ? 'not running' : 'off'}</span></label>
+        ${!h.openssl ? '<p class="df-err">openssl is not installed — run ./setup.sh --install</p>' : ''}
+        ${err ? `<p class="df-err">${esc(err)}</p>` : ''}
+        <p class="md-note">Encrypts connections from other devices (TLS on the same port 4321), with a certificate made on this computer. This computer can keep using http://localhost.</p>
+        ${h.enabled ? `
+          <div class="df-urls">${h.urls.map((u) => `<div><code>${esc(u)}</code>${copyBtn(u)}</div>`).join('')}</div>
+          ${h.network ? '' : `<p class="df-warn-box">Other devices can only connect after you turn on <b>Network access → Allow other devices</b> above (it needs a password).</p>`}
+          <label class="df-check"><input type="checkbox" data-https-only${h.httpsOnly ? ' checked' : ''}> HTTPS only for other devices (plain http is redirected)</label>
+          <div class="df-ca">
+            <div><b>Certificate</b> — install once on each device so browsers trust it.
+              <div class="md-note">Fingerprint (SHA-256): <code class="df-fp">${esc(h.fingerprint || '…')}</code>${h.cert ? ` · renews automatically · valid until ${esc(new Date(h.cert.expires).toLocaleDateString())}` : ''}</div></div>
+            <div class="df-btns"><a class="df-mini-btn" href="${esc(h.caUrl)}" download="accretion-ca.crt">⤓ Download certificate</a>
+              ${h.trustedHere === false ? '<button type="button" class="df-mini-btn" data-trust-mac>Trust on this Mac…</button>' : h.trustedHere ? '<span class="df-pill on">trusted on this Mac</span>' : ''}</div>
+            <details class="df-howto"><summary>How to install on other devices</summary>
+              <p>On the other device, open <code>http://&lt;this-mac&gt;:4321/accretion-ca.crt</code> (or AirDrop / email the downloaded file), then:</p>
+              <ul>
+                <li><b>iPhone / iPad:</b> open the file → Settings → <i>Profile Downloaded</i> → Install. Then Settings → General → About → Certificate Trust Settings → turn on <i>Accretion local CA</i>.</li>
+                <li><b>Mac:</b> double-click it → Keychain Access → open <i>Accretion local CA</i> → Trust → <i>Always Trust</i>.</li>
+                <li><b>Windows:</b> double-click → Install Certificate → Local Machine → <i>Trusted Root Certification Authorities</i>.</li>
+                <li><b>Android:</b> Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate.</li>
+                <li><b>Linux (Chrome/Firefox):</b> browser Settings → Certificates → Authorities → Import.</li>
+              </ul>
+              <p>Check the fingerprint matches the one above. Then open one of the https:// addresses.</p>
+            </details>
+          </div>` : ''}`;
+      const on = httpsBox.querySelector('[data-https-on]');
+      if (on) on.addEventListener('change', async () => {
+        on.disabled = true;
+        const r = await fetch('/api/https', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on.checked }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { drawHttps(Object.assign({}, h, { enabled: false }), d.error || 'Could not change HTTPS mode'); return; }
+        setStatus(d.running ? 'HTTPS mode on' : 'HTTPS mode off', 'ok');
+        drawHttps(d);
+      });
+      const only = httpsBox.querySelector('[data-https-only]');
+      if (only) only.addEventListener('change', async () => {
+        if (!only.checked && !(await uiConfirm('Other devices will also be able to use plain http — passwords and files then cross the network unencrypted.', { title: 'Allow plain http?', okLabel: 'Allow http', danger: true }))) { only.checked = true; return; }
+        const r = await fetch('/api/https', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ httpsOnly: only.checked }) });
+        if (r.ok) drawHttps(await r.json());
+      });
+      httpsBox.querySelectorAll('[data-copy-url]').forEach((b) => b.addEventListener('click', () => navigator.clipboard.writeText(b.dataset.copyUrl).then(() => setStatus('Address copied', 'ok'), () => {})));
+      const trust = httpsBox.querySelector('[data-trust-mac]');
+      if (trust) trust.addEventListener('click', async () => {
+        trust.disabled = true;
+        trust.textContent = 'Waiting for macOS…';
+        const r = await fetch('/api/https/trust-mac', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { uiAlert(d.error || 'Not trusted', { title: 'Trust certificate' }); drawHttps(h); return; }
+        drawHttps(d);
+      });
+    };
+    (async () => {
+      try {
+        const r = await fetch('/api/https', { cache: 'no-store' });
+        if (r.ok) drawHttps(await r.json()); else httpsBox.innerHTML = '<p class="md-note">HTTPS settings are only available on the computer running Accretion.</p>';
+      } catch (e) { httpsBox.innerHTML = '<p class="md-note">Could not read HTTPS status.</p>'; }
+    })();
+    (async () => {
+      const row = ov.querySelector('.df-autostart');
+      const box = ov.querySelector('[data-autostart]');
+      try {
+        const a = await (await fetch('/api/autostart', { cache: 'no-store' })).json();
+        if (!a.supported) return;
+        row.classList.remove('hidden');
+        box.checked = !!a.enabled;
+      } catch (e) { return; }
+      box.addEventListener('change', async () => {
+        const r = await fetch('/api/autostart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { box.checked = !box.checked; uiAlert(d.error || 'Could not change it'); return; }
+        setStatus(d.enabled ? 'Accretion will start at login' : 'Start at login turned off', 'ok');
+        if (d.stopping) uiAlert('Start at login is off. This server was started by it, so it stops now — open Accretion.app to start it again.', { title: 'Start at login' });
+      });
+    })();
+    const qb = ov.querySelector('[data-quitapp]');
+    if (qb) qb.addEventListener('click', () => { close(); if (window.quitApp) quitApp(); });
+    const inst = ov.querySelector('[data-install]');
+    if (inst) inst.addEventListener('click', async () => {
+      if (installEvent) {
+        // Chrome/Edge show their own install confirmation here — it's the
+        // browser installing the app, so it can't be an in-page popup.
+        installEvent.prompt();
+        const choice = await installEvent.userChoice.catch(() => null);
+        installEvent = null;
+        if (choice && choice.outcome === 'accepted') { close(); setTimeout(() => fetch('/api/config/open-as', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ openAs: 'window' }) }), 0); }
+        return;
+      }
+      uiAlert(isStandalone()
+        ? 'This window is already running as an installed app.'
+        : 'To install with a Dock icon:\n\n• Chrome or Edge: open the ⋮ menu → "Cast, save and share" → "Install page as app…" (or the install icon at the right of the address bar).\n• Safari: File → "Add to Dock…".\n\nAfter that, the Accretion launcher and "Open window now" open the installed app.', { title: 'Install Accretion' });
+    });
+    // Reinstall / uninstall the Dock app. A page can't remove an installed
+    // app itself, so this opens Chrome's app manager with the steps, watches
+    // for the removal, and (for reinstall) offers Install right away.
+    const appFlow = (reinstall) => {
+      const ov2 = document.createElement('div');
+      ov2.className = 'topo-overlay';
+      ov2.innerHTML = `<div class="md-dialog-box app-flow" role="dialog" aria-modal="true" aria-label="${reinstall ? 'Reinstall' : 'Uninstall'} Accretion app">
+        <div class="md-dialog-head"><span>${reinstall ? '↻ Reinstall' : '✕ Uninstall'} the Accretion app</span><button type="button" data-x aria-label="Close">×</button></div>
+        <div class="md-dialog-body">
+          <ol class="app-steps">
+            <li class="cur" data-step="1"><b>Remove the installed app.</b> Either:
+              <ul>
+                <li>In the <b>Accretion app window</b>: menu <b>⋮</b> (top right) → <b>Uninstall Accretion…</b>, or</li>
+                <li><button type="button" class="df-mini-btn" data-apps>Open app manager</button> → right-click <b>Accretion</b> → <b>Remove from Chrome…</b>
+                  <div class="md-note">If you installed it from your normal Chrome window, use <a href="#" data-apps-default>that profile's app manager</a> instead.</div></li>
+              </ul>
+              <div class="app-wait"><span class="dot"></span> Waiting for the app to be removed…</div>
+            </li>
+            ${reinstall ? `<li data-step="2"><b>Install it again.</b> <button type="button" class="df-mini-btn" data-reinst disabled>Install…</button>
+              <div class="md-note">Chrome asks to confirm. If the button stays greyed out, open Accretion in its window (⚙ → Open window now) and click Install there.</div></li>` : ''}
+          </ol>
+        </div>
+        <div class="md-dialog-actions"><span class="md-spacer"></span><button type="button" data-x2>Close</button></div></div>`;
+      document.body.appendChild(ov2);
+      let timer = null;
+      const close = () => { clearInterval(timer); ov2.remove(); };
+      ov2.querySelector('[data-x]').addEventListener('click', close);
+      ov2.querySelector('[data-x2]').addEventListener('click', close);
+      ov2.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+      const openMgr = (profile) => fetch('/api/apps-manager', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) })
+        .then((r) => r.json()).then((d) => { if (d.error) uiAlert(d.error); }).catch(() => {});
+      ov2.querySelector('[data-apps]').addEventListener('click', () => openMgr('window'));
+      ov2.querySelector('[data-apps-default]').addEventListener('click', (e) => { e.preventDefault(); openMgr('default'); });
+      const inst = ov2.querySelector('[data-reinst]');
+      if (inst) inst.addEventListener('click', async () => {
+        if (installEvent) {
+          installEvent.prompt();
+          const choice = await installEvent.userChoice.catch(() => null);
+          installEvent = null;
+          if (choice && choice.outcome === 'accepted') { setStatus('Accretion app reinstalled', 'ok'); close(); }
+        } else {
+          uiAlert('Open Accretion in its window (⚙ Settings → Open window now), then use the install icon at the right of the address bar, or ⋮ → Cast, save and share → Install page as app…', { title: 'Install again' });
+        }
+      });
+      // Watch for the removal.
+      timer = setInterval(async () => {
+        try {
+          const c = await (await fetch('/api/config', { cache: 'no-store' })).json();
+          if (c.installedApp) return;
+          clearInterval(timer);
+          const s1 = ov2.querySelector('[data-step="1"]');
+          s1.classList.remove('cur'); s1.classList.add('done');
+          s1.querySelector('.app-wait').innerHTML = '✓ Removed.';
+          if (reinstall) {
+            const s2 = ov2.querySelector('[data-step="2"]');
+            s2.classList.add('cur');
+            inst.disabled = false;
+            inst.focus();
+          } else {
+            setStatus('Accretion app uninstalled — the window now opens in Chrome app mode', 'ok');
+          }
+        } catch (e) { /* keep waiting */ }
+      }, 1500);
+    };
+    const rb = ov.querySelector('[data-reinstall]');
+    if (rb) rb.addEventListener('click', () => { close(); appFlow(true); });
+
+    ov.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', async () => {
+      const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ as: b.dataset.open }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) uiAlert(d.error || 'Could not open it.');
+    }));
+    const input = ov.querySelector('.df-input');
+    const go = async (p) => {
+      if (!p) { input.focus(); return; }
+      if (!(await uiConfirm(`Switch the data folder to\n${p}?\n\nThe page reloads with that folder's files.`, { title: 'Switch data folder', okLabel: 'Switch' }))) return;
+      await switchTo(p);
+    };
+    ov.querySelector('[data-go]').addEventListener('click', () => go(input.value.trim()));
+    ov.querySelector('[data-browse]').addEventListener('click', async () => {
+      const picked = await browse(input.value.trim() || info.dataDir.replace(/[\\/][^\\/]*$/, ''));
+      if (picked) { input.value = picked; go(picked); }
+    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(input.value.trim()); } });
+    ov.querySelectorAll('.df-recent [data-p]').forEach((b) => b.addEventListener('click', () => go(b.dataset.p)));
+    if (!locked) input.focus();
+  }
+
+  // ---------- folder browser ----------
+  // Resolves with the chosen absolute path, or null.
+  function browse(start) {
+    return new Promise((resolve) => {
+      const ov = document.createElement('div');
+      ov.className = 'topo-overlay fb-ov';
+      ov.innerHTML = `
+        <div class="md-dialog-box fb-box" role="dialog" aria-modal="true" aria-label="Choose a folder">
+          <div class="md-dialog-head"><span>📂 Choose a data folder</span><button type="button" data-x aria-label="Close">×</button></div>
+          <div class="fb-main">
+            <nav class="fb-places"></nav>
+            <div class="fb-right">
+              <div class="fb-bar"><button type="button" data-up title="Parent folder">↑</button><div class="fb-crumbs"></div></div>
+              <input type="text" class="fb-path" spellcheck="false" aria-label="Path" title="Type a path and press Enter">
+              <div class="fb-list" tabindex="0"></div>
+              <div class="fb-status"></div>
+            </div>
+          </div>
+          <div class="md-dialog-actions">
+            <label class="fb-hidden"><input type="checkbox"> Show hidden</label>
+            <button type="button" data-mk>＋ New folder</button>
+            <span class="md-spacer"></span>
+            <button type="button" data-cancel>Cancel</button>
+            <button type="button" class="md-primary" data-use>Use this folder</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      const list = ov.querySelector('.fb-list');
+      const pathIn = ov.querySelector('.fb-path');
+      const status = ov.querySelector('.fb-status');
+      const useBtn = ov.querySelector('[data-use]');
+      let cur = null;
+      let sel = -1;
+      const done = (v) => { ov.remove(); resolve(v); };
+
+      async function go(p) {
+        const hidden = ov.querySelector('.fb-hidden input').checked ? '&hidden=1' : '';
+        const r = await fetch('/api/fs/list?path=' + encodeURIComponent(p || '') + hidden, { cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { status.textContent = d.error || 'Cannot open that folder'; status.classList.add('err'); return; }
+        cur = d;
+        sel = -1;
+        status.classList.remove('err');
+        pathIn.value = d.path;
+        ov.querySelector('[data-up]').disabled = !d.parent;
+        // Breadcrumbs
+        const parts = d.path.split(d.sep).filter(Boolean);
+        const root = d.path.startsWith(d.sep) ? d.sep : parts.shift() + d.sep;
+        let acc = root;
+        const crumbs = [{ name: root === '/' ? '/' : root, path: root }].concat(parts.map((n) => { acc = acc.endsWith(d.sep) ? acc + n : acc + d.sep + n; return { name: n, path: acc }; }));
+        ov.querySelector('.fb-crumbs').innerHTML = crumbs.map((c, i) => `<button type="button" data-p="${esc(c.path)}"${i === crumbs.length - 1 ? ' class="on"' : ''}>${esc(c.name)}</button>`).join('<span>›</span>');
+        ov.querySelectorAll('.fb-crumbs [data-p]').forEach((b) => b.addEventListener('click', () => go(b.dataset.p)));
+        ov.querySelector('.fb-crumbs').scrollLeft = 1e6;
+        ov.querySelector('.fb-places').innerHTML = d.places.map((pl) => `<button type="button" data-p="${esc(pl.path)}" class="${d.path === pl.path ? 'on' : ''}">${esc(pl.name)}</button>`).join('')
+          + (info && info.recent && info.recent.length ? '<div class="fb-sub">Recent</div>' + info.recent.map((r) => `<button type="button" data-p="${esc(r)}" title="${esc(r)}">${esc(r.split(/[\\/]/).pop())}</button>`).join('') : '');
+        ov.querySelectorAll('.fb-places [data-p]').forEach((b) => b.addEventListener('click', () => go(b.dataset.p)));
+        list.innerHTML = d.dirs.length ? d.dirs.map((x, i) => `<div class="fb-item" data-i="${i}" title="${esc(x.path)}"><span class="fb-ic">📁</span><span class="fb-name">${esc(x.name)}</span>${x.isWorkspace ? '<span class="fb-badge ws">workspace</span>' : ''}${x.isGit ? '<span class="fb-badge">git</span>' : ''}<span class="fb-go">›</span></div>`).join('')
+          : '<div class="fb-empty">No sub-folders</div>';
+        list.scrollTop = 0;
+        const notes = [];
+        if (d.isAppFolder) notes.push('This is inside the app folder — choose another folder.');
+        else if (!d.writable) notes.push('Read-only folder — choose another folder.');
+        else if (d.isWorkspace) notes.push('This folder is already a workspace.');
+        else if (d.isGit) notes.push('Has a git history — new versions are added to it.');
+        status.textContent = notes.join(' ');
+        useBtn.disabled = d.isAppFolder || !d.writable;
+        useBtn.textContent = 'Use “' + (parts[parts.length - 1] || root) + '”';
+      }
+      const items = () => [...list.querySelectorAll('.fb-item')];
+      const mark = (i) => {
+        const all = items();
+        if (!all.length) return;
+        sel = Math.max(0, Math.min(all.length - 1, i));
+        all.forEach((el, n) => el.classList.toggle('sel', n === sel));
+        all[sel].scrollIntoView({ block: 'nearest' });
+      };
+      list.addEventListener('click', (e) => { const it = e.target.closest('.fb-item'); if (it) mark(Number(it.dataset.i)); });
+      list.addEventListener('dblclick', (e) => { const it = e.target.closest('.fb-item'); if (it) go(cur.dirs[Number(it.dataset.i)].path); });
+      list.addEventListener('click', (e) => { if (e.target.closest('.fb-go')) go(cur.dirs[Number(e.target.closest('.fb-item').dataset.i)].path); });
+      list.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); mark(sel + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); mark(sel - 1); }
+        else if ((e.key === 'Enter' || e.key === 'ArrowRight') && sel >= 0) { e.preventDefault(); go(cur.dirs[sel].path); }
+        else if ((e.key === 'Backspace' || e.key === 'ArrowLeft') && cur.parent) { e.preventDefault(); go(cur.parent); }
+        else if (/^[\w.-]$/.test(e.key)) {
+          const k = e.key.toLowerCase();
+          const i = cur.dirs.findIndex((x, n) => n > sel && x.name.toLowerCase().startsWith(k));
+          const j = i >= 0 ? i : cur.dirs.findIndex((x) => x.name.toLowerCase().startsWith(k));
+          if (j >= 0) mark(j);
+        }
+      });
+      pathIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(pathIn.value.trim()); } });
+      ov.querySelector('[data-up]').addEventListener('click', () => cur && cur.parent && go(cur.parent));
+      ov.querySelector('.fb-hidden input').addEventListener('change', () => go(cur ? cur.path : start));
+      ov.querySelector('[data-mk]').addEventListener('click', async () => {
+        if (!cur) return;
+        const name = await uiPrompt('Name of the new folder in\n' + cur.path, '', { title: 'New folder', okLabel: 'Create' });
+        if (!name || !name.trim()) return;
+        const r = await fetch('/api/fs/mkdir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent: cur.path, name: name.trim() }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { uiAlert(d.error || 'Could not create the folder'); return; }
+        go(d.path);
+      });
+      // "Use" takes the highlighted sub-folder if one is selected.
+      useBtn.addEventListener('click', () => { if (cur) done(sel >= 0 && cur.dirs[sel] ? cur.dirs[sel].path : cur.path); });
+      list.addEventListener('click', () => {
+        if (sel >= 0 && cur.dirs[sel]) useBtn.textContent = 'Use “' + cur.dirs[sel].name + '”';
+      });
+      ov.querySelector('[data-x]').addEventListener('click', () => done(null));
+      ov.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+      ov.addEventListener('mousedown', (e) => { if (e.target === ov) done(null); });
+      ov.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
+      go(start).then(() => { if (!cur) go(''); list.focus(); });
+    });
+  }
+
+  if (btn) btn.addEventListener('click', open);
+  window.openDataFolder = open;
+  load();
+})();

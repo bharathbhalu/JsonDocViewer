@@ -1,0 +1,20 @@
+{
+  "categories": [
+    {
+      "id": "c_default",
+      "name": "Bookmarks",
+      "collapsed": true
+    },
+    {
+      "id": "c_munabcjge5if2",
+      "name": "Sample",
+      "collapsed": true
+    }
+  ],
+  "items": [
+    {
+      "path": "test_slides-assets/test_slides.html",
+      "categoryId": "c_default"
+    }
+  ]
+}
