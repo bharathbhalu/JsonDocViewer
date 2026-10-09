@@ -15,7 +15,7 @@ const TerminalCore = require(path.join(__dirname, 'public', 'terminal', 'core.js
 
 let pty = null;
 let ptyError = null;
-try { pty = require('node-pty'); } catch (e) { ptyError = e.message; }
+try { pty = require('node-pty'); } catch (e) { ptyError = String(e.message).split('\n')[0]; }
 let WebSocketServer = null;
 try { ({ WebSocketServer } = require('ws')); } catch (e) { ptyError = ptyError || e.message; }
 
@@ -217,6 +217,21 @@ module.exports = function setupTerminals(app, deps) {
     res.json({ network: !!t.network, allowHttp: !!t.allowHttp });
   });
 
+  // Why can't a live pane open? The browser can't read the reason a WebSocket
+  // upgrade was refused, so the pane asks here after a failed attempt.
+  app.get('/api/term/preflight', async (req, res) => {
+    const problems = [];
+    const warnings = [];
+    if (!enabled()) problems.push({ code: 'disabled', message: 'Terminals are turned off.', fix: 'Turn them on in ⚙ Settings → Terminals (on the computer running Accretion).' });
+    if (!pty) problems.push({ code: 'pty', message: 'Terminal support (node-pty) is not installed or failed to load' + (ptyError ? ': ' + ptyError : '') + '.', fix: 'In the app folder run: npm rebuild node-pty --build-from-source (or ./setup.sh --install), then restart Accretion. (Restarting with ./run.sh also tries this automatically.)' });
+    if (!WebSocketServer) problems.push({ code: 'ws', message: 'The ws package is missing.', fix: 'In the app folder run npm install, then restart Accretion.' });
+    let d = null;
+    try { d = readTerminalFile(String(req.query.path || '')); } catch (err) { problems.push({ code: 'file', message: err.message, fix: 'Check the terminal file still exists.' }); }
+    if (d && d.mode === 'ssh' && !d.host) problems.push({ code: 'host', message: 'No SSH host set.', fix: 'Set the host in the terminal\'s ⚙ settings.' });
+    if (d && d.mode === 'local' && !tmuxVersion) warnings.push({ code: 'tmux', message: 'tmux is not installed here — you get a plain shell that ends when the pane closes.', fix: 'brew install tmux  /  sudo apt install tmux' });
+    res.json({ ok: !problems.length, problems, warnings, pty: !!pty, tmux: tmuxVersion, node: process.version });
+  });
+
   app.post('/api/term/enabled', (req, res) => {
     const cfg = readAppConfig();
     writeAppConfig(Object.assign({}, cfg, { terminal: Object.assign({}, cfg.terminal || {}, { enabled: !!(req.body && req.body.enabled) }) }));
@@ -413,12 +428,13 @@ module.exports = function setupTerminals(app, deps) {
   let wss = null;
 
   function attach(server) {
-    if (!pty || !WebSocketServer) return;
-    if (!wss) wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
+    if (pty && WebSocketServer && !wss) wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
     server.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname !== '/ws/term') return; // not ours
       const refuse = (code, msg) => { socket.write(`HTTP/1.1 ${code} ${msg}\r\nConnection: close\r\n\r\n`); socket.destroy(); };
+      // Missing node-pty / ws: say so instead of leaving the request hanging.
+      if (!wss) return refuse(503, 'Terminal support not installed');
       if (!enabled()) return refuse(403, 'Terminals off');
       const local = isLocalRequest(req);
       if (!local && !(remoteTerminalOk && remoteTerminalOk(req))) return refuse(403, 'Forbidden');

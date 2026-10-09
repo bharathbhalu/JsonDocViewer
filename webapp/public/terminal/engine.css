@@ -93,3 +93,4 @@ html[data-theme="dark"] .tm-term-wrap { background: #0d1117; }
 .tm-ctx-check { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
 .tm-side-close { width: calc(100% + 24px); margin: 0 -12px 4px; text-align: right; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)) !important; }
 .tm-ctx-hint { display: block; padding: 4px 10px; font-size: 11px; color: var(--muted, #667085); }
+.tm-ov-box p { white-space: pre-line; }

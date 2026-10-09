@@ -288,6 +288,8 @@
           try { m = JSON.parse(ev.data); } catch (e) { return; }
           if (m.t === 'ready') {
             this.retry = 0;
+            this.failedOpens = 0;
+            ws._ready = true;
             try { localStorage.setItem('docviewer-last-terminal', p); } catch (e) { /* ignore */ }
             this.sessionName = m.session;
             this._setState('connected', (m.plain ? 'Plain shell ' + (m.mode === 'ssh' ? 'on ' + m.host : 'on this computer') : this._where()));
@@ -307,6 +309,13 @@
           const x = this.lastExit;
           this.lastExit = null;
           if (x) return this._ended(x);
+          // Closed before the pane ever became ready: the connection is being
+          // refused. Ask the server why instead of retrying blindly.
+          if (!ws._ready) {
+            this.failedOpens = (this.failedOpens || 0) + 1;
+            this._diagnose();
+            return;
+          }
           // Dropped (server restart, sleep): retry with backoff.
           this.retry++;
           const wait = Math.min(15000, 800 * 2 ** Math.min(this.retry, 5));
@@ -318,6 +327,37 @@
         this._setState('ended', 'Could not connect');
         this._showOverlay(String(err.message || err), [['Retry', () => this.connect({ fresh: true })], ['Choose session…', () => this.openPicker()]]);
       }
+    }
+
+    async _diagnose() {
+      const p = this._path();
+      let pre = null;
+      try { const r = await fetch('/api/term/preflight?path=' + encodeURIComponent(p), { cache: 'no-store' }); if (r.ok) pre = await r.json(); } catch (e) { /* server unreachable */ }
+      if (this.closing) return;
+      if (!pre) {
+        // Server itself unreachable (restarting / stopped): keep trying gently.
+        this.retry++;
+        const wait = Math.min(15000, 1000 * 2 ** Math.min(this.retry, 4));
+        this._setState('reconnecting', 'Server not reachable — retrying in ' + Math.round(wait / 1000) + 's');
+        this._showOverlay('Accretion\'s server is not reachable. Retrying…', [['Retry now', () => this.connect({ fresh: true })]]);
+        this.retryTimer = setTimeout(() => this.connect({}), wait);
+        return;
+      }
+      if (!pre.ok) {
+        const x = pre.problems[0];
+        this._setState('ended', 'Terminal unavailable');
+        this._showOverlay(x.message + '\n\nFix: ' + x.fix, [['Try again', () => this.connect({ fresh: true }), true]]);
+        this.term.write('\r\n\x1b[31m[' + x.message + ']\x1b[0m\r\n');
+        return;
+      }
+      if (this.failedOpens >= 3) {
+        this._setState('ended', 'Live connection blocked');
+        this._showOverlay('The terminal is set up correctly, but the live connection keeps being refused. A proxy, VPN or firewall between this browser and Accretion may be blocking WebSockets.', [['Retry', () => { this.failedOpens = 0; this.connect({ fresh: true }); }, true], ['Plain shell', () => this.connect({ fresh: true, plain: true })]]);
+        return;
+      }
+      const wait = 1500 * this.failedOpens;
+      this._setState('reconnecting', 'Connection refused — retrying (' + this.failedOpens + '/3)');
+      this.retryTimer = setTimeout(() => this.connect({}), wait);
     }
 
     // The pane process ended: detached, session killed, SSH failed…

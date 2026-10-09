@@ -2337,13 +2337,13 @@ function ensureStocksAssets() {
 
 function ensureTerminalAssets() {
   ensureStylesheet('/vendor/xterm/xterm.css?v=6', 'data-xterm-css');
-  ensureStylesheet('/terminal/engine.css?v=5', 'data-tm-css');
+  ensureStylesheet('/terminal/engine.css?v=6', 'data-tm-css');
   // xterm's bundles are UMD; load them past Monaco's AMD define().
   return loadGlobalScript('/vendor/xterm/xterm.js?v=6', () => typeof window.Terminal === 'function', ['Terminal'])
     .then(() => loadGlobalScript('/vendor/xterm/addon-fit.js?v=6', () => !!window.FitAddon, ['FitAddon']))
     .then(() => loadGlobalScript('/vendor/xterm/addon-web-links.js?v=6', () => !!window.WebLinksAddon, ['WebLinksAddon']))
     .then(() => ensureScript('/terminal/core.js?v=2', 'data-tm-core', () => !!window.TerminalCore))
-    .then(() => ensureScript('/terminal/engine.js?v=5', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
+    .then(() => ensureScript('/terminal/engine.js?v=6', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
 }
 
 function ensureRunbookAssets() {

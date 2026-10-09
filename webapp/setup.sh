@@ -227,6 +227,17 @@ fi
 if have python3; then ok "python3 $(python3 -V 2>&1 | awk '{print $2}') (used by node-gyp)"
 else bad "python3 not found (node-gyp needs it to build node-pty)"; offer_install "python3" "python@3" "python3" "python3" "python" "your package manager"; fi
 
+# The app's own node-pty must load with this Node (native module).
+if [ -d "$SCRIPT_DIR/node_modules/node-pty" ] && have node; then
+  if (cd "$SCRIPT_DIR" && node -e "require('node-pty')" >/dev/null 2>&1); then ok "App's node-pty loads with Node $(node -v)"
+  else
+    bad "App's node-pty doesn't load with Node $(node -v) (terminals would keep reconnecting)"
+    if [ "$INSTALL" -eq 1 ] && confirm "Rebuild it (npm rebuild node-pty --build-from-source)"; then
+      if (cd "$SCRIPT_DIR" && npm rebuild node-pty --build-from-source --no-audit --no-fund >/dev/null 2>&1 && chmod +x node_modules/node-pty/prebuilds/*/spawn-helper node_modules/node-pty/build/Release/spawn-helper 2>/dev/null; node -e "require('node-pty')" >/dev/null 2>&1); then ok "node-pty rebuilt"; else bad "Rebuild failed — check the build tools above"; fi
+    else info "Fix: cd \"$SCRIPT_DIR\" && npm rebuild node-pty --build-from-source"; fi
+  fi
+fi
+
 # Real test: can node-pty be built and spawn a shell here? (temp dir; the app is untouched)
 if have npm && have node; then
   printf '  … building node-pty in a temporary folder (about 30–90 s)\n'
