@@ -83,6 +83,18 @@
             <div class="df-row"><input type="password" class="df-pw" placeholder="${net.hasPassword ? 'New password (leave empty to keep)' : 'Password for other devices (8+ characters)'}" autocomplete="new-password"${net.envHost ? ' disabled' : ''}><button type="button" data-pw${net.envHost ? ' disabled' : ''}>${net.hasPassword ? 'Change' : 'Set'} password</button>${net.hasPassword ? '<button type="button" data-signout title="Sign out every other device">Sign out all</button>' : ''}</div>
             <p class="md-note">This computer never needs the password. Other devices sign in once (30 days). They can use your workspace but can't change these settings or browse this computer's disk. Traffic is not encrypted (plain http) — use it only on networks you trust.${net.envHost ? '<br><b>Set by the HOST environment variable.</b>' : ''}</p>
           </div>` : ''}
+          <p class="df-label">HTTPS</p>
+          <div class="df-https"><p class="md-note">Checking…</p></div>
+          <p class="df-label">Terminals</p>
+          <div class="df-net"><label class="df-switch"><input type="checkbox" data-term-on> Enable terminals (local &amp; SSH sessions, runbooks)</label>
+            <p class="md-note df-term-info">Checking…</p>
+            <label class="df-switch"><input type="checkbox" data-term-net> Allow terminals over the network <span class="df-warn">full control of this computer</span></label>
+            <div class="df-term-net hidden">
+              <label class="df-check"><input type="checkbox" data-term-http> Also over plain http (not encrypted — only on a network you fully trust)</label>
+              <p class="md-note">Signed-in devices (Network access above) can then open terminals and runbooks here. Without plain http they need an <b>HTTPS</b> address — easiest with <a href="https://tailscale.com/kb/1312/serve" target="_blank" rel="noopener">Tailscale Serve</a>: run <code>tailscale serve --bg 4321</code> on this computer and open the <code>https://…ts.net</code> address it prints. You'll get a notification here every time another device opens a terminal.</p>
+            </div></div>
+          <p class="df-label">Application</p>
+          <div class="df-quit"><button type="button" data-quitapp>⏻ Quit Accretion</button><span class="md-note">Saves, then stops the server (⌘⇧Q). Start again with Accretion.app or ./run.sh.</span></div>
           <p class="df-label">Switch to</p>
           <div class="df-row"><input type="text" class="df-input" placeholder="/Users/you/Ideas or ~/Ideas" spellcheck="false"${locked ? ' disabled' : ''}><button type="button" data-browse${locked ? ' disabled' : ''}>📂 Browse…</button><button type="button" class="md-primary" data-go${locked ? ' disabled' : ''}>Switch</button></div>
           <p class="md-note">Any folder on this computer. Existing files there show up as-is; a git history is started if the folder doesn't have one.</p>
@@ -130,6 +142,113 @@
       if (!(await uiConfirm('Sign out every other device? They will need the password again.', { title: 'Sign out all', okLabel: 'Sign out' }))) return;
       if (await netPost({ signOutAll: true })) setStatus('All other devices signed out', 'ok');
     });
+    (async () => {
+      const box = ov.querySelector('[data-term-on]');
+      const infoEl = ov.querySelector('.df-term-info');
+      if (!box) return;
+      try {
+        const ti = await (await fetch('/api/term/info', { cache: 'no-store' })).json();
+        box.checked = !!ti.enabled;
+        infoEl.innerHTML = (ti.pty ? '✓ Terminal support installed' : '✘ Terminal support missing: ' + esc(ti.ptyError || 'node-pty') + ' — run <code>npm install</code> in the app folder') + ' · ' + (ti.tmux ? '✓ ' + esc(ti.tmux) : '✘ tmux not installed (<code>brew install tmux</code>) — sessions won’t survive closing') + '<br>By default only this computer can use terminals.';
+      } catch (e) { infoEl.textContent = 'Could not read terminal status.'; }
+      const netBox2 = ov.querySelector('[data-term-net]');
+      const httpBox = ov.querySelector('[data-term-http]');
+      const netPanel = ov.querySelector('.df-term-net');
+      try {
+        const ti2 = await (await fetch('/api/term/info', { cache: 'no-store' })).json();
+        netBox2.checked = !!ti2.network; httpBox.checked = !!ti2.allowHttp;
+        netPanel.classList.toggle('hidden', !ti2.network);
+      } catch (e) { /* shown unchecked */ }
+      const saveNet = async (body) => {
+        const r = await fetch('/api/term/network', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return r.ok ? r.json() : null;
+      };
+      netBox2.addEventListener('change', async () => {
+        if (netBox2.checked) {
+          const net = await fetch('/api/network', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({}));
+          const msg = 'Signed-in devices on your network will be able to run any command on this computer, as you.'
+            + (net.enabled ? '' : '\n\nNetwork access is off — turn on "Allow other devices" (with a password) as well, or this has no effect.')
+            + '\n\nYou get a notification here each time another device opens a terminal.';
+          if (!(await uiConfirm(msg, { title: 'Allow terminals over the network?', okLabel: 'Allow', danger: true }))) { netBox2.checked = false; return; }
+        }
+        const r = await saveNet({ network: netBox2.checked });
+        netPanel.classList.toggle('hidden', !(r && r.network));
+        setStatus(r && r.network ? 'Terminals allowed over the network' : 'Terminals: this computer only', 'ok');
+      });
+      httpBox.addEventListener('change', async () => {
+        if (httpBox.checked && !(await uiConfirm('Over plain http, everything typed in the terminal — including passwords — crosses the network unencrypted. Only allow this on a network you fully trust.', { title: 'Allow plain http?', okLabel: 'Allow http', danger: true }))) { httpBox.checked = false; return; }
+        await saveNet({ allowHttp: httpBox.checked });
+      });
+      box.addEventListener('change', async () => {
+        await fetch('/api/term/enabled', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+        setStatus(box.checked ? 'Terminals enabled' : 'Terminals disabled', 'ok');
+      });
+    })();
+    // ---------- HTTPS mode ----------
+    const httpsBox = ov.querySelector('.df-https');
+    const drawHttps = (h, err) => {
+      if (!httpsBox) return;
+      const copyBtn = (u) => `<button type="button" class="df-mini" data-copy-url="${esc(u)}" title="Copy">⧉</button>`;
+      httpsBox.innerHTML = `
+        <label class="df-switch"><input type="checkbox" data-https-on${h.enabled ? ' checked' : ''}${h.openssl ? '' : ' disabled'}> HTTPS mode <span class="df-pill ${h.running ? 'on' : h.enabled ? 'err' : ''}">${h.running ? 'on' : h.enabled ? 'not running' : 'off'}</span></label>
+        ${!h.openssl ? '<p class="df-err">openssl is not installed — run ./setup.sh --install</p>' : ''}
+        ${err ? `<p class="df-err">${esc(err)}</p>` : ''}
+        <p class="md-note">Encrypts connections from other devices (TLS on the same port 4321), with a certificate made on this computer. This computer can keep using http://localhost.</p>
+        ${h.enabled ? `
+          <div class="df-urls">${h.urls.map((u) => `<div><code>${esc(u)}</code>${copyBtn(u)}</div>`).join('')}</div>
+          ${h.network ? '' : `<p class="df-warn-box">Other devices can only connect after you turn on <b>Network access → Allow other devices</b> above (it needs a password).</p>`}
+          <label class="df-check"><input type="checkbox" data-https-only${h.httpsOnly ? ' checked' : ''}> HTTPS only for other devices (plain http is redirected)</label>
+          <div class="df-ca">
+            <div><b>Certificate</b> — install once on each device so browsers trust it.
+              <div class="md-note">Fingerprint (SHA-256): <code class="df-fp">${esc(h.fingerprint || '…')}</code>${h.cert ? ` · renews automatically · valid until ${esc(new Date(h.cert.expires).toLocaleDateString())}` : ''}</div></div>
+            <div class="df-btns"><a class="df-mini-btn" href="${esc(h.caUrl)}" download="accretion-ca.crt">⤓ Download certificate</a>
+              ${h.trustedHere === false ? '<button type="button" class="df-mini-btn" data-trust-mac>Trust on this Mac…</button>' : h.trustedHere ? '<span class="df-pill on">trusted on this Mac</span>' : ''}</div>
+            <details class="df-howto"><summary>How to install on other devices</summary>
+              <p>On the other device, open <code>http://&lt;this-mac&gt;:4321/accretion-ca.crt</code> (or AirDrop / email the downloaded file), then:</p>
+              <ul>
+                <li><b>iPhone / iPad:</b> open the file → Settings → <i>Profile Downloaded</i> → Install. Then Settings → General → About → Certificate Trust Settings → turn on <i>Accretion local CA</i>.</li>
+                <li><b>Mac:</b> double-click it → Keychain Access → open <i>Accretion local CA</i> → Trust → <i>Always Trust</i>.</li>
+                <li><b>Windows:</b> double-click → Install Certificate → Local Machine → <i>Trusted Root Certification Authorities</i>.</li>
+                <li><b>Android:</b> Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate.</li>
+                <li><b>Linux (Chrome/Firefox):</b> browser Settings → Certificates → Authorities → Import.</li>
+              </ul>
+              <p>Check the fingerprint matches the one above. Then open one of the https:// addresses.</p>
+            </details>
+          </div>` : ''}`;
+      const on = httpsBox.querySelector('[data-https-on]');
+      if (on) on.addEventListener('change', async () => {
+        on.disabled = true;
+        const r = await fetch('/api/https', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on.checked }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { drawHttps(Object.assign({}, h, { enabled: false }), d.error || 'Could not change HTTPS mode'); return; }
+        setStatus(d.running ? 'HTTPS mode on' : 'HTTPS mode off', 'ok');
+        drawHttps(d);
+      });
+      const only = httpsBox.querySelector('[data-https-only]');
+      if (only) only.addEventListener('change', async () => {
+        if (!only.checked && !(await uiConfirm('Other devices will also be able to use plain http — passwords and files then cross the network unencrypted.', { title: 'Allow plain http?', okLabel: 'Allow http', danger: true }))) { only.checked = true; return; }
+        const r = await fetch('/api/https', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ httpsOnly: only.checked }) });
+        if (r.ok) drawHttps(await r.json());
+      });
+      httpsBox.querySelectorAll('[data-copy-url]').forEach((b) => b.addEventListener('click', () => navigator.clipboard.writeText(b.dataset.copyUrl).then(() => setStatus('Address copied', 'ok'), () => {})));
+      const trust = httpsBox.querySelector('[data-trust-mac]');
+      if (trust) trust.addEventListener('click', async () => {
+        trust.disabled = true;
+        trust.textContent = 'Waiting for macOS…';
+        const r = await fetch('/api/https/trust-mac', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { uiAlert(d.error || 'Not trusted', { title: 'Trust certificate' }); drawHttps(h); return; }
+        drawHttps(d);
+      });
+    };
+    (async () => {
+      try {
+        const r = await fetch('/api/https', { cache: 'no-store' });
+        if (r.ok) drawHttps(await r.json()); else httpsBox.innerHTML = '<p class="md-note">HTTPS settings are only available on the computer running Accretion.</p>';
+      } catch (e) { httpsBox.innerHTML = '<p class="md-note">Could not read HTTPS status.</p>'; }
+    })();
+    const qb = ov.querySelector('[data-quitapp]');
+    if (qb) qb.addEventListener('click', () => { close(); if (window.quitApp) quitApp(); });
     const inst = ov.querySelector('[data-install]');
     if (inst) inst.addEventListener('click', async () => {
       if (installEvent) {

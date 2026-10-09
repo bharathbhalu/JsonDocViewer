@@ -4,8 +4,8 @@
 // {{weekday}} and {{week}}. Uses app.js globals.
 (function () {
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const KIND_LABEL = { markdown: 'Markdown', slides: 'Slides', kanban: 'Kanban', gantt: 'Gantt', mindmap: 'Mindmap', flow: 'Flow', mermaid: 'Mermaid', stocks: 'Stocks', json: 'JSON', yaml: 'YAML', file: 'File' };
-  const KIND_ICON = { markdown: '📝', slides: '▶', kanban: '▦', gantt: '▤', mindmap: '✺', flow: '⇢', mermaid: '◇', stocks: '📈', json: '{ }', yaml: '≡', file: '📄' };
+  const KIND_LABEL = { markdown: 'Markdown', slides: 'Slides', kanban: 'Kanban', gantt: 'Gantt', mindmap: 'Mindmap', flow: 'Flow', mermaid: 'Mermaid', stocks: 'Stocks', terminal: 'Terminal', runbook: 'Runbook', json: 'JSON', yaml: 'YAML', file: 'File' };
+  const KIND_ICON = { markdown: '📝', slides: '▶', kanban: '▦', gantt: '▤', mindmap: '✺', flow: '⇢', mermaid: '◇', stocks: '📈', terminal: '>_', runbook: '▶', json: '{ }', yaml: '≡', file: '📄' };
 
   async function openGallery(parentPath) {
     let data;

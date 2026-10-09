@@ -526,6 +526,8 @@ function renderMarkdownDoc(source, relPath, boardImages, mermaidSvgs) {
     // In-page "#heading" links and outline clicks (the app sends the heading's index).
     + `<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(!a||a.hasAttribute('data-open'))return;var t=document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));if(t){e.preventDefault();t.scrollIntoView({block:'start'});}});`
     + `window.addEventListener('message',function(e){var d=e.data;if(!d||d.type!=='docviewer-scroll')return;var hs=document.querySelectorAll('.md h1,.md h2,.md h3,.md h4,.md h5,.md h6');var h=hs[d.index];if(h)h.scrollIntoView({block:'start',behavior:'smooth'});});<\/script>`
+    // ▶ on shell code blocks: ask the app to send the command to a terminal.
+    + `<script>(function(){var langs=/language-(bash|sh|shell|zsh|console)\\b/;document.querySelectorAll('.md pre>code').forEach(function(c){if(!langs.test(c.className))return;var pre=c.parentNode;pre.style.position='relative';var b=document.createElement('button');b.type='button';b.textContent='\u25B6 Run';b.title='Send to a terminal';b.style.cssText='position:absolute;top:6px;right:6px;font:600 11px -apple-system,sans-serif;padding:3px 9px;border-radius:6px;border:1px solid rgba(18,183,106,.6);background:rgba(18,183,106,.12);color:#12b76a;cursor:pointer';b.addEventListener('click',function(){parent.postMessage({type:'docviewer-run',code:c.textContent},'*');});pre.appendChild(b);});})();<\/script>`
     + `</body></html>`;
 }
 
@@ -577,6 +579,7 @@ function markdownHeadings(source) {
 window.addEventListener('message', (e) => {
   if (!htmlPreviewFrame || e.source !== htmlPreviewFrame.contentWindow) return;
   const d = e.data;
+  if (d && d.type === 'docviewer-run' && typeof d.code === 'string' && typeof runInTerminal === 'function') { runInTerminal(d.code); return; }
   if (!d || d.type !== 'docviewer-open' || typeof d.path !== 'string' || !d.path) return;
   const [path, ref] = d.path.split('#');
   if (!path || path.split('/').includes('..')) return;
@@ -608,7 +611,7 @@ function isPdfPath(p) {
 }
 
 function applyFileIcon(el, p, kind) {
-  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-stocks', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
+  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-stocks', 'icon-terminal', 'icon-runbook', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
   if (kind === 'pdf' || isPdfPath(p)) {
     el.classList.add('icon-pdf');
     el.textContent = 'PDF';
@@ -649,6 +652,18 @@ function applyFileIcon(el, p, kind) {
     el.classList.add('icon-stocks');
     el.textContent = 'ST';
     el.title = 'Stocks';
+    return;
+  }
+  if (kind === 'terminal') {
+    el.classList.add('icon-terminal');
+    el.textContent = '>_';
+    el.title = 'Terminal';
+    return;
+  }
+  if (kind === 'runbook') {
+    el.classList.add('icon-runbook');
+    el.textContent = 'RB';
+    el.title = 'Runbook';
     return;
   }
   const fmt = langForPath(p);
@@ -1388,6 +1403,8 @@ function treeMenuItems(node, row) {
       { label: 'Export as website (.zip)', action: () => exportFolderSite(p) },
       { label: 'Export as website (single HTML)', action: () => exportFolderSiteSingle(p) },
       { label: 'Build network topology…', action: () => buildTopology(p) },
+      { label: 'Open terminal here', action: () => openTerminalHere(p) },
+      { label: 'Open in Cursor', action: () => openInCursor(p) },
       { label: 'Export as PDF', action: () => exportFolderPdf(p) },
       { label: 'Copy path', action: () => copyPath(p) },
       'sep',
@@ -1397,6 +1414,8 @@ function treeMenuItems(node, row) {
   return [
     { label: 'Open', action: () => openFile(p) },
     { label: 'Tags…', action: () => openTagEditor(p) },
+    { label: 'Ask Claude about this file…', action: () => askClaudeAbout(p) },
+    { label: 'Open in Cursor', action: () => openInCursor(p) },
     { label: 'Save as template', action: () => saveAsTemplate(p) },
     ...(/\.json$/i.test(p) ? [{ label: 'Build network topology…', action: () => buildTopology(p) }] : []),
     'sep',
@@ -1508,7 +1527,7 @@ async function createBoardFile(parentPath, name, kind) {
   await openFile(fullPath);
 }
 
-const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides', stocks: 'stock watchlist' };
+const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides', stocks: 'stock watchlist', terminal: 'terminal', runbook: 'runbook' };
 
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
@@ -1520,6 +1539,8 @@ const CREATE_KINDS = [
   { id: 'gantt', label: 'Gantt', hint: 'Timeline of tasks and dependencies. .html is added if you omit it', placeholder: 'roadmap' },
   { id: 'slides', label: 'Slides', hint: 'Presentation built from mindmap/flow frames and gantt charts. .html is added if you omit it', placeholder: 'deck' },
   { id: 'stocks', label: 'Stocks', hint: 'Watchlist of NSE / BSE / US tickers with live prices and price alerts. .html is added if you omit it', placeholder: 'watchlist' },
+  { id: 'terminal', label: 'Terminal', hint: 'A tmux session, local or over SSH (switch in its ⚙ settings). For Claude, use From template… → Claude: Local / Remote', placeholder: 'dev' },
+  { id: 'runbook', label: 'Runbook', hint: 'Runnable steps with variables, status and output, sent to a terminal. More starters in From template…', placeholder: 'change-plan' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
   { id: 'template', label: 'From template…', hint: 'Pick a starter: meeting notes, standup, design review, sprint board, project plan, decks… Press Create to browse.', needsName: false },
 ];
@@ -1701,6 +1722,8 @@ async function openCreateDialog(parentPath) {
   if (result.kind === 'gantt') return createBoardFile(parentPath, result.name, 'gantt');
   if (result.kind === 'slides') return createBoardFile(parentPath, result.name, 'slides');
   if (result.kind === 'stocks') return createBoardFile(parentPath, result.name, 'stocks');
+  if (result.kind === 'terminal') return createBoardFile(parentPath, result.name, 'terminal');
+  if (result.kind === 'runbook') return createBoardFile(parentPath, result.name, 'runbook');
   return createFile(parentPath, result.name);
 }
 
@@ -2221,6 +2244,8 @@ function boardKindFromHtml(content) {
   if (/data-docviewer\s*=\s*["']gantt["']/.test(content)) return 'gantt';
   if (/data-docviewer\s*=\s*["']slides["']/.test(content)) return 'slides';
   if (/data-docviewer\s*=\s*["']stocks["']/.test(content)) return 'stocks';
+  if (/data-docviewer\s*=\s*["']terminal["']/.test(content)) return 'terminal';
+  if (/data-docviewer\s*=\s*["']runbook["']/.test(content)) return 'runbook';
   return null;
 }
 
@@ -2310,6 +2335,23 @@ function ensureStocksAssets() {
     .then(() => ensureScript('/stocks/engine.js?v=2', 'data-stk-js', () => typeof window.StocksEngine === 'function'));
 }
 
+function ensureTerminalAssets() {
+  ensureStylesheet('/vendor/xterm/xterm.css?v=6', 'data-xterm-css');
+  ensureStylesheet('/terminal/engine.css?v=2', 'data-tm-css');
+  // xterm's bundles are UMD; load them past Monaco's AMD define().
+  return loadGlobalScript('/vendor/xterm/xterm.js?v=6', () => typeof window.Terminal === 'function', ['Terminal'])
+    .then(() => loadGlobalScript('/vendor/xterm/addon-fit.js?v=6', () => !!window.FitAddon, ['FitAddon']))
+    .then(() => loadGlobalScript('/vendor/xterm/addon-web-links.js?v=6', () => !!window.WebLinksAddon, ['WebLinksAddon']))
+    .then(() => ensureScript('/terminal/core.js?v=1', 'data-tm-core', () => !!window.TerminalCore))
+    .then(() => ensureScript('/terminal/engine.js?v=2', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
+}
+
+function ensureRunbookAssets() {
+  ensureStylesheet('/runbook/engine.css?v=1', 'data-rb-css');
+  return ensureScript('/runbook/core.js?v=1', 'data-rb-core', () => !!window.RunbookCore)
+    .then(() => ensureScript('/runbook/engine.js?v=1', 'data-rb-js', () => typeof window.RunbookEngine === 'function'));
+}
+
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
   return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
@@ -2327,6 +2369,8 @@ const BOARD_TYPES = {
   gantt: { engine: 'GanttEngine', ensure: ensureGanttAssets },
   slides: { engine: 'SlidesEngine', ensure: ensureSlidesAssets, opts: { ensureAssets: SLIDES_SOURCE_ASSETS } },
   stocks: { engine: 'StocksEngine', ensure: ensureStocksAssets, opts: { getPath: () => currentPath } },
+  terminal: { engine: 'TerminalEngine', ensure: ensureTerminalAssets, opts: { getPath: () => currentPath } },
+  runbook: { engine: 'RunbookEngine', ensure: ensureRunbookAssets, opts: { getPath: () => currentPath } },
 };
 
 function getSaveContent() {
@@ -2682,6 +2726,21 @@ async function openFile(relPath, lineToReveal, opts) {
       alert('Slides failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
+  } else if (boardKind === 'terminal' || boardKind === 'runbook') {
+    viewToggleBtn.classList.remove('hidden');
+    const bt = BOARD_TYPES[boardKind];
+    try {
+      await bt.ensure();
+      if (token !== openToken) return;
+      boardEngine = new window[bt.engine](mindmapStage, Object.assign({}, bt.opts, { onChange: onBoardChange }));
+      boardEngine.loadFromHtml(data.content);
+      setViewMode('board');
+    } catch (err) {
+      if (token !== openToken) return;
+      console.error(err);
+      alert((boardKind === 'terminal' ? 'Terminal' : 'Runbook') + ' failed to load: ' + ((err && err.message) || err));
+      setViewMode('code');
+    }
   } else if (boardKind === 'stocks') {
     viewToggleBtn.classList.remove('hidden');
     try {
@@ -2704,7 +2763,7 @@ async function openFile(relPath, lineToReveal, opts) {
     viewToggleBtn.classList.add('hidden');
     setViewMode('code');
   }
-  setStandaloneVisible(!!boardKind && boardKind !== 'stocks');
+  setStandaloneVisible(!!boardKind && !['stocks', 'terminal', 'runbook'].includes(boardKind));
   if (token !== openToken) return;
   markClean();
 }
@@ -2782,7 +2841,7 @@ function setViewMode(mode) {
   } else {
     if (boardEngine) syncBoardIntoEditor();
     document.getElementById('editor').classList.remove('hidden');
-    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : boardKind === 'stocks' ? 'View Stocks' : 'View Rendered';
+    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : boardKind === 'stocks' ? 'View Stocks' : boardKind === 'terminal' ? 'View Terminal' : boardKind === 'runbook' ? 'View Runbook' : 'View Rendered';
     findInFileBtn.disabled = !currentPath;
     if (boardEngine && editor) {
       editor.layout();
@@ -3028,6 +3087,8 @@ async function runSearch(q, type) {
       else if (r.kind === 'gantt') bits.push('Gantt');
       else if (r.kind === 'slides') bits.push('Slides');
       else if (r.kind === 'stocks') bits.push('Stocks');
+      else if (r.kind === 'terminal') bits.push('Terminal');
+      else if (r.kind === 'runbook') bits.push('Runbook');
       else if (r.kind === 'json') bits.push('JSON');
       else if (r.kind === 'yaml') bits.push('YAML');
       else if (r.kind === 'markdown') bits.push('Markdown');

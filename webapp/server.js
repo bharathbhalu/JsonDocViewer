@@ -7,6 +7,8 @@ const KanbanCore = require(path.join(__dirname, 'public', 'kanban', 'core.js'));
 const GanttCore = require(path.join(__dirname, 'public', 'gantt', 'core.js'));
 const SlidesCore = require(path.join(__dirname, 'public', 'slides', 'core.js'));
 const StocksCore = require(path.join(__dirname, 'public', 'stocks', 'core.js'));
+const TerminalCore = require(path.join(__dirname, 'public', 'terminal', 'core.js'));
+const RunbookCore = require(path.join(__dirname, 'public', 'runbook', 'core.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
@@ -37,6 +39,8 @@ function readAppConfig() {
       recent: Array.isArray(c.recent) ? c.recent.filter((x) => typeof x === 'string').slice(0, 10) : [],
       openAs: c.openAs === 'window' ? 'window' : c.openAs === 'browser' ? 'browser' : undefined,
       network: c.network && typeof c.network === 'object' ? c.network : undefined,
+      terminal: c.terminal && typeof c.terminal === 'object' ? c.terminal : undefined,
+      https: c.https && typeof c.https === 'object' ? c.https : undefined,
     };
   } catch (e) {
     return { dataDir: null, recent: [], openAs: undefined };
@@ -71,6 +75,7 @@ function prepareStateDir() {
   }
 }
 prepareStateDir();
+const tlsCerts = require('./tls.js')(APP_CONFIG_DIR);
 
 // --literal-pathspecs: file names are names, never patterns like "*.md".
 const GIT_ENV_ARGS = ['--literal-pathspecs', '-c', 'user.email=docviewer@local', '-c', 'user.name=JsonDocViewer'];
@@ -304,6 +309,30 @@ button{width:100%;padding:10px;font:inherit;font-weight:600;border:0;border-radi
 </style></head><body><form method="post" action="/login"><img src="/icon.svg" alt=""><h1>Accretion</h1><p>This workspace is shared on the network.<br>Enter the password to continue.</p>
 ${msg ? `<div class="err">${msg}</div>` : ''}<input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" required><button type="submit">Sign in</button></form></body></html>`;
 
+// --- Built-in HTTPS mode (Settings → HTTPS): TLS on the same port 4321.
+const httpsCfg = () => { const h = readAppConfig().https || {}; return { enabled: !!h.enabled, httpsOnly: h.httpsOnly !== false }; };
+app.use((req, res, next) => {
+  const h = httpsCfg();
+  if (req.socket.encrypted) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  // Other devices must use https:// (this computer may keep using http://localhost).
+  if (h.enabled && h.httpsOnly && !req.socket.encrypted && !isLocalRequest(req) && !isSecureRequest(req) && req.path !== '/accretion-ca.crt') {
+    const host = String(req.headers.host || '').replace(/[^\w.:\-\[\]]/g, '');
+    if (req.method === 'GET' || req.method === 'HEAD') return res.redirect(307, 'https://' + host + req.originalUrl);
+    return res.status(403).json({ error: 'Use the https:// address' });
+  }
+  next();
+});
+// The CA certificate is public: new devices download it before signing in.
+app.get('/accretion-ca.crt', (req, res) => {
+  try {
+    res.setHeader('Content-Type', 'application/x-x509-ca-cert');
+    res.setHeader('Content-Disposition', 'attachment; filename="accretion-ca.crt"');
+    res.send(tlsCerts.caPem());
+  } catch (err) {
+    res.status(500).type('text').send('Certificate not available: ' + err.message);
+  }
+});
+
 app.post('/login', express.urlencoded({ extended: false, limit: '4kb' }), (req, res) => {
   const net = networkConfig();
   if (!net.enabled) return res.redirect('/');
@@ -319,7 +348,7 @@ app.post('/login', express.urlencoded({ extended: false, limit: '4kb' }), (req, 
   }
   loginTries.delete(ip);
   console.log('Network sign-in from ' + ip);
-  res.setHeader('Set-Cookie', `acc_session=${encodeURIComponent(sessionToken())}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}`);
+  res.setHeader('Set-Cookie', `acc_session=${encodeURIComponent(sessionToken())}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}${isSecureRequest(req) ? '; Secure' : ''}`);
   res.redirect('/');
 });
 app.get('/login', (req, res) => {
@@ -331,7 +360,31 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-const LOCAL_ONLY = [/^\/api\/fs\//, /^\/api\/config\//, /^\/api\/open$/, /^\/api\/network/];
+const LOCAL_ONLY = [/^\/api\/https/, /^\/api\/fs\//, /^\/api\/config\//, /^\/api\/open$/, /^\/api\/network/, /^\/api\/open-in-cursor$/, /^\/api\/quit$/, /^\/api\/term\/(enabled|network)$/];
+
+// Terminals over the network: opt-in (Settings, this computer only), for
+// signed-in devices, and by default only over an encrypted connection —
+// HTTPS terminated by a proxy on this computer (e.g. `tailscale serve`),
+// whose forwarded-proto header is trusted only from loopback.
+function isSecureRequest(req) {
+  if (req.socket && req.socket.encrypted) return true;
+  return isLoopbackAddr(req.socket && req.socket.remoteAddress) && String(req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https';
+}
+function terminalNetworkConfig() {
+  const t = readAppConfig().terminal || {};
+  return { network: !!t.network, allowHttp: !!t.allowHttp };
+}
+function terminalsOverNetwork(req) {
+  const t = terminalNetworkConfig();
+  if (!t.network || !networkConfig().enabled) return false;
+  return isSecureRequest(req) || t.allowHttp;
+}
+function terminalNetworkRefusal(req) {
+  const t = terminalNetworkConfig();
+  if (!t.network) return 'Terminals are only available on the computer running Accretion (turn on "Allow terminals over the network" there).';
+  if (!isSecureRequest(req) && !t.allowHttp) return 'Terminals over the network need an encrypted (HTTPS) connection, e.g. through Tailscale Serve.';
+  return 'Terminals are not available here.';
+}
 app.use((req, res, next) => {
   if (isLocalRequest(req)) return next();
   // Remote device (or a non-loopback Host): password required.
@@ -339,12 +392,13 @@ app.use((req, res, next) => {
     if (!process.env.HOST) return res.status(403).json({ error: 'Forbidden host' });
     return res.status(403).type('text').send('Network access needs a password. On the computer running Accretion, open Settings and turn on "Allow other devices".');
   }
-  if (req.path === '/login' || /^\/(icon\.svg|icon-\d+\.png|manifest\.webmanifest)$/.test(req.path)) return next();
+  if (req.path === '/login' || req.path === '/accretion-ca.crt' || /^\/(icon\.svg|icon-\d+\.png|manifest\.webmanifest)$/.test(req.path)) return next();
   if (!validSession(req)) {
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Sign in required' });
     return res.status(401).type('html').send(LOGIN_PAGE(''));
   }
   if (LOCAL_ONLY.some((re) => re.test(req.path))) return res.status(403).json({ error: 'Only available on the computer running Accretion' });
+  if (req.path.startsWith('/api/term/') && !terminalsOverNetwork(req)) return res.status(403).json({ error: terminalNetworkRefusal(req) });
   next();
 });
 
@@ -812,6 +866,8 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="gantt"')) return 'gantt';
     if (head.includes('data-docviewer="slides"')) return 'slides';
     if (head.includes('data-docviewer="stocks"')) return 'stocks';
+    if (head.includes('data-docviewer="terminal"')) return 'terminal';
+    if (head.includes('data-docviewer="runbook"')) return 'runbook';
   } catch (e) {
     return undefined;
   }
@@ -1015,6 +1071,72 @@ function networkInfo() {
     urls: lanUrls(port),
   };
 }
+function httpsUrls(port) {
+  const n = tlsCerts.names();
+  return ['https://localhost:' + port]
+    .concat(n.dns.filter((d) => d.endsWith('.local')).map((d) => `https://${d}:${port}`))
+    .concat(n.ips.filter((ip) => !/^127\./.test(ip) && !ip.includes(':')).map((ip) => `https://${ip}:${port}`));
+}
+function httpsInfo() {
+  const h = httpsCfg();
+  const port = currentPort || PORT;
+  let cert = null;
+  try { const m = JSON.parse(fs.readFileSync(path.join(tlsCerts.dir, 'server.json'), 'utf8')); cert = { expires: m.expires, names: m.names }; } catch (e) { /* none yet */ }
+  let openssl = true;
+  try { require('child_process').execFileSync('openssl', ['version'], { stdio: 'ignore', timeout: 3000 }); } catch (e) { openssl = false; }
+  return {
+    enabled: h.enabled,
+    running: !!httpsSrv,
+    httpsOnly: h.httpsOnly,
+    openssl,
+    urls: httpsUrls(port),
+    network: networkConfig().enabled,
+    hasPassword: !!networkConfig().passwordHash,
+    cert,
+    fingerprint: fs.existsSync(tlsCerts.caPath) ? tlsCerts.caFingerprint() : '',
+    trustedHere: httpsSrv ? tlsCerts.trustedOnThisMac() : null,
+    caUrl: '/accretion-ca.crt',
+  };
+}
+function setHttps(patch) {
+  const cfg = readAppConfig();
+  const h = Object.assign({}, cfg.https || {}, patch);
+  writeAppConfig(Object.assign({}, cfg, { https: h }));
+  if (h.enabled) {
+    // Create / refresh certificates now, so errors surface here.
+    try { buildHttps(); } catch (err) {
+      writeAppConfig(Object.assign({}, readAppConfig(), { https: Object.assign({}, h, { enabled: false }) }));
+      httpsSrv = null;
+      throw new Error('Could not create HTTPS certificates: ' + err.message + ' (is openssl installed?)');
+    }
+  } else {
+    httpsSrv = null; // new TLS handshakes are refused from now on
+  }
+  console.log('HTTPS mode: ' + (h.enabled ? 'ON' + (h.httpsOnly === false ? ' (plain http still allowed)' : ' (other devices: https only)') : 'off'));
+}
+app.get('/api/https', (req, res) => res.json(httpsInfo()));
+app.post('/api/https', (req, res) => {
+  try {
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+    if (typeof body.httpsOnly === 'boolean') patch.httpsOnly = body.httpsOnly;
+    setHttps(patch);
+    res.json(httpsInfo());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// Trust Accretion's CA on this Mac (macOS asks for your password).
+app.post('/api/https/trust-mac', (req, res) => {
+  if (process.platform !== 'darwin') return res.status(400).json({ error: 'Only on macOS' });
+  const kc = path.join(require('os').homedir(), 'Library/Keychains/login.keychain-db');
+  require('child_process').execFile('security', ['add-trusted-cert', '-r', 'trustRoot', '-k', kc, tlsCerts.caPath], { timeout: 120000 }, (err, out, errOut) => {
+    if (err) return res.status(400).json({ error: String(errOut || err.message).trim() || 'Not trusted' });
+    res.json(httpsInfo());
+  });
+});
+
 app.get('/api/network', (req, res) => res.json(networkInfo()));
 app.post('/api/network', (req, res) => {
   try {
@@ -1046,7 +1168,7 @@ app.post('/api/network', (req, res) => {
         relistening = true;
         const old = currentServer;
         old.close(() => listenOn(port));
-        if (old.closeAllConnections) old.closeAllConnections();
+        if (old.closeAll) old.closeAll();
       }, 150);
     }
   } catch (err) {
@@ -1054,12 +1176,26 @@ app.post('/api/network', (req, res) => {
   }
 });
 
+// Quit: stop this server process (this computer only). tmux sessions are
+// separate processes and keep running unless asked to stop Accretion's.
+app.post('/api/quit', (req, res) => {
+  if (!isLocalRequest(req)) return res.status(403).json({ error: 'Only available on the computer running Accretion' });
+  const killSessions = !!(req.body && req.body.killSessions);
+  res.json({ ok: true });
+  console.log('Quit requested from the app — stopping Accretion.');
+  setTimeout(async () => {
+    try { if (killSessions && terminals.stopAutoSessions) await terminals.stopAutoSessions(); } catch (e) { /* best effort */ }
+    try { if (currentServer) { currentServer.close(); if (currentServer.closeAll) currentServer.closeAll(); } } catch (e) { /* closing anyway */ }
+    setTimeout(() => process.exit(0), 300).unref();
+  }, 200);
+});
+
 // Open the UI again as a window or a browser tab (from inside the app).
 app.post('/api/open', (req, res) => {
   const mode = req.body && req.body.as;
   if (!['window', 'browser'].includes(mode)) return res.status(400).json({ error: 'as must be window or browser' });
   if (mode === 'window' && !findAppBrowser()) return res.status(400).json({ error: 'Opening as a window needs Google Chrome, Microsoft Edge or Brave installed.' });
-  openUi(serverUrl || `http://localhost:${PORT}`, mode);
+  openUi(localUrl(), mode);
   res.json({ ok: true });
 });
 
@@ -1194,6 +1330,8 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'gantt') return ganttTemplate();
   if (kind === 'slides') return SlidesCore.serializeToHtml(SlidesCore.createStarter());
   if (kind === 'stocks') return StocksCore.serializeToHtml(StocksCore.createStarter());
+  if (kind === 'terminal') return TerminalCore.serializeToHtml(TerminalCore.createStarter(template || 'local'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
+  if (kind === 'runbook') return RunbookCore.serializeToHtml(RunbookCore.createStarter(template || 'blank'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
   // New Mermaid files start with a small example diagram.
@@ -1317,6 +1455,13 @@ const BUILTIN_TEMPLATES = [
   { id: 'mindmap-brainstorm', kind: 'mindmap', ext: '.html', name: 'Brainstorm', description: 'Central idea with branches.', build: () => mindmapTemplate() },
   { id: 'flow-process', kind: 'flow', ext: '.html', name: 'Process flow', description: 'Start, steps, decision, end.', build: () => flowTemplate() },
   { id: 'stocks-watchlist', kind: 'stocks', ext: '.html', name: 'Stock watchlist', description: 'NSE / BSE / US tickers with live prices and alerts.', build: () => StocksCore.serializeToHtml(StocksCore.createStarter()) },
+  { id: 'terminal-local', kind: 'terminal', ext: '.html', name: 'Terminal: Local', description: 'tmux session on this computer.', build: (c) => TerminalCore.serializeToHtml(TerminalCore.createStarter('local'), c.title) },
+  { id: 'terminal-ssh', kind: 'terminal', ext: '.html', name: 'Terminal: SSH', description: 'tmux session on a remote host over SSH.', build: (c) => TerminalCore.serializeToHtml(TerminalCore.createStarter('ssh'), c.title) },
+  { id: 'claude-local', kind: 'terminal', ext: '.html', name: 'Claude: Local', description: 'Claude Code in a tmux session on this computer.', build: (c) => TerminalCore.serializeToHtml(TerminalCore.createStarter('claude-local'), c.title) },
+  { id: 'claude-remote', kind: 'terminal', ext: '.html', name: 'Claude: Remote', description: 'Claude Code in tmux on an SSH host.', build: (c) => TerminalCore.serializeToHtml(TerminalCore.createStarter('claude-remote'), c.title) },
+  { id: 'runbook-change', kind: 'runbook', ext: '.html', name: 'Runbook: Network change', description: 'Pre-checks, change, verify, rollback — runnable.', build: (c) => RunbookCore.serializeToHtml(RunbookCore.createStarter('change'), c.title) },
+  { id: 'runbook-incident', kind: 'runbook', ext: '.html', name: 'Runbook: Incident triage', description: 'Gather facts, mitigate, verify.', build: (c) => RunbookCore.serializeToHtml(RunbookCore.createStarter('incident'), c.title) },
+  { id: 'runbook-deploy', kind: 'runbook', ext: '.html', name: 'Runbook: Deploy', description: 'Build, release, smoke test, rollback.', build: (c) => RunbookCore.serializeToHtml(RunbookCore.createStarter('deploy'), c.title) },
   { id: 'mermaid-sequence', kind: 'mermaid', ext: '.mmd', name: 'Sequence diagram', description: 'Client / API / database exchange.',
     build: () => MD(['sequenceDiagram', '  participant C as Client', '  participant A as API', '  participant D as Database', '  C->>A: Request', '  A->>D: Query', '  D-->>A: Rows', '  A-->>C: Response']) },
   { id: 'mermaid-fabric', kind: 'mermaid', ext: '.mmd', name: 'Leaf-spine fabric', description: 'Two spines, four leaves.',
@@ -1607,6 +1752,25 @@ function readIdeas() {
     return normalizeIdeas({});
   }
 }
+const terminals = require('./terminal-server.js')(app, {
+  dataRoot: () => DATA_ROOT,
+  safeReaddir,
+  peekFileKind,
+  resolveSafe,
+  isLocalRequest,
+  // WebSocket upgrades skip express, so the module checks these itself.
+  remoteTerminalOk: (req) => terminalsOverNetwork(req) && validSession(req),
+  remoteRefusal: terminalNetworkRefusal,
+  readAppConfig,
+  writeAppConfig,
+  writeFileCommit(rel, content, message) {
+    const full = resolveSafe(rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content, 'utf8');
+    return commitFile(rel, message);
+  },
+});
+
 require('./stocks-server.js')(app, {
   dataRoot: () => DATA_ROOT,
   stateFile,
@@ -2102,6 +2266,8 @@ function kindLabel(kind) {
   if (kind === 'gantt') return 'Gantt';
   if (kind === 'slides') return 'Slides';
   if (kind === 'stocks') return 'Stocks';
+  if (kind === 'terminal') return 'Terminal';
+  if (kind === 'runbook') return 'Runbook';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
   if (kind === 'markdown') return 'Markdown';
@@ -2182,6 +2348,35 @@ function boardTargets(full, rel, kind) {
   }
   return out;
 }
+
+// Every file with its type and last change (for the Today screen).
+app.get('/api/files/summary', (req, res) => {
+  try {
+    const files = [];
+    (function walk(dir, depth) {
+      if (depth > 20 || files.length > 20000) return;
+      for (const e of safeReaddir(dir)) {
+        if (e.name.startsWith('.')) continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { walk(full, depth + 1); continue; }
+        let st;
+        try { st = fs.statSync(full); } catch (err) { continue; }
+        let kind = fileKind(full, e.name);
+        if (kind === 'file') {
+          if (/\.(mmd|mermaid)$/i.test(e.name)) kind = 'mermaid';
+          else if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|heic)$/i.test(e.name)) kind = 'image';
+          else if (/\.html?$/i.test(e.name)) kind = 'html';
+          else if (/\.(csv|tsv)$/i.test(e.name)) kind = 'csv';
+          else if (/\.(txt|log|conf|cfg|ini|toml|xml|sh|py|js|ts|go|rs|java|c|cpp|h|rb|sql)$/i.test(e.name)) kind = 'text';
+        }
+        files.push({ path: path.relative(DATA_ROOT, full).split(path.sep).join('/'), kind, mtime: Math.round(st.mtimeMs), size: st.size });
+      }
+    })(DATA_ROOT, 0);
+    res.json({ files, now: Date.now() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/frames', (req, res) => {
   try {
@@ -2428,15 +2623,23 @@ function portAnswers(host, port) {
 }
 
 let serverUrl = null;
+// Address the app opens on this computer: https when HTTPS mode is on and
+// this computer trusts the certificate (no browser warning), else http.
+function localUrl(port) {
+  const p = port || currentPort || PORT;
+  if (httpsSrv && tlsCerts.trustedOnThisMac() === true) return `https://localhost:${p}`;
+  return `http://localhost:${p}`;
+}
 function onListening(srv) {
   const actualPort = srv.address().port;
-  const url = `http://localhost:${actualPort}`;
+  const url = localUrl(actualPort);
   if (relistening) {
     relistening = false;
     console.log(listenHost() === '127.0.0.1' ? 'Network access off — this computer only.' : 'Network access on: ' + lanUrls(actualPort).join('  '));
     return;
   }
   if (listenHost() !== '127.0.0.1') console.log('Network access on: ' + lanUrls(actualPort).join('  '));
+  if (httpsSrv) console.log('HTTPS mode on: ' + httpsUrls(actualPort).join('  '));
   printLink(url);
   console.log(`Serving files from: ${DATA_ROOT}`);
   serverUrl = url;
@@ -2447,11 +2650,47 @@ function onListening(srv) {
 let relistening = false;
 let currentServer = null;
 let currentPort = null;
-function listenOn(port, attempt = 0) {
-  const srv = app.listen(port, listenHost(), () => { currentServer = srv; currentPort = srv.address().port; onListening(srv); });
+let httpSrv = null;
+let httpsSrv = null;
+const liveSockets = new Set();
+
+function tuneServer(srv) {
   srv.requestTimeout = 60000;
   srv.headersTimeout = 30000;
   srv.keepAliveTimeout = 5000;
+  terminals.attach(srv);
+  return srv;
+}
+// HTTPS listener (no port of its own: connections are handed to it, see listenOn).
+function buildHttps() {
+  if (!httpsCfg().enabled) { httpsSrv = null; return null; }
+  const c = tlsCerts.ensure();
+  if (httpsSrv) { httpsSrv.setSecureContext({ key: c.key, cert: c.cert }); return httpsSrv; }
+  httpsSrv = tuneServer(require('https').createServer({ key: c.key, cert: c.cert }, app));
+  return httpsSrv;
+}
+// New addresses or a near-expiry certificate: re-issue without restarting.
+setInterval(() => { try { if (httpsSrv) buildHttps(); } catch (e) { console.error('HTTPS certificate refresh failed:', e.message); } }, 6 * 3600e3).unref();
+
+// One port for both: a TLS handshake starts with byte 0x16, anything else is HTTP.
+function listenOn(port, attempt = 0) {
+  if (!httpSrv) httpSrv = tuneServer(require('http').createServer(app));
+  try { buildHttps(); } catch (e) { console.error('HTTPS mode is on but could not start:', e.message); }
+  const srv = require('net').createServer((sock) => {
+    liveSockets.add(sock);
+    sock.on('close', () => liveSockets.delete(sock));
+    sock.on('error', () => {});
+    sock.once('data', (buf) => {
+      sock.pause();
+      sock.unshift(buf);
+      const target = buf[0] === 0x16 ? httpsSrv : httpSrv;
+      if (!target) { sock.destroy(); return; }
+      target.emit('connection', sock);
+      process.nextTick(() => sock.resume());
+    });
+  });
+  srv.closeAll = () => liveSockets.forEach((s) => s.destroy());
+  srv.listen(port, listenHost(), () => { currentServer = srv; currentPort = srv.address().port; onListening(srv); });
   srv.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       // Never move to another port. Retry briefly (e.g. while switching
@@ -2473,6 +2712,14 @@ function portBusyExit() {
   process.exit(1);
 }
 
+// run.sh / Accretion.app flags: --https / --no-https (remembered).
+if (process.argv.includes('--https') || process.argv.includes('--no-https')) {
+  const on = process.argv.includes('--https');
+  const cfg = readAppConfig();
+  writeAppConfig(Object.assign({}, cfg, { https: Object.assign({}, cfg.https || {}, { enabled: on }) }));
+  console.log('HTTPS mode ' + (on ? 'enabled' : 'disabled') + ' (from the command line).');
+}
+
 (async () => {
   const busy = (await portAnswers('127.0.0.1', PORT)) || (await portAnswers('::1', PORT));
   if (busy) {
@@ -2481,8 +2728,14 @@ function portBusyExit() {
       const r = await fetch(`http://localhost:${PORT}/api/config`, { signal: AbortSignal.timeout(1500) });
       const d = r.ok ? await r.json() : null;
       if (d && d.dataDir) {
-        console.log(`Accretion is already running at http://localhost:${PORT} — opening it.`);
-        openUi(`http://localhost:${PORT}`);
+        // Ask the running server which address to open (http or https).
+        let url = `http://localhost:${PORT}`;
+        try {
+          const h = await (await fetch(`http://localhost:${PORT}/api/https`, { signal: AbortSignal.timeout(3000) })).json();
+          if (h && h.running && h.trustedHere === true) url = `https://localhost:${PORT}`;
+        } catch (e) { /* older server: http */ }
+        console.log(`Accretion is already running at ${url} — opening it.`);
+        openUi(url);
         setTimeout(() => process.exit(0), 500);
         return;
       }

@@ -33,6 +33,10 @@
       { id: 'sidebar', title: 'Show / hide the Project panel', hint: 'Alt+1', icon: '⇤', run: click('sidebar-toggle') },
       { id: 'settings', title: 'Settings (data folder, window, network)', icon: '⚙', run: () => openDataFolder() },
       { id: 'refresh', title: 'Refresh file tree', icon: '↻', run: () => loadTree() },
+      { id: 'termhere', title: 'Open terminal (workspace folder)', icon: '>_', run: () => openTerminalHere('') },
+      { id: 'newterm', title: 'New terminal / Claude from template…', icon: '✳', run: () => openTemplateGallery('') },
+      { id: 'cursorws', title: 'Open workspace in Cursor', icon: '⌁', run: () => openInCursor('') },
+      { id: 'quit', title: 'Quit Accretion (stop the server)', hint: MOD + '⇧Q', icon: '⏻', run: () => quitApp() },
     ];
     if (fileOpen()) {
       list.push(
@@ -44,12 +48,14 @@
         { id: 'export', title: 'Export this file', icon: '⤓', run: click('export-file-btn') },
         { id: 'fullscreen', title: 'Fullscreen', icon: '⛶', run: click('fullscreen-btn') },
         { id: 'saveastpl', title: 'Save this file as a template', icon: '🧩', run: () => saveAsTemplate(currentPath) },
+        { id: 'askclaude', title: 'Ask Claude about this file…', icon: '✳', run: () => askClaudeAbout(currentPath) },
+        { id: 'cursorfile', title: 'Open this file in Cursor', icon: '⌁', run: () => openInCursor(currentPath) },
         { id: 'copypath', title: 'Copy path of this file', icon: '⧉', run: () => navigator.clipboard.writeText(currentPath).then(() => setStatus('Path copied', 'ok')) },
       );
     }
     return list.filter((c) => {
       // Only offer what exists in this build.
-      const deps = { idea: 'openIdeaCapture', ideas: 'openIdeas', calendar: 'calendarApi', habits: 'openDaily', template: 'openTemplateGallery', settings: 'openDataFolder', tags: 'openTagEditor', saveastpl: 'saveAsTemplate', today: 'showToday' };
+      const deps = { idea: 'openIdeaCapture', ideas: 'openIdeas', calendar: 'calendarApi', habits: 'openDaily', template: 'openTemplateGallery', settings: 'openDataFolder', tags: 'openTagEditor', saveastpl: 'saveAsTemplate', today: 'showToday', termhere: 'openTerminalHere', newterm: 'openTemplateGallery', cursorws: 'openInCursor', askclaude: 'askClaudeAbout', cursorfile: 'openInCursor', quit: 'quitApp' };
       return !deps[c.id] || typeof window[deps[c.id]] !== 'undefined' || has(globalThis[deps[c.id]]);
     }).map((c) => Object.assign({ type: 'cmd' }, c));
   }
@@ -164,7 +170,7 @@
     draw(raw);
   }
 
-  const KIND_LABEL = { mindmap: 'Mindmap', flow: 'Flow', kanban: 'Kanban', gantt: 'Gantt', slides: 'Slides', stocks: 'Stocks', markdown: 'Markdown', json: 'JSON', yaml: 'YAML', pdf: 'PDF' };
+  const KIND_LABEL = { terminal: 'Terminal', runbook: 'Runbook', mindmap: 'Mindmap', flow: 'Flow', kanban: 'Kanban', gantt: 'Gantt', slides: 'Slides', stocks: 'Stocks', markdown: 'Markdown', json: 'JSON', yaml: 'YAML', pdf: 'PDF' };
   function draw(raw) {
     const list = ov.querySelector('.pl-list');
     if (!items.length) {
