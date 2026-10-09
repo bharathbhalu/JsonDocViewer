@@ -15,6 +15,9 @@
 #   ./setup.sh --app --https|--no-https  launcher turns HTTPS mode on / off at start
 #   ./setup.sh --app --browser           open in a browser tab instead of a window
 #
+# Run the server in the background from login (macOS), so the Dock app always connects:
+#   ./setup.sh --autostart | --no-autostart
+#
 # Everything at once on a new Mac:   ./setup.sh --install --app
 # Works on macOS (Homebrew) and Linux (apt / dnf / yum / pacman); the launcher is macOS only.
 # Nothing is installed with sudo unless you run --install and confirm.
@@ -30,6 +33,7 @@ CHECK=1
 APP_DEST=""
 APP_MODE="${ACCRETION_LAUNCH:---window}"
 APP_HTTPS=""
+AUTOSTART=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --install) INSTALL=1 ;;
@@ -41,7 +45,9 @@ while [ $# -gt 0 ]; do
     --dest) shift; APP_DEST="${1:-}" ;;
     --https|--no-https) APP_HTTPS="$1" ;;
     --window|--browser) APP_MODE="$1" ;;
-    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --autostart) AUTOSTART=on; [ "$BUILD_APP" -eq 0 ] && [ "$INSTALL" -eq 0 ] && CHECK=0 ;;
+    --no-autostart) AUTOSTART=off; [ "$BUILD_APP" -eq 0 ] && [ "$INSTALL" -eq 0 ] && CHECK=0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift
@@ -348,8 +354,28 @@ build_app() {
   local FLAGS="$APP_MODE${APP_HTTPS:+ $APP_HTTPS}"
   local TMP ICON_SRC ICONSET s d
   TMP="$(mktemp -d)"
+  # The launcher: starts the server (through the login service when it is
+  # installed) and opens the app. accretion://start (from the "not running"
+  # page of the Dock app) only starts the server.
   cat > "$TMP/launch.applescript" <<OSA
-do shell script "mkdir -p ~/.accretion; export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH; cd " & quoted form of "$SCRIPT_DIR" & " && (nohup ./run.sh $FLAGS >> ~/.accretion/server.log 2>&1 &)"
+property appDir : "$SCRIPT_DIR"
+property flags : "$FLAGS"
+
+on startServer(extra)
+	set agent to "gui/" & (do shell script "id -u") & "/local.accretion.server"
+	set cmd to "mkdir -p ~/.accretion; export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH; cd " & quoted form of appDir & "; "
+	set cmd to cmd & "if [ -f ~/Library/LaunchAgents/local.accretion.server.plist ]; then launchctl kickstart " & agent & " >/dev/null 2>&1 || launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/local.accretion.server.plist >/dev/null 2>&1; sleep 1; fi; "
+	set cmd to cmd & "(nohup ./run.sh " & extra & " >> ~/.accretion/server.log 2>&1 &)"
+	do shell script cmd
+end startServer
+
+on run
+	startServer(flags)
+end run
+
+on open location theURL
+	startServer("--no-open")
+end open location
 OSA
   rm -rf "$APP"
   osacompile -o "$APP" "$TMP/launch.applescript" 2>&1 | grep -v "replacing existing signature" >&2 || true
@@ -375,6 +401,9 @@ OSA
     touch "$APP" "$APP/Contents/Info.plist"
   fi
   /usr/libexec/PlistBuddy -c "Set :CFBundleName Accretion" "$APP/Contents/Info.plist" 2>/dev/null || true
+  # accretion://start → this launcher (used by the Dock app's "not running" page).
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$APP/Contents/Info.plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" -c "Add :CFBundleURLTypes:0 dict" -c "Add :CFBundleURLTypes:0:CFBundleURLName string local.accretion.start" -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string accretion" "$APP/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.accretion.launcher" "$APP/Contents/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string local.accretion.launcher" "$APP/Contents/Info.plist"
   # Edits above invalidate osacompile's signature; sign again (ad hoc).
@@ -385,6 +414,42 @@ OSA
     ok "Built $APP  (starts with: run.sh $FLAGS)"
     info "Drag it to the Dock. Server log: ~/.accretion/server.log"
 }
+
+# ---------- start at login (LaunchAgent) ----------
+set_autostart() {
+  section "Start at login"
+  if [ "$OS" != "Darwin" ]; then warn "Start at login is macOS only here (on Linux use a systemd user service running ./run.sh --no-open)"; return 0; fi
+  local label=local.accretion.server
+  local plist="$HOME/Library/LaunchAgents/$label.plist"
+  if [ "$1" = off ]; then
+    rm -f "$plist"
+    launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    ok "Start at login turned off"
+    return 0
+  fi
+  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.accretion"
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>-lc</string><string>cd "$SCRIPT_DIR" &amp;&amp; exec ./run.sh --no-open</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$HOME/.accretion/server.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.accretion/server.log</string>
+</dict>
+</plist>
+PLIST
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then ok "Start at login on — Accretion's server now runs in the background ($plist)"
+  else warn "Saved $plist — it starts at your next login"; fi
+}
+[ -n "$AUTOSTART" ] && set_autostart "$AUTOSTART"
 
 # ---------- summary ----------
 if [ "$BUILD_APP" -eq 1 ]; then

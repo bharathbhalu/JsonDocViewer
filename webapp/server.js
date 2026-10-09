@@ -360,7 +360,7 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-const LOCAL_ONLY = [/^\/api\/https/, /^\/api\/fs\//, /^\/api\/config\//, /^\/api\/open$/, /^\/api\/network/, /^\/api\/open-in-cursor$/, /^\/api\/quit$/, /^\/api\/term\/(enabled|network)$/];
+const LOCAL_ONLY = [/^\/api\/autostart/, /^\/api\/https/, /^\/api\/fs\//, /^\/api\/config\//, /^\/api\/open$/, /^\/api\/apps-manager$/, /^\/api\/network/, /^\/api\/open-in-cursor$/, /^\/api\/quit$/, /^\/api\/term\/(enabled|network)$/];
 
 // Terminals over the network: opt-in (Settings, this computer only), for
 // signed-in devices, and by default only over an encrypted connection —
@@ -1137,6 +1137,65 @@ app.post('/api/https/trust-mac', (req, res) => {
   });
 });
 
+// --- Start at login (macOS LaunchAgent). Runs ./run.sh --no-open when you log
+// in; a crash is restarted, but Quit (exit 0) stays quit until the next login
+// or launch. ~/Library/LaunchAgents/local.accretion.server.plist
+const AGENT_LABEL = 'local.accretion.server';
+const AGENT_PLIST = path.join(require('os').homedir(), 'Library', 'LaunchAgents', AGENT_LABEL + '.plist');
+function agentPlist() {
+  const xml = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const log = path.join(APP_CONFIG_DIR, 'server.log');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>-lc</string><string>cd ${xml(JSON.stringify(__dirname))} &amp;&amp; exec ./run.sh --no-open</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>${xml(log)}</string>
+  <key>StandardErrorPath</key><string>${xml(log)}</string>
+</dict>
+</plist>
+`;
+}
+function autostartInfo() {
+  if (process.platform !== 'darwin') return { supported: false, enabled: false };
+  return { supported: true, enabled: fs.existsSync(AGENT_PLIST), plist: AGENT_PLIST, underLaunchd: !!process.env.XPC_SERVICE_NAME && process.env.XPC_SERVICE_NAME === AGENT_LABEL };
+}
+app.get('/api/autostart', (req, res) => res.json(autostartInfo()));
+app.post('/api/autostart', (req, res) => {
+  if (process.platform !== 'darwin') return res.status(400).json({ error: 'Start at login is available on macOS (on Linux use a systemd user service).' });
+  const on = !!(req.body && req.body.enabled);
+  const uid = process.getuid();
+  const { execFile } = require('child_process');
+  try {
+    if (on) {
+      fs.mkdirSync(path.dirname(AGENT_PLIST), { recursive: true });
+      fs.writeFileSync(AGENT_PLIST, agentPlist());
+      // Register for future logins. This running server keeps serving now;
+      // the agent's own start sees port 4321 in use by Accretion and exits.
+      execFile('launchctl', ['bootstrap', 'gui/' + uid, AGENT_PLIST], () => {
+        console.log('Start at login: on (' + AGENT_PLIST + ')');
+        res.json(autostartInfo());
+      });
+    } else {
+      // Remove the plist and answer first: if this server was started by the
+      // agent, bootout stops it too (Accretion.app / run.sh start it again).
+      const was = autostartInfo().underLaunchd;
+      try { fs.unlinkSync(AGENT_PLIST); } catch (e) { /* already gone */ }
+      console.log('Start at login: off');
+      res.json(Object.assign(autostartInfo(), { stopping: was }));
+      setTimeout(() => execFile('launchctl', ['bootout', 'gui/' + uid + '/' + AGENT_LABEL], () => {}), 400);
+    }
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/network', (req, res) => res.json(networkInfo()));
 app.post('/api/network', (req, res) => {
   try {
@@ -1197,6 +1256,20 @@ app.post('/api/open', (req, res) => {
   if (mode === 'window' && !findAppBrowser()) return res.status(400).json({ error: 'Opening as a window needs Google Chrome, Microsoft Edge or Brave installed.' });
   openUi(localUrl(), mode);
   res.json({ ok: true });
+});
+
+// Open Chrome's app manager (chrome://apps) in the profile Accretion's window
+// uses, so the installed Accretion app can be removed or reinstalled there.
+app.post('/api/apps-manager', (req, res) => {
+  const exe = findAppBrowser();
+  if (!exe) return res.status(400).json({ error: 'Chrome / Edge / Brave not found' });
+  const which = (req.body && req.body.profile) === 'default' ? null : path.join(APP_CONFIG_DIR, 'window-profile');
+  const url = /edge/i.test(exe) ? 'edge://apps' : /brave/i.test(exe) ? 'brave://apps' : 'chrome://apps';
+  const args = [...(which ? ['--user-data-dir=' + which] : []), '--no-first-run', '--no-default-browser-check', url];
+  const child = require('child_process').spawn(exe, args, { detached: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
+  res.json({ ok: true, url });
 });
 
 // Remember how the app opens on start.

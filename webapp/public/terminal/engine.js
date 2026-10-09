@@ -7,6 +7,25 @@
   const ask = (m, o) => global.uiConfirm(m, o);
   const prompt = (m, v, o) => global.uiPrompt(m, v, o);
 
+  // Clipboard that also works on plain-http pages (no navigator.clipboard there).
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+    } catch (e) { /* fall back */ }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+  const stampOf = (iso) => new Date(iso).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const fileStamp = (iso) => { const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+  const slug = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+
   function themeColors() {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
     return dark
@@ -111,6 +130,9 @@
         scrollback: 10000,
         allowProposedApi: true,
         macOptionIsMeta: true,
+        // Inside tmux with mouse mode on, ⌥-drag still selects text for copying.
+        macOptionClickForcesSelection: true,
+        rightClickSelectsWord: false,
         theme: themeColors(),
       });
       this.fit = new global.FitAddon.FitAddon();
@@ -118,12 +140,102 @@
       try { this.term.loadAddon(new global.WebLinksAddon.WebLinksAddon((e, uri) => window.open(uri, '_blank', 'noopener'))); } catch (e) { /* optional */ }
       this.term.open(this.termEl);
       this.decoder = new TextDecoder();
+      this._initClipboard();
       this.term.onData((d) => this._send(d));
       this.term.onBinary((d) => this._send(d));
       this.ro = new ResizeObserver(() => this._fit());
       this.ro.observe(this.termEl);
       this._fit();
     }
+    // ⌘C copies the selection, ⌘V pastes, mouse selection copies itself
+    // (copy-on-select), and right-click offers Copy / Paste / Select all.
+    _initClipboard() {
+      const t = this.term;
+      t.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown') return true;
+        const mod = e.metaKey || (e.ctrlKey && e.shiftKey);
+        if (mod && (e.key === 'c' || e.key === 'C') && t.hasSelection()) {
+          this._copy(t.getSelection());
+          e.preventDefault();
+          return false;
+        }
+        if (e.metaKey && (e.key === 'v' || e.key === 'V')) return false; // let the browser paste
+        if (e.metaKey && (e.key === 'a' || e.key === 'A')) { t.selectAll(); e.preventDefault(); return false; }
+        return true;
+      });
+      this.termEl.addEventListener('mouseup', () => {
+        if (!this.data.copyOnSelect) return;
+        setTimeout(() => { if (t.hasSelection()) { const sel = t.getSelection(); if (sel && sel !== this._lastCopied) this._copy(sel, true); } }, 0);
+      });
+      // Right-click is ours: keep it from reaching tmux (mouse mode would also
+      // pop tmux's own menu). Shift + right-click goes to tmux instead.
+      const swallow = (e) => { if (e.button === 2 && !e.shiftKey) { e.stopPropagation(); } };
+      ['mousedown', 'mouseup', 'pointerdown', 'pointerup'].forEach((ev) => this.termEl.addEventListener(ev, swallow, true));
+      this.termEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (e.shiftKey) return; // tmux's menu
+        e.stopPropagation();
+        this._menu(e.clientX, e.clientY);
+      }, true);
+    }
+    async _copy(text, quiet) {
+      if (!text) return;
+      const ok = await copyText(text);
+      this._lastCopied = text;
+      const lines = text.split('\n').length;
+      this._flash(ok ? `Copied ${lines > 1 ? lines + ' lines' : text.length + ' characters'}` : 'Copy failed — use ⌘C');
+      void quiet;
+    }
+    _flash(msg) {
+      let f = this.root.querySelector('.tm-flash');
+      if (!f) { f = document.createElement('div'); f.className = 'tm-flash'; this.root.querySelector('.tm-term-wrap').appendChild(f); }
+      f.textContent = msg;
+      f.classList.add('show');
+      clearTimeout(this._flashT);
+      this._flashT = setTimeout(() => f.classList.remove('show'), 1400);
+    }
+    _visibleText() {
+      const b = this.term.buffer.active;
+      const out = [];
+      for (let i = b.viewportY; i < b.viewportY + this.term.rows; i++) { const l = b.getLine(i); if (l) out.push(l.translateToString(true)); }
+      return out.join('\n').replace(/\s+$/, '');
+    }
+    _menu(x, y) {
+      document.querySelectorAll('.tm-ctx').forEach((m) => m.remove());
+      const t = this.term;
+      const m = document.createElement('div');
+      m.className = 'tm-ctx dh-ctx';
+      m.innerHTML = `<button type="button" data-c="copy"${t.hasSelection() ? '' : ' disabled'}>Copy <kbd>⌘C</kbd></button>
+        <button type="button" data-c="paste">Paste <kbd>⌘V</kbd></button>
+        <button type="button" data-c="all">Select all <kbd>⌘A</kbd></button>
+        <hr><button type="button" data-c="screen">Copy visible screen</button>
+        <button type="button" data-c="save">Save pane output…</button>
+        <hr><span class="tm-ctx-hint">⇧ right-click: tmux menu · ⌥ drag: select inside tmux</span>
+        <label class="tm-ctx-check"><input type="checkbox" data-c="cos"${this.data.copyOnSelect ? ' checked' : ''}> Copy on select</label>`;
+      document.body.appendChild(m);
+      const r = m.getBoundingClientRect();
+      m.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
+      m.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
+      const close = () => { m.remove(); document.removeEventListener('mousedown', off, true); };
+      const off = (e) => { if (!m.contains(e.target)) close(); };
+      setTimeout(() => document.addEventListener('mousedown', off, true));
+      m.addEventListener('click', async (e) => {
+        const c = e.target.closest('[data-c]');
+        if (!c || c.disabled) return;
+        const a = c.dataset.c;
+        if (a === 'cos') { this.data.copyOnSelect = c.checked; this._changed(); this._renderSide(); return; }
+        close();
+        if (a === 'copy') this._copy(t.getSelection());
+        else if (a === 'all') t.selectAll();
+        else if (a === 'screen') this._copy(this._visibleText());
+        else if (a === 'save') this.saveOutput();
+        else if (a === 'paste') {
+          try { const txt = await navigator.clipboard.readText(); if (txt) t.paste(txt); } catch (err) { this._flash('Use ⌘V to paste'); }
+          t.focus();
+        }
+      });
+    }
+
     _fit() {
       if (!this.term || !this.termEl.offsetWidth) return;
       try { this.fit.fit(); } catch (e) { return; }
@@ -340,11 +452,71 @@
         const r = await fetch('/api/term/capture?lines=5000&path=' + encodeURIComponent(this._path()), { cache: 'no-store' });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || 'Could not capture output');
-        this.data.savedOutput = { at: new Date().toISOString(), text: d.text };
+        const list = this.data.outputs;
+        list.push({ id: C.uid('o_'), name: '', at: new Date().toISOString(), session: this.sessionName || this.data.session || '', text: d.text });
+        let dropped = [];
+        while (list.length > C.MAX_OUTPUTS) dropped = dropped.concat(list.splice(0, 1));
         this._changed();
         this._renderSide();
-        this._toast('Saved the pane output into this file');
+        this._flash('Pane output saved');
+        this._toast('Saved pane output (' + list.length + '/' + C.MAX_OUTPUTS + ')' + (dropped.length ? ' — deleted the oldest: ' + dropped.map((o) => o.name || stampOf(o.at)).join(', ') : ''));
+        // Open the new one's name for editing.
+        setTimeout(() => this._renameOutput(list[list.length - 1].id), 50);
       } catch (err) { global.uiAlert(err.message); }
+    }
+
+    _outputText(o) { return o.text; }
+    _downloadOutputs(list) {
+      const one = list.length === 1;
+      const body = list.map((o) => (one ? '' : `===== ${o.name || 'Pane output'} — ${stampOf(o.at)}${o.session ? ' — tmux ' + o.session : ''} =====\n`) + o.text).join('\n\n');
+      const name = one
+        ? `${slug(list[0].name) || 'pane-output'}-${fileStamp(list[0].at)}.txt`
+        : `${slug(this.data.title) || 'terminal'}-outputs-${fileStamp(new Date().toISOString())}.txt`;
+      const header = one ? `# ${list[0].name || 'Pane output'} — ${stampOf(list[0].at)}${list[0].session ? ' — tmux ' + list[0].session : ''}${this.data.mode === 'ssh' ? ' on ' + this.data.host : ''}\n\n` : '';
+      const url = URL.createObjectURL(new Blob([header + body + '\n'], { type: 'text/plain;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    _renameOutput(id) {
+      const row = this.side.querySelector(`.tm-out-item[data-id="${id}"]`);
+      const o = this.data.outputs.find((x) => x.id === id);
+      if (!row || !o) return;
+      const nameEl = row.querySelector('.tm-out-name');
+      if (!nameEl) return; // already being renamed
+      const input = document.createElement('input');
+      input.className = 'tm-out-rename';
+      input.value = o.name;
+      input.placeholder = 'Name this output';
+      input.maxLength = 120;
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const finish = (save) => {
+        if (done) return;
+        done = true;
+        if (save) { const v = input.value.trim(); if (v !== o.name) { o.name = v; this._changed(); } }
+        this._renderSide();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } });
+      input.addEventListener('blur', () => finish(true));
+    }
+    _viewOutput(o) {
+      const ov = document.createElement('div');
+      ov.className = 'topo-overlay';
+      ov.innerHTML = `<div class="md-dialog-box tm-out" role="dialog" aria-modal="true">
+        <div class="md-dialog-head"><span>${esc(o.name || 'Pane output')} <span class="tm-out-when">· ${esc(stampOf(o.at))}${o.session ? ' · tmux “' + esc(o.session) + '”' : ''}</span></span><button type="button" data-x>×</button></div>
+        <pre>${esc(o.text)}</pre>
+        <div class="md-dialog-actions"><span class="md-note">${o.text.split('\n').length} lines</span><span class="md-spacer"></span><button type="button" data-copy>⧉ Copy</button><button type="button" data-dl>⤓ Download</button><button type="button" data-x2>Close</button></div></div>`;
+      document.body.appendChild(ov);
+      const close = () => ov.remove();
+      ov.querySelector('[data-x]').addEventListener('click', close);
+      ov.querySelector('[data-x2]').addEventListener('click', close);
+      ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+      ov.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+      ov.querySelector('[data-copy]').addEventListener('click', async () => { const ok = await copyText(o.text); this._toast(ok ? 'Output copied' : 'Copy failed'); });
+      ov.querySelector('[data-dl]').addEventListener('click', () => this._downloadOutputs([o]));
     }
 
     async sendSnippet(sn) {
@@ -397,8 +569,21 @@
           <textarea data-f="notes" rows="4" placeholder="What this session is for, hosts, gotchas…"${ro}>${esc(d.notes)}</textarea>
         </section>
         <section>
-          <h4>Saved output</h4>
-          <div class="tm-btns"><button type="button" data-act="saveoutput"${ro}>Save pane output</button>${d.savedOutput ? `<button type="button" data-act="viewoutput">View (${esc(new Date(d.savedOutput.at).toLocaleString())})</button><button type="button" data-act="clearoutput"${ro}>Clear</button>` : ''}</div>
+          <h4>Pane outputs <span class="tm-hint">${d.outputs.length}/${C.MAX_OUTPUTS} · oldest deleted automatically</span></h4>
+          <div class="tm-outs">${d.outputs.slice().reverse().map((o) => `
+            <div class="tm-out-item" data-id="${esc(o.id)}">
+              <div class="tm-out-main">
+                <b class="tm-out-name" title="${esc(o.name || 'Untitled output')}">${esc(o.name || 'Untitled output')}</b>
+                <span class="tm-out-meta">🕒 ${esc(stampOf(o.at))} · ${o.text.split('\n').length} lines${o.session ? ' · ' + esc(o.session) : ''}</span>
+              </div>
+              <div class="tm-out-act">
+                <button type="button" data-o="view" title="View">👁</button>
+                <button type="button" data-o="copy" title="Copy to clipboard">⧉</button>
+                <button type="button" data-o="dl" title="Download .txt">⤓</button>
+                ${this.readOnly ? '' : '<button type="button" data-o="rename" title="Rename">✎</button><button type="button" data-o="del" title="Delete">✕</button>'}
+              </div>
+            </div>`).join('') || '<p class="tm-small">None yet — save what\'s on screen (and its scrollback) to keep it with this file.</p>'}</div>
+          <div class="tm-btns"><button type="button" data-act="saveoutput"${ro}>＋ Save pane output</button>${d.outputs.length > 1 ? '<button type="button" data-act="dlall">⤓ Download all</button>' : ''}</div>
         </section>`;
       this._bindSide();
     }
@@ -433,14 +618,23 @@
       on('savelayout', () => this.saveLayout());
       on('clearlayout', () => { d.layout = null; this._changed(); this._renderSide(); });
       on('saveoutput', () => this.saveOutput());
-      on('clearoutput', () => { d.savedOutput = null; this._changed(); this._renderSide(); });
-      on('viewoutput', () => {
-        const ov = document.createElement('div');
-        ov.className = 'topo-overlay';
-        ov.innerHTML = `<div class="md-dialog-box tm-out" role="dialog" aria-modal="true"><div class="md-dialog-head"><span>Saved output · ${esc(new Date(d.savedOutput.at).toLocaleString())}</span><button type="button" data-x>×</button></div><pre>${esc(d.savedOutput.text)}</pre></div>`;
-        document.body.appendChild(ov);
-        ov.querySelector('[data-x]').addEventListener('click', () => ov.remove());
-        ov.addEventListener('mousedown', (e) => { if (e.target === ov) ov.remove(); });
+      on('dlall', () => this._downloadOutputs(d.outputs));
+      S.querySelectorAll('.tm-out-item').forEach((row) => {
+        const o = d.outputs.find((x) => x.id === row.dataset.id);
+        row.querySelectorAll('[data-o]').forEach((b) => b.addEventListener('click', async () => {
+          const a = b.dataset.o;
+          if (a === 'view') this._viewOutput(o);
+          else if (a === 'copy') { const ok = await copyText(o.text); this._flash(ok ? 'Output copied' : 'Copy failed'); }
+          else if (a === 'dl') this._downloadOutputs([o]);
+          else if (a === 'rename') this._renameOutput(o.id);
+          else if (a === 'del') {
+            if (!(await ask('Delete “' + (o.name || 'Untitled output') + '” (' + stampOf(o.at) + ')?', { title: 'Delete output', okLabel: 'Delete', danger: true }))) return;
+            d.outputs = d.outputs.filter((x) => x !== o);
+            this._changed();
+            this._renderSide();
+          }
+        }));
+        row.querySelector('.tm-out-main').addEventListener('dblclick', () => this._viewOutput(o));
       });
       on('addsnip', () => this._editSnippet(null));
       S.querySelectorAll('.tm-snip').forEach((row) => {
