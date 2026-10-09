@@ -30,6 +30,19 @@
     return windows.length ? { windows } : null;
   }
 
+  const MAX_OUTPUTS = 10;
+  function normalizeOutputs(list, legacy) {
+    const src = Array.isArray(list) ? list.slice() : [];
+    if (!src.length && legacy && typeof legacy === 'object' && legacy.text) src.push({ name: '', at: legacy.at, text: legacy.text });
+    return src.filter((o) => o && typeof o.text === 'string').map((o) => ({
+      id: str(o.id, 40) || uid('o_'),
+      name: str(o.name, 120),
+      at: str(o.at, 40) || new Date().toISOString(),
+      session: str(o.session, 80),
+      text: str(o.text, 500000),
+    })).sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(-MAX_OUTPUTS);
+  }
+
   function normalize(data) {
     const s = data && typeof data === 'object' ? data : {};
     const mode = s.mode === 'ssh' ? 'ssh' : 'local';
@@ -56,7 +69,10 @@
         enter: !(x && x.enter === false),
       })).filter((x) => x.cmd.trim()),
       notes: str(s.notes, 50000),
-      savedOutput: s.savedOutput && typeof s.savedOutput === 'object' ? { at: str(s.savedOutput.at, 40), text: str(s.savedOutput.text, 500000) } : null,
+      // Saved pane outputs (newest last), at most MAX_OUTPUTS. The old single
+      // "savedOutput" becomes the first one.
+      outputs: normalizeOutputs(s.outputs, s.savedOutput),
+      copyOnSelect: s.copyOnSelect !== false,
       fontSize: Number.isInteger(s.fontSize) && s.fontSize >= 9 && s.fontSize <= 28 ? s.fontSize : 13,
       sidebar: s.sidebar !== false,
       updatedAt: str(s.updatedAt, 40),
@@ -99,5 +115,5 @@
     try { return normalize(JSON.parse(m[1])); } catch (e) { return normalize({}); }
   }
 
-  return { uid, cleanSession, cleanHost, normalize, normalizeLayout, startupCommands, describe, createStarter, serializeToHtml, isTerminalHtml, parseHtml };
+  return { MAX_OUTPUTS, uid, cleanSession, cleanHost, normalize, normalizeLayout, startupCommands, describe, createStarter, serializeToHtml, isTerminalHtml, parseHtml };
 });

@@ -1912,3 +1912,17 @@ html[data-theme="dark"] .conn-badge.secure { color: #4ade80; }
 .conn-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .conn-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 4px 10px 4px 0; width: 32%; vertical-align: top; }
 .conn-table td { padding: 4px 0; overflow-wrap: anywhere; }
+.df-autostart.hidden { display: none; } .df-autostart { margin-bottom: 8px; flex-wrap: wrap; }
+.df-inst-btns { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.df-install .df-ghost { padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.df-install .df-ghost.danger { color: #e5484d; border-color: rgba(229,72,77,.45); }
+.topo-overlay .app-flow { width: min(560px, 100%); }
+.app-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+.app-steps > li { opacity: .55; }
+.app-steps > li.cur, .app-steps > li.done { opacity: 1; }
+.app-steps > li.done > b { text-decoration: line-through; color: var(--muted); }
+.app-steps ul { margin: 6px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.app-wait { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.app-wait .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; margin-right: 5px; animation: tmPulse 1s infinite alternate; }
+@keyframes tmPulse { to { opacity: .35; } }
+.app-steps .df-mini-btn:disabled { opacity: .45; cursor: default; }

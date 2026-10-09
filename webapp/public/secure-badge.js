@@ -85,6 +85,11 @@
   }
 
   badge.addEventListener('click', open);
+
+  // Offline page for the installed (Dock) app when the server is stopped.
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+  }
   loadHttps();
   setInterval(loadHttps, 60000);
 })();

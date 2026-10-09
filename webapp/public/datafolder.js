@@ -73,7 +73,7 @@
               ${info.installedApp ? `<b>Installed with its own Dock icon.</b><br><span class="md-note">The window opens as <code>${esc(info.installedApp.split('/').pop())}</code>.</span>`
                 : `<b>Dock icon</b><br><span class="md-note">Install Accretion as an app so its window shows this logo in the Dock and app switcher.</span>`}
             </div>
-            ${info.installedApp ? '' : '<button type="button" data-install>Install…</button>'}
+            ${info.installedApp ? '<div class="df-inst-btns"><button type="button" class="df-ghost" data-reinstall>Reinstall…</button></div>' : '<button type="button" data-install>Install…</button>'}
           </div>
           <p class="md-note">${info.windowAvailable ? 'Used when you start the app (<code>./run.sh</code>). <code>--window</code> or <code>--browser</code> overrides it once.' : 'A separate window needs Google Chrome, Microsoft Edge or Brave.'}</p>
           ${net ? `<p class="df-label">Network access</p>
@@ -94,6 +94,7 @@
               <p class="md-note">Signed-in devices (Network access above) can then open terminals and runbooks here. Without plain http they need an <b>HTTPS</b> address — easiest with <a href="https://tailscale.com/kb/1312/serve" target="_blank" rel="noopener">Tailscale Serve</a>: run <code>tailscale serve --bg 4321</code> on this computer and open the <code>https://…ts.net</code> address it prints. You'll get a notification here every time another device opens a terminal.</p>
             </div></div>
           <p class="df-label">Application</p>
+          <label class="df-switch df-autostart hidden"><input type="checkbox" data-autostart> Start Accretion at login <span class="md-note">— runs in the background so the Dock app and reminders always work</span></label>
           <div class="df-quit"><button type="button" data-quitapp>⏻ Quit Accretion</button><span class="md-note">Saves, then stops the server (⌘⇧Q). Start again with Accretion.app or ./run.sh.</span></div>
           <p class="df-label">Switch to</p>
           <div class="df-row"><input type="text" class="df-input" placeholder="/Users/you/Ideas or ~/Ideas" spellcheck="false"${locked ? ' disabled' : ''}><button type="button" data-browse${locked ? ' disabled' : ''}>📂 Browse…</button><button type="button" class="md-primary" data-go${locked ? ' disabled' : ''}>Switch</button></div>
@@ -247,6 +248,23 @@
         if (r.ok) drawHttps(await r.json()); else httpsBox.innerHTML = '<p class="md-note">HTTPS settings are only available on the computer running Accretion.</p>';
       } catch (e) { httpsBox.innerHTML = '<p class="md-note">Could not read HTTPS status.</p>'; }
     })();
+    (async () => {
+      const row = ov.querySelector('.df-autostart');
+      const box = ov.querySelector('[data-autostart]');
+      try {
+        const a = await (await fetch('/api/autostart', { cache: 'no-store' })).json();
+        if (!a.supported) return;
+        row.classList.remove('hidden');
+        box.checked = !!a.enabled;
+      } catch (e) { return; }
+      box.addEventListener('change', async () => {
+        const r = await fetch('/api/autostart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { box.checked = !box.checked; uiAlert(d.error || 'Could not change it'); return; }
+        setStatus(d.enabled ? 'Accretion will start at login' : 'Start at login turned off', 'ok');
+        if (d.stopping) uiAlert('Start at login is off. This server was started by it, so it stops now — open Accretion.app to start it again.', { title: 'Start at login' });
+      });
+    })();
     const qb = ov.querySelector('[data-quitapp]');
     if (qb) qb.addEventListener('click', () => { close(); if (window.quitApp) quitApp(); });
     const inst = ov.querySelector('[data-install]');
@@ -264,6 +282,73 @@
         ? 'This window is already running as an installed app.'
         : 'To install with a Dock icon:\n\n• Chrome or Edge: open the ⋮ menu → "Cast, save and share" → "Install page as app…" (or the install icon at the right of the address bar).\n• Safari: File → "Add to Dock…".\n\nAfter that, the Accretion launcher and "Open window now" open the installed app.', { title: 'Install Accretion' });
     });
+    // Reinstall / uninstall the Dock app. A page can't remove an installed
+    // app itself, so this opens Chrome's app manager with the steps, watches
+    // for the removal, and (for reinstall) offers Install right away.
+    const appFlow = (reinstall) => {
+      const ov2 = document.createElement('div');
+      ov2.className = 'topo-overlay';
+      ov2.innerHTML = `<div class="md-dialog-box app-flow" role="dialog" aria-modal="true" aria-label="${reinstall ? 'Reinstall' : 'Uninstall'} Accretion app">
+        <div class="md-dialog-head"><span>${reinstall ? '↻ Reinstall' : '✕ Uninstall'} the Accretion app</span><button type="button" data-x aria-label="Close">×</button></div>
+        <div class="md-dialog-body">
+          <ol class="app-steps">
+            <li class="cur" data-step="1"><b>Remove the installed app.</b> Either:
+              <ul>
+                <li>In the <b>Accretion app window</b>: menu <b>⋮</b> (top right) → <b>Uninstall Accretion…</b>, or</li>
+                <li><button type="button" class="df-mini-btn" data-apps>Open app manager</button> → right-click <b>Accretion</b> → <b>Remove from Chrome…</b>
+                  <div class="md-note">If you installed it from your normal Chrome window, use <a href="#" data-apps-default>that profile's app manager</a> instead.</div></li>
+              </ul>
+              <div class="app-wait"><span class="dot"></span> Waiting for the app to be removed…</div>
+            </li>
+            ${reinstall ? `<li data-step="2"><b>Install it again.</b> <button type="button" class="df-mini-btn" data-reinst disabled>Install…</button>
+              <div class="md-note">Chrome asks to confirm. If the button stays greyed out, open Accretion in its window (⚙ → Open window now) and click Install there.</div></li>` : ''}
+          </ol>
+        </div>
+        <div class="md-dialog-actions"><span class="md-spacer"></span><button type="button" data-x2>Close</button></div></div>`;
+      document.body.appendChild(ov2);
+      let timer = null;
+      const close = () => { clearInterval(timer); ov2.remove(); };
+      ov2.querySelector('[data-x]').addEventListener('click', close);
+      ov2.querySelector('[data-x2]').addEventListener('click', close);
+      ov2.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+      const openMgr = (profile) => fetch('/api/apps-manager', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) })
+        .then((r) => r.json()).then((d) => { if (d.error) uiAlert(d.error); }).catch(() => {});
+      ov2.querySelector('[data-apps]').addEventListener('click', () => openMgr('window'));
+      ov2.querySelector('[data-apps-default]').addEventListener('click', (e) => { e.preventDefault(); openMgr('default'); });
+      const inst = ov2.querySelector('[data-reinst]');
+      if (inst) inst.addEventListener('click', async () => {
+        if (installEvent) {
+          installEvent.prompt();
+          const choice = await installEvent.userChoice.catch(() => null);
+          installEvent = null;
+          if (choice && choice.outcome === 'accepted') { setStatus('Accretion app reinstalled', 'ok'); close(); }
+        } else {
+          uiAlert('Open Accretion in its window (⚙ Settings → Open window now), then use the install icon at the right of the address bar, or ⋮ → Cast, save and share → Install page as app…', { title: 'Install again' });
+        }
+      });
+      // Watch for the removal.
+      timer = setInterval(async () => {
+        try {
+          const c = await (await fetch('/api/config', { cache: 'no-store' })).json();
+          if (c.installedApp) return;
+          clearInterval(timer);
+          const s1 = ov2.querySelector('[data-step="1"]');
+          s1.classList.remove('cur'); s1.classList.add('done');
+          s1.querySelector('.app-wait').innerHTML = '✓ Removed.';
+          if (reinstall) {
+            const s2 = ov2.querySelector('[data-step="2"]');
+            s2.classList.add('cur');
+            inst.disabled = false;
+            inst.focus();
+          } else {
+            setStatus('Accretion app uninstalled — the window now opens in Chrome app mode', 'ok');
+          }
+        } catch (e) { /* keep waiting */ }
+      }, 1500);
+    };
+    const rb = ov.querySelector('[data-reinstall]');
+    if (rb) rb.addEventListener('click', () => { close(); appFlow(true); });
+
     ov.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', async () => {
       const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ as: b.dataset.open }) });
       const d = await res.json().catch(() => ({}));
