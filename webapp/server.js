@@ -922,6 +922,22 @@ app.post('/api/ui-settings', (req, res) => {
     if (Number.isFinite(width) && width > 0 && width < 10000) next.sidebarWidth = Math.round(width);
     const theme = req.body && req.body.theme;
     if (theme === 'light' || theme === 'dark') next.theme = theme;
+    const mms = req.body && req.body.mindmapStyle;
+    if (mms && typeof mms === 'object' && typeof mms.style === 'string' && /^[a-z]{2,20}$/.test(mms.style)) {
+      next.mindmapStyle = {
+        style: mms.style,
+        palette: typeof mms.palette === 'string' && /^[a-z]{0,20}$/.test(mms.palette) ? mms.palette : '',
+        width: Number.isFinite(Number(mms.width)) ? Math.max(0, Math.min(40, Number(mms.width))) : 0,
+        branch: typeof mms.branch === 'string' && /^[a-z]{0,20}$/.test(mms.branch) ? mms.branch : '',
+        cell: typeof mms.cell === 'string' && /^[a-z]{0,20}$/.test(mms.cell) ? mms.cell : '',
+        fsize: mms.fsize === 'on' || mms.fsize === 'off' ? mms.fsize : '',
+        thin: mms.thin === 'on' || mms.thin === 'off' ? mms.thin : '',
+        font: typeof mms.font === 'string' && /^[a-z]{0,20}$/.test(mms.font) ? mms.font : '',
+        layout: typeof mms.layout === 'string' && /^[a-z]{0,20}$/.test(mms.layout) ? mms.layout : '',
+        textMode: mms.textMode === 'auto' || mms.textMode === 'color' ? mms.textMode : 'style',
+        textColor: typeof mms.textColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(mms.textColor) ? mms.textColor : '',
+      };
+    }
     const collapsed = req.body && req.body.sidebarCollapsed;
     if (typeof collapsed === 'boolean') next.sidebarCollapsed = collapsed;
     if (req.body && 'lastFile' in req.body) {

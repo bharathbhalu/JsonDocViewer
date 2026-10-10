@@ -2233,3 +2233,86 @@ html[data-theme="light"] .mm-color-custom-well {
 /* Plain-text code nodes (e.g. pasted diagrams): show everything, no scroll. */
 .mm-code.is-plain { max-height: none; overflow: hidden; color: #e6edf3; }
 .mm-style-chip { margin: 4px 10px 8px; width: 46px; height: 26px; border-radius: 7px; border: 2px solid; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
+
+/* ---- Map styles ---- */
+.mm-node.mm-sh-text, .mm-node.mm-sh-underline { box-shadow: none !important; border-radius: 4px; }
+.mm-node.mm-sh-underline { border-radius: 0; border-top-width: 0; border-left-width: 0; border-right-width: 0; }
+.mm-node.mm-sh-card { border-width: 1px; border-radius: 12px; box-shadow: 0 6px 20px rgba(20, 30, 50, 0.14) !important; }
+.mm-node.mm-sh-pastel { border-width: 0; border-radius: 12px; box-shadow: none !important; }
+.mm-node.mm-sh-pastel.is-root { border-radius: 16px; }
+.mm-node.mm-sh-pill { border-radius: 999px; }
+.mm-node.mm-sh-text.selected, .mm-node.mm-sh-underline.selected { outline-offset: 0; }
+.mm-style-panel {
+  position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 60;
+  width: min(880px, calc(100% - 32px)); max-height: calc(100% - 80px); overflow: auto;
+  background: #fff; color: #1a2130; border: 1px solid rgba(20, 30, 50, 0.14); border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(20, 30, 50, 0.22); padding: 12px 14px 14px; font: 13px/1.35 ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+.mm-sp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+.mm-sp-head button { border: 0; background: none; font-size: 20px; cursor: pointer; color: #667; }
+.mm-sp-scope { display: flex; gap: 4px; background: #eef1f5; padding: 3px; border-radius: 8px; }
+.mm-sp-scope button { flex: 1; border: 0; background: none; padding: 6px 8px; border-radius: 6px; cursor: pointer; color: #445; font: inherit; }
+.mm-sp-scope button.on { background: #fff; color: #1a2130; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.mm-sp-scope button:disabled { opacity: .45; cursor: default; }
+.mm-sp-follow, .mm-sp-note { display: block; margin: 8px 2px 0; color: #556; }
+.mm-style-panel.is-inherit .mm-sp-styles, .mm-style-panel.is-inherit .mm-sp-palettes, .mm-style-panel.is-inherit .mm-sp-width { opacity: .55; }
+.mm-sp-label { margin: 12px 2px 6px; font-weight: 600; color: #334; display: flex; justify-content: space-between; }
+.mm-sp-styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mm-sp-styles button { border: 2px solid transparent; background: #f6f7f9; border-radius: 10px; padding: 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; color: #334; }
+.mm-sp-styles button svg { width: 100%; height: auto; max-width: 150px; }
+.mm-sp-styles button.on { border-color: #4f7cd6; background: #eef3fd; }
+.mm-sp-palettes { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.mm-sp-palettes button { border: 2px solid transparent; background: #f6f7f9; border-radius: 8px; padding: 5px 6px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; font: 12px/1.2 inherit; color: #334; text-align: left; }
+.mm-sp-palettes button.on { border-color: #4f7cd6; background: #eef3fd; }
+.mm-sp-sw { display: flex; gap: 2px; }
+.mm-sp-sw i { flex: 1; height: 12px; border-radius: 3px; }
+.mm-sp-width { display: flex; gap: 8px; align-items: center; }
+.mm-sp-width input { flex: 1; }
+.mm-sp-width button, .mm-sp-actions button { border: 1px solid #ccd3dd; background: #fff; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+.mm-sp-actions { margin-top: 12px; display: flex; justify-content: flex-end; }
+:root[data-theme="dark"] .mm-style-panel, :root[data-theme="dark"] .mm-sp-head b { color: #e6e9ef; }
+:root[data-theme="dark"] .mm-style-panel { background: #1f2430; border-color: #333a48; }
+:root[data-theme="dark"] .mm-sp-scope { background: #2a303d; }
+:root[data-theme="dark"] .mm-sp-scope button { color: #c3c9d4; }
+:root[data-theme="dark"] .mm-sp-scope button.on { background: #3a4253; color: #fff; }
+:root[data-theme="dark"] .mm-sp-styles button, :root[data-theme="dark"] .mm-sp-palettes button { background: #2a303d; color: #d6dbe4; }
+:root[data-theme="dark"] .mm-sp-label, :root[data-theme="dark"] .mm-sp-follow, :root[data-theme="dark"] .mm-sp-note { color: #c3c9d4; }
+.mm-sp-text { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mm-sp-text [data-tmode] { border: 2px solid transparent; background: #f6f7f9; border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; color: #334; }
+.mm-sp-text [data-tmode].on { border-color: #4f7cd6; background: #eef3fd; }
+.mm-sp-tc { width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(0,0,0,.18); cursor: pointer; padding: 0; position: relative; overflow: hidden; }
+.mm-sp-tc.on { outline: 2px solid #4f7cd6; outline-offset: 2px; }
+.mm-sp-tc-custom { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.mm-sp-tc-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.mm-sp-label span { font-weight: 400; color: #778; }
+:root[data-theme="dark"] .mm-sp-text [data-tmode] { background: #2a303d; color: #d6dbe4; }
+.mm-sp-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.mm-sp-opts button { border: 2px solid transparent; background: #f6f7f9; border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; color: #3a4a66; display: flex; align-items: center; gap: 6px; }
+.mm-sp-opts button span { color: #334; }
+.mm-sp-opts button.on { border-color: #4f7cd6; background: #eef3fd; }
+:root[data-theme="dark"] .mm-sp-opts button { background: #2a303d; color: #9fb4d8; }
+:root[data-theme="dark"] .mm-sp-opts button span { color: #d6dbe4; }
+.mm-sp-preview { border-radius: 8px; overflow: hidden; border: 1px solid rgba(20, 30, 50, 0.1); }
+.mm-sp-body { display: flex; gap: 16px; align-items: flex-start; }
+.mm-sp-main { flex: 1 1 520px; min-width: 0; }
+.mm-sp-side { flex: 0 0 300px; position: sticky; top: 0; }
+@media (max-width: 900px) { .mm-sp-body { flex-direction: column-reverse; } .mm-sp-side { position: static; flex-basis: auto; width: 100%; } }
+.mm-sp-preview svg { display: block; }
+.mm-node.mm-sh-empty { border-style: dashed !important; border-width: 2px !important; border-radius: 10px; }
+.mm-sp-warn { margin: 8px 2px 0; padding: 8px 10px; border-radius: 8px; background: #fff6e0; color: #6b4e00; border: 1px solid #f1d58a; }
+.mm-sp-warn button { margin-left: 6px; border: 1px solid #d9b85a; background: #fff; border-radius: 6px; padding: 2px 8px; cursor: pointer; font: inherit; }
+:root[data-theme="dark"] .mm-sp-warn { background: #3a3018; color: #f3dca0; border-color: #6b5a2a; }
+/* Hand-drawn cells: uneven corners (4 variants), lavender ones as blobs. */
+.mm-node.mm-sh-hand { border-width: 0; box-shadow: none !important; border-radius: 18px 10px 16px 12px / 12px 16px 10px 18px; }
+.mm-node.mm-sh-hand[data-hv="1"] { border-radius: 10px 18px 12px 16px / 16px 10px 18px 12px; transform: rotate(-0.6deg); }
+.mm-node.mm-sh-hand[data-hv="2"] { border-radius: 14px 12px 20px 10px / 10px 18px 12px 16px; transform: rotate(0.5deg); }
+.mm-node.mm-sh-hand[data-hv="3"] { border-radius: 16px 14px 10px 18px / 18px 12px 16px 10px; }
+.mm-node.mm-sh-hand.mm-sh-pill { border-radius: 52% 48% 55% 45% / 60% 52% 48% 40% !important; transform: rotate(-1.5deg); }
+.mm-node.mm-sh-hand.is-root { border-radius: 20px 14px 22px 16px / 16px 22px 14px 20px; }
+.mm-node.mm-sh-outline { border-width: 2px; border-radius: 10px; box-shadow: none !important; }
+.mm-node.mm-sh-tint { border-width: 0; border-radius: 10px; box-shadow: none !important; }
+.mm-node.mm-sh-accent { border-width: 0 0 0 6px; border-radius: 6px; box-shadow: 0 2px 8px rgba(20, 30, 50, 0.14) !important; }
+.mm-sp-width button, .mm-sp-actions button { color: #334; }
+.mm-sp-width button:disabled { opacity: .45; cursor: default; }
+:root[data-theme="dark"] .mm-sp-width button, :root[data-theme="dark"] .mm-sp-actions button, :root[data-theme="dark"] .mm-sp-warn button { background: #2a303d; color: #e6e9ef; border-color: #444c5c; }
+.mm-sp-hint { color: #889; font-size: 12px; }

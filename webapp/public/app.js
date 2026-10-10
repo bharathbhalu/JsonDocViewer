@@ -2307,8 +2307,8 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=98', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=139', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=109', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=159', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {

@@ -104,6 +104,14 @@
     return `<span class="mm-color-chip mm-chip-fill" style="background:${color}"></span>`;
   }
 
+  // Blend two hex colours (t = share of b).
+  function mixHex(a, b, t) {
+    const A = parseHexColor(a) || '#888888';
+    const B = parseHexColor(b) || '#ffffff';
+    const ch = (h, i) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
+    return '#' + [0, 1, 2].map((i) => Math.round(ch(A, i) * (1 - t) + ch(B, i) * t).toString(16).padStart(2, '0')).join('');
+  }
+
   function parseHexColor(s) {
     const t = String(s || '').trim();
     if (/^#[0-9a-f]{6}$/i.test(t)) return t;
@@ -162,6 +170,22 @@
     { id: 'mono', label: 'Mono', css: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
     { id: 'rounded', label: 'Rounded', css: '"Trebuchet MS", "Segoe UI Rounded", sans-serif' },
     { id: 'hand', label: 'Hand', css: '"Segoe Print", "Comic Sans MS", cursive' },
+    // Web fonts (Google Fonts, loaded on first use; system fallbacks offline).
+    { id: 'sketchy', label: 'Sketchy', web: 'Gochi+Hand', css: '"Gochi Hand", "Patrick Hand", "Segoe Print", cursive' },
+    { id: 'marker', label: 'Marker', web: 'Patrick+Hand', css: '"Patrick Hand", "Segoe Print", "Comic Sans MS", cursive' },
+    { id: 'caveat', label: 'Caveat', web: 'Caveat:wght@500;700', css: '"Caveat", "Segoe Print", cursive' },
+    { id: 'indie', label: 'Indie Flower', web: 'Indie+Flower', css: '"Indie Flower", "Segoe Print", cursive' },
+    { id: 'kalam', label: 'Kalam', web: 'Kalam:wght@400;700', css: '"Kalam", "Segoe Print", cursive' },
+    { id: 'shadows', label: 'Shadows', web: 'Shadows+Into+Light', css: '"Shadows Into Light", "Segoe Print", cursive' },
+    { id: 'architect', label: 'Architect', web: 'Architects+Daughter', css: '"Architects Daughter", "Segoe Print", cursive' },
+    { id: 'permanent', label: 'Felt pen', web: 'Permanent+Marker', css: '"Permanent Marker", "Segoe Print", cursive' },
+    { id: 'dancing', label: 'Script', web: 'Dancing+Script:wght@500;700', css: '"Dancing Script", "Snell Roundhand", cursive' },
+    { id: 'satisfy', label: 'Satisfy', web: 'Satisfy', css: '"Satisfy", "Snell Roundhand", cursive' },
+    { id: 'comfortaa', label: 'Comfortaa', web: 'Comfortaa:wght@400;700', css: '"Comfortaa", "Trebuchet MS", sans-serif' },
+    { id: 'fredoka', label: 'Fredoka', web: 'Fredoka:wght@400;600', css: '"Fredoka", "Trebuchet MS", sans-serif' },
+    { id: 'playfair', label: 'Playfair', web: 'Playfair+Display:wght@400;700', css: '"Playfair Display", Georgia, serif' },
+    { id: 'grotesk', label: 'Grotesk', web: 'Space+Grotesk:wght@400;700', css: '"Space Grotesk", ui-sans-serif, sans-serif' },
+    { id: 'typewriter', label: 'Typewriter', web: 'Courier+Prime:wght@400;700', css: '"Courier Prime", "Courier New", monospace' },
   ];
   const FONT_SIZE_MIN = 11;
   const FONT_SIZE_MAX = 70;
@@ -170,6 +194,7 @@
 
   function fontCss(id) {
     const found = FONT_FACES.find((f) => f.id === id);
+    if (found && found.web) ensureMarkerFont();
     return (found && found.css) || FONT_FACES[0].css;
   }
 
@@ -707,9 +732,9 @@
     return Math.max(1, total);
   }
 
-  function measureTextCell(n, live) {
+  function measureTextCell(n, live, fmtOverride) {
     const text = String(n.content || '');
-    const fmt = n.format || defaultFormat();
+    const fmt = fmtOverride || n.format || defaultFormat();
     const fs = clamp(Number(fmt.fontSize) || FONT_SIZE_DEFAULT, FONT_SIZE_MIN, FONT_SIZE_MAX);
     const ctx = textMeasureCtx();
     ctx.font = `${fmt.italic ? 'italic ' : ''}${fmt.bold ? '700' : '500'} ${fs}px ${fontCss(fmt.fontFamily)}`;
@@ -1144,6 +1169,216 @@
     return d;
   }
 
+  // ---- Map styles -----------------------------------------------------------
+  // A style is the look (cell shape, connections, fonts, layout); a colour
+  // template is the palette. Both can be set as the global default, for one
+  // mindmap, or for one frame (the trees whose root sits inside it). Colours,
+  // widths and fonts you set on a node yourself (style.own / format.own) win.
+  const MM_PALETTES = {
+    coggle: { label: 'Coggle', colors: ['#E07B7B', '#EDA772', '#A6D46B', '#7FD4C1', '#D893E3', '#E8C76E', '#86A8E0'], text: ['#8E3B3B', '#8F5A2C', '#5C7A2A', '#2F6F62', '#8A3D99', '#8A6A1C', '#3D5A8F'], root: { fill: '#ABABAB', text: '#ffffff' } },
+    minisite: { label: 'Minisite', colors: ['#E35D5D', '#4B9FE3', '#F4C542', '#7CC86B', '#69C3DE', '#E27AD3'], text: ['#2b2f36'], root: { fill: '#ffffff', text: '#1f2329' } },
+    whimsical: { label: 'Whimsical', colors: ['#5D9BB8', '#B24ED0', '#4F8FA8', '#9B4FC0'], text: ['#3c2f4d'], root: { fill: '#ffffff', text: '#3c2f4d' } },
+    losum: { label: 'Ribbon', colors: ['#2D8FDA', '#F26A21', '#5CB43A', '#F5C21C', '#E5432B'], root: { fill: '#ffffff', text: '#2b2f36' } },
+    sketch: { label: 'Sketch pastel', colors: ['#F6ADA3', '#FBD7B5', '#D4ECE2', '#E1D8F7'], text: ['#3b3a48'], root: { fill: '#A89BE0', text: '#ffffff' }, link: '#3a3a3a' },
+    deep: { label: 'Deep vivid', colors: ['#2563EB', '#16A34A', '#D97706', '#DB2777', '#7C3AED', '#0891B2', '#EA580C', '#E11D48'], root: { fill: '#3730A3', text: '#ffffff' } },
+    vivid: { label: 'Classic (per level)', colors: VIVID_FILLS, root: { fill: '#4338CA', text: '#ffffff' } },
+  };
+  const MM_STYLES = {
+    organic: { label: 'Organic branches', hint: 'Coggle', shape: 'text', rootShape: 'card', link: 'curve', taper: true, under: true, taperK: 0.62, width: 13, layout: 'both', palette: 'coggle', colorBy: 'branch', font: 'sans', sizes: [22, 22, 16], bold: [false, false, false] },
+    underline: { label: 'Underline', hint: 'Minisite', shape: 'underline', rootShape: 'card', link: 'curve', taper: false, width: 2.2, layout: 'both', palette: 'minisite', colorBy: 'branch', font: 'sans', sizes: [24, 19, 14], bold: [true, true, false] },
+    outline: { label: 'Outline', hint: 'Whimsical', shape: 'text', rootShape: 'card', link: 'curve', taper: false, width: 2.6, layout: 'right', palette: 'whimsical', colorBy: 'branch', font: 'rounded', sizes: [24, 17, 15], bold: [false, false, false] },
+    pointed: { label: 'Coggle pointed', hint: 'Pointed tapered branches, thinner when long', shape: 'text', rootShape: 'card', link: 'curve', taper: true, under: true, point: true, taperK: 0.62, width: 14, layout: 'both', palette: 'coggle', colorBy: 'branch', font: 'sans', sizes: [22, 22, 16], bold: [false, false, false] },
+    ribbon: { label: 'Ribbon', hint: 'Thick tapered tree branches', shape: 'text', rootShape: 'card', link: 'curve', taper: true, wave: true, taperK: 0.5, width: 22, layout: 'both', palette: 'losum', colorBy: 'branch', font: 'rounded', sizes: [26, 20, 16], bold: [true, true, false] },
+    sketch: { label: 'Sketch cards', hint: 'Hand-drawn cards + arrows', shape: 'hand', rootShape: 'hand', link: 'sketch', taper: false, width: 3, layout: 'both', palette: 'sketch', colorBy: 'mixed', font: 'sketchy', sizes: [34, 26, 23], bold: [false, false, false] },
+    classic: { label: 'Classic boxes', hint: 'Filled cells', shape: 'box', rootShape: 'box', link: 'curve', taper: false, width: 2.25, layout: 'keep', palette: 'vivid', colorBy: 'level', font: 'sans', sizes: [18, 18, 18], bold: [true, false, false] },
+  };
+  const MM_STYLE_ORDER = ['organic', 'pointed', 'underline', 'outline', 'ribbon', 'sketch', 'classic'];
+  // Pieces of a style that can be chosen on their own (empty = the preset's).
+  const MM_BRANCHES = {
+    tapered: { label: 'Tapered', link: 'curve', taper: true, taperK: 0.6, width: 12 },
+    ribbon: { label: 'Ribbon', link: 'curve', taper: true, taperK: 0.55, width: 22 },
+    curve: { label: 'Thin curve', link: 'curve', taper: false, width: 2.4 },
+    arrow: { label: 'Arrows', link: 'arrow', taper: false, width: 2.6 },
+    sketch: { label: 'Hand arrows', link: 'sketch', taper: false, width: 3 },
+    pointed: { label: 'Pointed branches', link: 'curve', taper: true, taperK: 0.62, width: 13, under: true, point: true },
+    coggle: { label: 'Coggle branches', link: 'curve', taper: true, taperK: 0.62, width: 13, under: true },
+    tree: { label: 'Tree branches', link: 'curve', taper: true, taperK: 0.5, width: 20, wave: true },
+  };
+  const MM_CELLS = {
+    text: { label: 'Plain text', shape: 'text', rootShape: 'card' },
+    underline: { label: 'Underline', shape: 'underline', rootShape: 'card' },
+    box: { label: 'Filled box', shape: 'box', rootShape: 'box' },
+    pastel: { label: 'Soft card', shape: 'pastel', rootShape: 'pastel' },
+    hand: { label: 'Hand-drawn', shape: 'hand', rootShape: 'hand' },
+    outline: { label: 'Outlined', shape: 'outline', rootShape: 'card' },
+    tint: { label: 'Light tint', shape: 'tint', rootShape: 'card' },
+    accent: { label: 'Accent bar', shape: 'accent', rootShape: 'card' },
+  };
+  const BRANCH_ICON = {
+    tapered: '<path d="M2 10 C 16 10, 20 3, 38 3 L38 5 C 22 5, 18 13, 2 13 Z" fill="currentColor"/>',
+    ribbon: '<path d="M2 7 C 16 7, 20 2, 38 2 L38 6 C 22 6, 18 15, 2 15 Z" fill="currentColor"/>',
+    curve: '<path d="M2 10 C 18 10, 20 4, 38 4" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+    pointed: '<path d="M2 12 C 12 12, 14 5, 24 5 L 33 4.2 L 38 5 L 33 6.6 L 24 7 C 15 7, 13 15, 2 15 Z" fill="currentColor"/>',
+    coggle: '<path d="M2 14 C 12 14, 14 6, 22 6 L 38 6" stroke="currentColor" stroke-width="3.2" fill="none" stroke-linecap="round"/>',
+    tree: '<path d="M2 9 C 8 9, 10 15, 16 13 S 24 4, 30 6 S 36 5, 38 4" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/>',
+    arrow: '<path d="M2 14 L34 5 M28 4 L35 5 L30 10" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+    sketch: '<path d="M4 16 L26 7" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M24 3 L35 4 L28 13 Z" fill="currentColor"/>',
+  };
+  const CELL_ICON = {
+    text: '<rect x="6" y="8" width="28" height="4" rx="2" fill="currentColor"/>',
+    underline: '<rect x="6" y="6" width="22" height="4" rx="2" fill="currentColor"/><path d="M4 14 H36" stroke="currentColor" stroke-width="1.6"/>',
+    box: '<rect x="4" y="3" width="32" height="14" rx="7" fill="currentColor"/>',
+    pastel: '<rect x="4" y="3" width="32" height="14" rx="3" fill="currentColor" opacity=".35"/>',
+    outline: '<rect x="5" y="4" width="30" height="12" rx="5" fill="none" stroke="currentColor" stroke-width="2"/>',
+    tint: '<rect x="4" y="3" width="32" height="14" rx="5" fill="currentColor" opacity=".18"/><rect x="10" y="9" width="20" height="3" rx="1.5" fill="currentColor"/>',
+    accent: '<rect x="4" y="3" width="32" height="14" rx="3" fill="#fff" stroke="rgba(0,0,0,.15)"/><rect x="4" y="3" width="4" height="14" rx="1" fill="currentColor"/>',
+    hand: '<path d="M6 4 Q20 2 34 4 Q37 10 34 16 Q20 18 6 16 Q3 10 6 4 Z" fill="currentColor" opacity=".45"/>',
+  };
+  const MM_LAYOUTS = { keep: 'Keep as is', both: 'Both sides', right: 'Right side' };
+  const MM_THEME_DEFAULT = { style: 'organic', palette: '', width: 0 };
+
+  function normTheme(t) {
+    if (!t || typeof t !== 'object' || !MM_STYLES[t.style]) return null;
+    const w = Number(t.width);
+    const tc = parseHexColor(t.textColor) ? String(t.textColor) : '';
+    const textMode = t.textMode === 'auto' ? 'auto' : (t.textMode === 'color' && tc ? 'color' : 'style');
+    return {
+      style: t.style,
+      palette: MM_PALETTES[t.palette] ? t.palette : '',
+      branch: MM_BRANCHES[t.branch] ? t.branch : '',
+      cell: MM_CELLS[t.cell] ? t.cell : '',
+      layout: MM_LAYOUTS[t.layout] ? t.layout : '',
+      font: FONT_FACES.some((f) => f.id === t.font) ? t.font : '',
+      thin: t.thin === 'on' || t.thin === 'off' ? t.thin : '',
+      fsize: t.fsize === 'on' || t.fsize === 'off' ? t.fsize : '',
+      width: w > 0 ? clamp(w, 0.5, 40) : 0,
+      textMode,
+      textColor: tc,
+    };
+  }
+  function themeCfg(t) {
+    const br = MM_BRANCHES[t.branch];
+    const cl = MM_CELLS[t.cell];
+    const s = Object.assign({}, MM_STYLES[t.style], br ? { link: br.link, taper: br.taper, taperK: br.taperK, width: br.width, wave: !!br.wave, under: !!br.under, point: !!br.point } : null, cl ? { shape: cl.shape, rootShape: cl.rootShape } : null, MM_LAYOUTS[t.layout] ? { layout: t.layout } : null, t.font ? { font: t.font } : null, null);
+    // Thinner with each hop: on for tapered connections unless set.
+    s.hopThin = t.thin === 'on' ? true : t.thin === 'off' ? false : !!s.taper;
+    s.hopSet = t.thin === 'on' || t.thin === 'off';
+    // Smaller text with each hop ('' = the preset's own sizes).
+    s.fontHop = t.fsize === 'on' ? true : t.fsize === 'off' ? false : null;
+    const paletteId = t.palette || s.palette;
+    return Object.assign({}, s, { id: t.style, userWidth: t.width || 0, userFont: t.font || '', branchId: t.branch || '', cellId: t.cell || '', textMode: t.textMode || 'style', textColor: t.textColor || '', paletteId, pal: MM_PALETTES[paletteId], width: t.width || s.width, plain: t.style === 'classic' && paletteId === 'vivid' && !br && !cl });
+  }
+  let MM_GLOBAL = (() => {
+    try { return normTheme(JSON.parse(localStorage.getItem('docviewer-mm-theme') || 'null')) || MM_THEME_DEFAULT; } catch (e) { return MM_THEME_DEFAULT; }
+  })();
+  let mmGlobalFetched = null;
+  function fetchGlobalTheme() {
+    if (!mmGlobalFetched) {
+      mmGlobalFetched = fetch('/api/ui-settings', { cache: 'no-store' }).then((r) => r.ok ? r.json() : {}).then((s) => {
+        const t = normTheme(s && s.mindmapStyle);
+        if (t) { MM_GLOBAL = t; try { localStorage.setItem('docviewer-mm-theme', JSON.stringify(t)); } catch (e) { /* ignore */ } }
+        return MM_GLOBAL;
+      }).catch(() => MM_GLOBAL);
+    }
+    return mmGlobalFetched;
+  }
+  function saveGlobalTheme(t) {
+    MM_GLOBAL = normTheme(t) || MM_THEME_DEFAULT;
+    try { localStorage.setItem('docviewer-mm-theme', JSON.stringify(MM_GLOBAL)); } catch (e) { /* ignore */ }
+    fetch('/api/ui-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mindmapStyle: MM_GLOBAL }) }).catch(() => {});
+  }
+
+  // Hand-lettered font for the Sketch style (loaded on first use).
+  function ensureMarkerFont() {
+    if (ensureMarkerFont.done || typeof document === 'undefined') return;
+    ensureMarkerFont.done = true;
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?' + FONT_FACES.filter((f) => f.web).map((f) => 'family=' + f.web).join('&') + '&display=swap';
+    document.head.appendChild(l);
+  }
+
+  // Cubic bezier helpers for tapered branches.
+  function bezAt(p, t) {
+    const u = 1 - t;
+    return {
+      x: u * u * u * p[0].x + 3 * u * u * t * p[1].x + 3 * u * t * t * p[2].x + t * t * t * p[3].x,
+      y: u * u * u * p[0].y + 3 * u * u * t * p[1].y + 3 * u * t * t * p[2].y + t * t * t * p[3].y,
+    };
+  }
+  // Points along a bezier; with amp, bent into a tree-branch wave (about
+  // one and a half bends, flat where it meets the parent and the child).
+  function branchPts(p, amp, N) {
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const c = bezAt(p, t);
+      if (amp) {
+        const a = bezAt(p, Math.max(0, t - 0.01));
+        const b = bezAt(p, Math.min(1, t + 0.01));
+        let nx = -(b.y - a.y);
+        let ny = b.x - a.x;
+        const len = Math.hypot(nx, ny) || 1;
+        const o = amp * Math.sin(2 * Math.PI * t) * Math.sin(Math.PI * t);
+        c.x += (nx / len) * o;
+        c.y += (ny / len) * o;
+      }
+      pts.push(c);
+    }
+    return pts;
+  }
+  function polyD(pts) {
+    return 'M ' + pts.map((c) => c.x.toFixed(1) + ' ' + c.y.toFixed(1)).join(' L ');
+  }
+  function taperPath(p, w0, w1, amp, point) {
+    const N = amp ? 44 : 28;
+    const P = branchPts(p, amp || 0, N);
+    const L = [];
+    const R = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const a = P[Math.max(0, i - 1)];
+      const b = P[Math.min(N, i + 1)];
+      const c = P[i];
+      let nx = -(b.y - a.y);
+      let ny = b.x - a.x;
+      const len = Math.hypot(nx, ny) || 1;
+      nx /= len; ny /= len;
+      let w = (w0 + (w1 - w0) * Math.pow(t, amp ? 0.6 : 0.8)) / 2;
+      // Pointed tip: swell a little, then close to a point (like Coggle).
+      if (point && t > 0.86) w *= t < 0.93 ? 1.15 : Math.max(0, (1 - t) / 0.07) * 1.15;
+      L.push((c.x + nx * w).toFixed(1) + ' ' + (c.y + ny * w).toFixed(1));
+      R.push((c.x - nx * w).toFixed(1) + ' ' + (c.y - ny * w).toFixed(1));
+    }
+    const e = p[3];
+    const r1 = w1 / 2;
+    if (point) return 'M ' + L.join(' L ') + ' L ' + R.reverse().join(' L ') + ' Z';
+    return 'M ' + L.join(' L ') + ` A ${r1.toFixed(1)} ${r1.toFixed(1)} 0 0 1 ` + R[N] + ' L ' + R.reverse().slice(1).join(' L ') + ' Z' + (e ? '' : '');
+  }
+  function arrowHead(tip, from, size) {
+    const ang = Math.atan2(tip.y - from.y, tip.x - from.x);
+    const s = size;
+    const p1 = { x: tip.x - s * Math.cos(ang - 0.45), y: tip.y - s * Math.sin(ang - 0.45) };
+    const p2 = { x: tip.x - s * Math.cos(ang + 0.45), y: tip.y - s * Math.sin(ang + 0.45) };
+    return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${tip.x.toFixed(1)} ${tip.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+
+  const SHAPES = ['box', 'text', 'underline', 'card', 'pastel', 'hand', 'outline', 'tint', 'accent'];
+  // Colours, widths and fonts set on a node by hand survive style switches.
+  function markOwnStyle(n, patch) {
+    const own = Object.assign({}, n.style.own);
+    if ('fill' in patch || 'border' in patch) own.fill = 1;
+    if ('textColor' in patch) own.text = 1;
+    if ('linkColor' in patch) own.link = 1;
+    if ('linkWidth' in patch) own.width = 1;
+    if (Object.keys(own).length) n.style.own = own;
+  }
+  function markOwnFormat(n, patch) {
+    const own = Object.assign({}, n.format.own);
+    ['fontFamily', 'fontSize', 'bold', 'align'].forEach((k) => { if (k in patch) own[k] = 1; });
+    if (Object.keys(own).length) n.format.own = own;
+  }
+
   class MindmapEngine {
     constructor(container, opts) {
       this.container = container;
@@ -1191,8 +1426,15 @@
       this._pinchWheelUntil = 0;
       this._zoomPend = null;
       this._zoomRaf = 0;
+      this._effCache = new Map();
       this._buildDom();
+      // Web fonts (hand-drawn styles) arrive late: refit cells when they do.
+      if (typeof document !== 'undefined' && document.fonts && document.fonts.addEventListener) {
+        this._onFontsDone = () => { if (!this._destroyed) { this._effCache.clear(); this._syncSizes(); this.render(); } };
+        document.fonts.addEventListener('loadingdone', this._onFontsDone);
+      }
       this._bind();
+      fetchGlobalTheme().then(() => { if (!this._destroyed) { this.render(); requestAnimationFrame(() => this._syncSizes()); } });
     }
 
     static isMindmapHtml(html) { return isMindmapHtml(html); }
@@ -1215,6 +1457,8 @@
           <span class="mm-sep"></span>
           <button type="button" data-act="undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
           <button type="button" data-act="redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+          <span class="mm-sep"></span>
+          <button type="button" data-act="style" title="Mindmap style: layout, cells, colours, connection thickness">Style</button>
           <span class="mm-sep"></span>
           <span class="mm-inspector"></span>
           <span class="mm-sep mm-insp-sep" style="display:none"></span>
@@ -2407,10 +2651,13 @@
       const style = clone(source.style || defaultStyle());
       style.linkColorManual = false;
       style.fillColorManual = false;
+      delete style.own;
+      const format = clone(source.format || defaultFormat());
+      delete format.own;
       return {
         type,
         style,
-        format: clone(source.format || defaultFormat()),
+        format,
         language: source.language || 'auto',
       };
     }
@@ -3177,7 +3424,7 @@
     _fitAutoNode(n, live) {
       if (!n || n.userSized) return false;
       if (n.type === 'youtube' || n.type === 'image' || n.type === 'link') return false;
-      const size = n.type === 'code' ? measureCodeCell(n) : measureTextCell(n, live);
+      const size = n.type === 'code' ? measureCodeCell(n) : measureTextCell(n, live, this._effFormat(n));
       return this._setNodeSize(n, size.w, size.h);
     }
 
@@ -3596,6 +3843,8 @@
       const n = this.data.nodes[id];
       if (!n || this.readOnly || this.isNodeLocked(n)) return;
       Object.assign(n.style, patch);
+      markOwnStyle(n, patch);
+      this._effCache.clear();
       if (this._batching) return;
       if (this.editingId === id) {
         this._paintNodeStyles(n);
@@ -3613,6 +3862,8 @@
       const next = Object.assign({}, patch);
       if (next.fontSize != null) next.fontSize = clamp(Number(next.fontSize) || FONT_SIZE_DEFAULT, FONT_SIZE_MIN, FONT_SIZE_MAX);
       Object.assign(n.format, next);
+      markOwnFormat(n, next);
+      this._effCache.clear();
       if (this._batching) return;
       if (this.editingId === id) {
         this._paintNodeStyles(n);
@@ -3860,8 +4111,9 @@
 
     // ---------- copy / paste style ----------
     _styleOf(n) {
-      const st = n.style || {};
-      const f = n.format || {};
+      const e = this._eff(n);
+      const st = e.t.plain ? (n.style || {}) : Object.assign({}, n.style, { fill: e.fill, border: e.border, textColor: e.text, linkColor: e.link, linkWidth: e.w });
+      const f = this._effFormat(n);
       const pick = (o, keys) => keys.reduce((a, k) => { if (o[k] !== undefined) a[k] = o[k]; return a; }, {});
       return {
         style: pick(st, ['fill', 'fillAlpha', 'border', 'textColor', 'textColorManual', 'fillColorManual', 'linkColor', 'linkColorManual', 'linkWidth', 'linkStyle', 'linkCurve']),
@@ -3896,6 +4148,464 @@
 
     // Re-colour the whole map with the vivid level colours (keeps colours you
     // picked by hand). Undo restores the old ones.
+    // ---- Map styles: resolve, paint, switch ------------------------------
+    _frameOfRoot(root) {
+      if (!root) return null;
+      const cx = root.x + root.w / 2;
+      const cy = root.y + root.h / 2;
+      return (this.data.frames || []).filter((f) => cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h)
+        .sort((a, b) => (b.z || 0) - (a.z || 0))[0] || null;
+    }
+
+    // What a cell's text actually sits on: its own fill, else the frame, else the canvas.
+    _cellBackdrop(root, fill) {
+      if (fill && !isTransparent(fill) && parseHexColor(fill)) return fill;
+      const fr = this._frameOfRoot(root);
+      if (fr && fr.fill && !isTransparent(fr.fill)) return fr.fill;
+      return typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark' ? '#161a22' : '#e8eaee';
+    }
+
+    _rootOnDark(root) {
+      const key = 'd:' + root.id;
+      let v = this._effCache.get(key);
+      if (v === undefined) {
+        const fr = this._frameOfRoot(root);
+        v = fr ? (!isTransparent(fr.fill) && hexLum(fr.fill || '#ffffff') < 0.4) : (typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark');
+        this._effCache.set(key, v);
+      }
+      return v;
+    }
+
+    _themeChoice(scope, frame) {
+      if (scope === 'frame' && frame) return normTheme(frame.theme);
+      if (scope === 'map') return normTheme(this.data.theme);
+      return MM_GLOBAL;
+    }
+
+    _rootTheme(rid) {
+      const key = 't:' + rid;
+      let t = this._effCache.get(key);
+      if (t) return t;
+      const fr = this._frameOfRoot(this.data.nodes[rid]);
+      t = themeCfg((fr && normTheme(fr.theme)) || normTheme(this.data.theme) || MM_GLOBAL);
+      this._effCache.set(key, t);
+      return t;
+    }
+
+    _branchIndex(root, top) {
+      const key = 'b:' + root.id;
+      let list = this._effCache.get(key);
+      if (!list) {
+        list = DIRS.reduce((acc, d) => acc.concat(this.childrenOf(root.id, d).map((k) => k.id)), []);
+        this._effCache.set(key, list);
+      }
+      return Math.max(0, list.indexOf(top.id));
+    }
+
+    // Effective look of a node under its style (cached per render).
+    _eff(n) {
+      const hit = this._effCache.get(n.id);
+      if (hit) return hit;
+      const nodes = this.data.nodes;
+      const st = n.style || defaultStyle();
+      let root = n;
+      let top = null;
+      let depth = 0;
+      const seen = new Set();
+      while (root.parentId && nodes[root.parentId] && !seen.has(root.id)) { seen.add(root.id); top = root; root = nodes[root.parentId]; depth++; }
+      const t = this._rootTheme(root.id);
+      let e;
+      if (t.plain) {
+        let lw = t.userWidth && !(st.own && st.own.width) ? t.userWidth : (st.linkWidth || 2.25);
+        if (t.hopSet && t.hopThin && !(st.own && st.own.width)) lw = Math.max(1, lw * Math.pow(0.78, Math.max(0, depth - 1)));
+        e = { t, depth, shape: 'box', fill: st.fill, border: st.border || st.fill, text: st.textColor, link: st.linkColor, w: lw, w0: lw };
+      } else {
+        const pal = t.pal;
+        const L = pal.colors.length;
+        const off = Math.max(0, this.data.rootIds.indexOf(root.id)) * 2;
+        const bi = top ? this._branchIndex(root, top) : 0;
+        const ci = (t.colorBy === 'level' ? depth - 1 : t.colorBy === 'mixed' ? bi + depth - 1 : bi) + off;
+        const col = pal.colors[((ci % L) + L) % L];
+        const ink = pal.text ? pal.text[((ci % pal.text.length) + pal.text.length) % pal.text.length] : col;
+        const shape = depth === 0 ? t.rootShape : t.shape;
+        e = { t, depth, shape, pill: false, link: pal.link || col };
+        if (depth === 0) {
+          e.fill = pal.root.fill; e.text = pal.root.text;
+          e.border = shape === 'card' ? 'rgba(20,30,50,0.08)' : pal.root.fill;
+        } else if (shape === 'box') {
+          e.fill = col; e.border = col; e.text = contrastText(col);
+        } else if (shape === 'outline' || shape === 'accent' || shape === 'tint') {
+          const dark = (c) => (hexLum(c) > 0.55 ? mixHex(c, '#000000', 0.5) : c);
+          e.fill = shape === 'tint' ? mixHex(col, '#ffffff', 0.8) : '#ffffff';
+          e.border = shape === 'tint' ? e.fill : col;
+          e.text = dark(Math.abs(hexLum(ink) - hexLum(e.fill)) < 0.35 ? col : ink);
+        } else if (shape === 'pastel' || shape === 'hand') {
+          e.fill = col; e.border = col; e.pill = ((ci % L) + L) % L === 3;
+          e.text = Math.abs(hexLum(ink) - hexLum(col)) < 0.35 ? contrastText(col) : ink;
+        } else if (shape === 'text' && n.type === 'text' && !String(n.content || '').trim()) {
+          // An empty plain-text cell has nothing to show: outline it.
+          e.fill = 'transparent'; e.border = col; e.text = ink; e.empty = true;
+        } else {
+          e.fill = 'transparent'; e.border = 'transparent'; e.text = ink;
+          // Text sits straight on the canvas (or frame): keep it readable on
+          // the dark grid by switching to the brighter branch colour.
+          if (this._rootOnDark(root) && hexLum(ink) < 0.4) e.text = hexLum(col) > 0.3 ? col : '#e6e9ef';
+        }
+        // Hop thinning: each level away from the root is thinner; off keeps
+        // every level at the set thickness.
+        const k = t.taper ? (t.taperK || 0.6) : 0.78;
+        const lvl = t.hopThin ? Math.max(0, depth - 1) : 0;
+        e.w0 = Math.max(1.4, t.width * Math.pow(k, lvl));
+        e.w = t.taper ? (t.hopThin ? Math.max(1.4, e.w0 * k) : Math.max(1.4, e.w0 * 0.75)) : e.w0;
+        const own = st.own || {};
+        if (own.fill) { e.fill = st.fill; e.border = st.border || st.fill; if (e.shape === 'text' || e.shape === 'underline') e.shape = 'box'; }
+        if (own.text) e.text = st.textColor;
+        if (own.link) e.link = st.linkColor;
+        if (own.width) { e.w = st.linkWidth || e.w; e.w0 = e.w; }
+      }
+      // Text colour set for the map/frame/global: the same for every cell
+      // (a colour picked on a single node still wins).
+      if (t.textMode !== 'style' && !(st.own && st.own.text)) {
+        if (t.textMode === 'color') e.text = t.textColor;
+        // Auto: one colour for the whole tree, readable on the frame/canvas.
+        else e.text = hexLum(this._cellBackdrop(root, null)) > 0.5 ? '#1a2130' : '#f4f6fa';
+      }
+      this._effCache.set(n.id, e);
+      return e;
+    }
+
+    _effFormat(n) {
+      const fmt = n.format || defaultFormat();
+      const e = this._eff(n);
+      if (e.t.plain) {
+        const patch = {};
+        if (e.t.userFont && !(fmt.own && fmt.own.fontFamily)) patch.fontFamily = e.t.userFont;
+        if (e.t.fontHop === true && e.depth > 1 && !(fmt.own && fmt.own.fontSize)) patch.fontSize = Math.max(FONT_SIZE_MIN, Math.round((fmt.fontSize || FONT_SIZE_DEFAULT) * Math.pow(0.88, e.depth - 1)));
+        return Object.keys(patch).length ? Object.assign({}, fmt, patch) : fmt;
+      }
+      const own = fmt.own || {};
+      const t = e.t;
+      const lvl = Math.min(e.depth, 2);
+      const sideAlign = (e.shape === 'text' || e.shape === 'underline') && e.depth > 0 ? (n.dir === 'left' ? 'right' : n.dir === 'right' ? 'left' : 'center') : 'center';
+      if (t.font === 'marker' || t.font === 'sketchy') ensureMarkerFont();
+      return Object.assign({}, fmt, {
+        fontFamily: own.fontFamily ? fmt.fontFamily : t.font,
+        fontSize: own.fontSize ? fmt.fontSize : this._hopFontSize(t, e.depth),
+        bold: own.bold ? fmt.bold : t.bold[lvl],
+        align: own.align ? fmt.align : sideAlign,
+      });
+    }
+
+    // Arrange branches the way a style expects: 'both' splits the root's
+    // branches between right and left, 'right' puts them all on the right.
+    _applyThemeLayout(rootIds, layout) {
+      if (!layout || layout === 'keep') return;
+      rootIds.forEach((rid) => {
+        const root = this.data.nodes[rid];
+        if (!root || this.isNodeLocked(root)) return;
+        const kids = DIRS.reduce((acc, d) => acc.concat(this.childrenOf(rid, d)), []);
+        if (!kids.length) return;
+        const nRight = layout === 'right' ? kids.length : Math.ceil(kids.length / 2);
+        const anyCollapsed = (n) => DIRS.some((d) => n.collapsedDirs && n.collapsedDirs[d]);
+        const counters = { right: 0, left: 0 };
+        kids.forEach((k, i) => {
+          const side = i < nRight ? 'right' : 'left';
+          k.dir = side;
+          k.order = side === 'left' ? kids.length - i : counters.right++;
+          this.descendants(k.id, false).forEach((d) => { d.dir = side; d.userPlaced = false; });
+          [k].concat(this.descendants(k.id, false)).forEach((n) => {
+            const c = anyCollapsed(n);
+            n.collapsedDirs = defaultCollapsed();
+            if (c) n.collapsedDirs[side] = true;
+          });
+          k.userPlaced = false;
+        });
+        const rc = anyCollapsed(root);
+        if (rc) { root.collapsedDirs = defaultCollapsed(); root.collapsedDirs.right = true; root.collapsedDirs.left = true; }
+        this._place(this._measure(root), root.x, root.y);
+      });
+    }
+
+    _rootsInScope(scope, frame) {
+      return this.data.rootIds.filter((rid) => {
+        const fr = this._frameOfRoot(this.data.nodes[rid]);
+        const frT = fr && normTheme(fr.theme);
+        if (scope === 'frame') return fr && frame && fr.id === frame.id;
+        if (scope === 'map') return !frT;
+        return !frT && !normTheme(this.data.theme);
+      });
+    }
+
+    // Set (or clear, with t = null) the style for a scope and re-lay out.
+    setTheme(scope, t, frameId) {
+      if (this.readOnly && scope !== 'global') return;
+      const frame = frameId && (this.data.frames || []).find((f) => f.id === frameId);
+      const next = t ? normTheme(t) : null;
+      const prev = this._themeChoice(scope, frame);
+      const layoutChanged = !prev || !next || prev.style !== next.style || prev.layout !== next.layout;
+      if (scope === 'global') saveGlobalTheme(next || MM_THEME_DEFAULT);
+      else if (scope === 'frame' && frame) { if (next) frame.theme = next; else delete frame.theme; }
+      else if (next) this.data.theme = next; else delete this.data.theme;
+      this._effCache.clear();
+      const roots = this._rootsInScope(scope, frame);
+      this.render();
+      requestAnimationFrame(() => {
+        if (this._destroyed) return;
+        this._syncSizes({ preserveLayout: true });
+        if (layoutChanged && roots.length) {
+          this._effCache.clear();
+          this._applyThemeLayout(roots, this._rootTheme(roots[0]).layout);
+        }
+        this.render();
+        if (scope !== 'global' || roots.length) this._emit();
+      });
+    }
+
+    // Text size for a level: the preset's sizes, or (toggle) the level-1 size
+    // shrinking each hop / held the same at every level. Root keeps its size.
+    _hopFontSize(t, depth) {
+      if (depth === 0 || t.fontHop === null) return t.sizes[Math.min(depth, 2)];
+      if (!t.fontHop) return t.sizes[1];
+      return Math.max(FONT_SIZE_MIN, Math.round(t.sizes[1] * Math.pow(0.86, depth - 1)));
+    }
+
+    resetNodeLook() {
+      if (this.readOnly) return;
+      this._applyToSelected((id) => {
+        const n = this.data.nodes[id];
+        if (!n || this.isNodeLocked(n)) return;
+        delete n.style.own;
+        if (n.format) delete n.format.own;
+      });
+      this._effCache.clear();
+      this.render();
+      this._emit();
+      requestAnimationFrame(() => this._syncSizes());
+    }
+
+    _stylePreviewSvg(id, paletteId) {
+      const t = themeCfg({ style: id, palette: paletteId || '' });
+      const c = t.pal.colors;
+      const bg = '#e8eaee';
+      const rootFill = t.pal.root.fill;
+      const ys = [14, 36, 58];
+      let g = '';
+      ys.forEach((y, i) => {
+        const col = c[i % c.length];
+        const ink = (t.pal.text && t.pal.text[i % t.pal.text.length]) || col;
+        const lc = t.pal.link || col;
+        const sw = t.taper ? Math.max(2, t.width / 3) : Math.max(1.4, t.width * 0.8);
+        if (t.link === 'arrow') g += `<path d="M48 36 L86 ${y}" stroke="${lc}" stroke-width="1.6" fill="none"/>`;
+        else g += `<path d="M48 36 C 66 36, 66 ${y}, 86 ${y}" stroke="${lc}" stroke-width="${sw.toFixed(1)}" fill="none" stroke-linecap="round"/>`;
+        if (t.shape === 'box' || t.shape === 'pastel') g += `<rect x="86" y="${y - 7}" width="34" height="14" rx="${t.shape === 'pastel' ? 4 : 7}" fill="${col}"/>`;
+        else if (t.shape === 'underline') g += `<path d="M86 ${y} H120" stroke="${col}" stroke-width="1.6"/><rect x="88" y="${y - 7}" width="24" height="3.5" rx="1.5" fill="${ink}" opacity=".8"/>`;
+        else g += `<rect x="89" y="${y - 2}" width="26" height="4" rx="2" fill="${ink}" opacity=".85"/>`;
+      });
+      const rr = t.rootShape === 'card' ? 4 : 7;
+      g += `<rect x="8" y="27" width="40" height="18" rx="${rr}" fill="${rootFill}" stroke="rgba(0,0,0,.12)"/>`;
+      return `<svg viewBox="0 0 128 72" width="128" height="72" aria-hidden="true"><rect width="128" height="72" rx="6" fill="${bg}"/>${g}</svg>`;
+    }
+
+    // Live preview of a full style choice (connections, cells, colours,
+    // text colour, thickness) drawn as a small two-sided map.
+    _themePreviewSvg(t) {
+      const pal = t.pal;
+      const c = pal.colors;
+      const dark = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark';
+      const canvas = dark ? '#161a22' : '#e8eaee';
+      const font = fontCss(t.font).replace(/'/g, '"');
+      if (t.font === 'marker' || t.font === 'sketchy') ensureMarkerFont();
+      const textFor = (fill, ink) => {
+        if (t.textMode === 'color') return t.textColor;
+        const bgc = fill && !isTransparent(fill) ? fill : canvas;
+        if (t.textMode === 'auto') return hexLum(canvas) > 0.5 ? '#1a2130' : '#f4f6fa';
+        if (fill && !isTransparent(fill)) return Math.abs(hexLum(ink) - hexLum(fill)) < 0.35 ? contrastText(fill) : ink;
+        return dark && hexLum(ink) < 0.4 ? (hexLum(fill || ink) > 0.3 ? ink : '#e6e9ef') : ink;
+      };
+      const k = t.taper ? (t.taperK || 0.6) : 1;
+      const w1 = Math.min(t.width, 26) * 0.55;
+      const W = 360;
+      const H = 150;
+      const root = { x: 140, y: 58, w: 80, h: 34 };
+      const kids = [
+        { side: 1, y: 26, label: 'Plan' }, { side: 1, y: 75, label: 'Build' }, { side: 1, y: 124, label: 'Ship' },
+        { side: -1, y: 45, label: 'Ideas' }, { side: -1, y: 105, label: 'Notes' },
+      ];
+      let g = '';
+      kids.forEach((kd, i) => {
+        const col = c[i % c.length];
+        const ink = (pal.text && pal.text[i % pal.text.length]) || col;
+        const lc = pal.link || col;
+        const cw = 70;
+        const cx = kd.side > 0 ? 262 : 98 - cw;
+        const a = { x: kd.side > 0 ? root.x + root.w : root.x, y: root.y + root.h / 2 };
+        const filled = ['box', 'pastel', 'hand', 'outline', 'tint', 'accent'].includes(t.shape);
+        const by = t.shape === 'underline' ? kd.y + 11 : kd.y;
+        const b = { x: kd.side > 0 ? cx : cx + cw, y: by };
+        if (t.link === 'sketch') {
+          const arr = this._handArrow(a, b, kd.side > 0 ? 'right' : 'left', 1, Math.max(1.4, w1 * 0.45));
+          g += `<path d="${arr.d}" stroke="${lc}" stroke-width="${arr.w.toFixed(1)}" fill="none" stroke-linecap="round"/><path d="${arr.head}" fill="${lc}"/>`;
+        } else if (t.link === 'arrow') {
+          const hd = arrowHead({ x: b.x - kd.side * 4, y: b.y }, a, 7);
+          g += `<path d="M ${a.x} ${a.y} L ${b.x - kd.side * 4} ${b.y} ${hd}" stroke="${lc}" stroke-width="${Math.max(1.2, w1 * 0.6).toFixed(1)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+        } else {
+          const dx = (b.x - a.x) * 0.5;
+          const p = [a, { x: a.x + dx, y: a.y }, { x: b.x - dx, y: b.y }, b];
+          if (t.taper) g += `<path d="${taperPath(p, Math.max(2, w1), t.point ? Math.max(3, w1 * k) : Math.max(1.4, w1 * k), t.wave ? (i % 2 ? 7 : -7) : 0, !!t.point)}" fill="${lc}"/>`;
+          else g += `<path d="M ${a.x} ${a.y} C ${p[1].x} ${p[1].y}, ${p[2].x} ${p[2].y}, ${b.x} ${b.y}" stroke="${lc}" stroke-width="${Math.max(1, w1).toFixed(1)}" fill="none" stroke-linecap="round"/>`;
+        }
+        const fill = !filled ? 'transparent' : t.shape === 'tint' ? mixHex(col, '#ffffff', 0.8) : (t.shape === 'outline' || t.shape === 'accent') ? '#ffffff' : col;
+        if (filled && t.shape === 'hand') g += i % 4 === 3
+          ? `<ellipse cx="${cx + cw / 2}" cy="${kd.y}" rx="${cw / 2}" ry="12" fill="${col}" transform="rotate(-3 ${cx + cw / 2} ${kd.y})"/>`
+          : `<path d="M ${cx + 3} ${kd.y - 12} Q ${cx + cw / 2} ${kd.y - 14} ${cx + cw - 2} ${kd.y - 11} Q ${cx + cw + 1} ${kd.y} ${cx + cw - 3} ${kd.y + 12} Q ${cx + cw / 2} ${kd.y + 13} ${cx + 2} ${kd.y + 11} Q ${cx - 1} ${kd.y} ${cx + 3} ${kd.y - 12} Z" fill="${col}"/>`;
+        else if (t.shape === 'outline') g += `<rect x="${cx}" y="${kd.y - 11}" width="${cw}" height="22" rx="6" fill="#fff" stroke="${col}" stroke-width="2"/>`;
+        else if (t.shape === 'tint') g += `<rect x="${cx}" y="${kd.y - 11}" width="${cw}" height="22" rx="6" fill="${mixHex(col, '#ffffff', 0.8)}"/>`;
+        else if (t.shape === 'accent') g += `<rect x="${cx}" y="${kd.y - 11}" width="${cw}" height="22" rx="4" fill="#fff" stroke="rgba(0,0,0,.12)"/><rect x="${cx}" y="${kd.y - 11}" width="4" height="22" rx="1" fill="${col}"/>`;
+        else if (filled) g += `<rect x="${cx}" y="${kd.y - 11}" width="${cw}" height="22" rx="${t.shape === 'pastel' ? (i % 4 === 3 ? 11 : 5) : 11}" fill="${col}"/>`;
+        if (t.shape === 'underline') g += `<path d="M ${cx} ${by} H ${cx + cw}" stroke="${lc}" stroke-width="${Math.max(1.4, w1 * 0.8).toFixed(1)}"/>`;
+        const anchor = filled ? 'middle' : kd.side > 0 ? 'start' : 'end';
+        const tx = filled ? cx + cw / 2 : kd.side > 0 ? cx + 4 : cx + cw - 4;
+        g += `<text x="${tx}" y="${kd.y + 4}" text-anchor="${anchor}" font-size="12" font-family='${font}' fill="${textFor(fill, ink)}">${kd.label}</text>`;
+      });
+      const rf = pal.root.fill;
+      const rr = t.rootShape === 'card' ? 8 : t.rootShape === 'pastel' || t.rootShape === 'hand' ? 10 : 17;
+      g += `<rect x="${root.x}" y="${root.y}" width="${root.w}" height="${root.h}" rx="${rr}" fill="${rf}" stroke="rgba(0,0,0,.12)"/>`;
+      g += `<text x="${root.x + root.w / 2}" y="${root.y + 22}" text-anchor="middle" font-size="14" font-weight="600" font-family='${font}' fill="${t.textMode === 'style' ? pal.root.text : textFor(rf, pal.root.text)}">Topic</text>`;
+      return `<svg viewBox="0 0 ${W} ${H}" width="100%" aria-hidden="true"><rect width="${W}" height="${H}" rx="8" fill="${canvas}"/>${g}</svg>`;
+    }
+
+    openStylePanel(scope, frameId) {
+      this._closeStylePanel();
+      ensureMarkerFont();
+      const frames = this.data.frames || [];
+      let frame = frameId ? frames.find((f) => f.id === frameId) : (this.selectedFrameId && frames.find((f) => f.id === this.selectedFrameId));
+      let sc = scope || (frame ? 'frame' : 'map');
+      const panel = document.createElement('div');
+      panel.className = 'mm-style-panel';
+      this.els.root.appendChild(panel);
+      this._stylePanel = panel;
+      const draw = () => {
+        const own = this._themeChoice(sc, frame);
+        const eff = sc === 'frame' ? (own || normTheme(this.data.theme) || MM_GLOBAL) : sc === 'map' ? (own || MM_GLOBAL) : MM_GLOBAL;
+        const cfg = themeCfg(eff);
+        const inherits = sc !== 'global' && !own;
+        const opt = (field, k, label, svg) => `<button type="button" data-opt="${field}" data-val="${k}" class="${(eff[field] || '') === k ? 'on' : ''}">${svg ? `<svg viewBox="0 0 40 20" width="40" height="20" aria-hidden="true">${svg}</svg>` : ''}<span>${escapeHtml(label)}</span></button>`;
+        const scopeBtn = (k, label, dis) => `<button type="button" data-scope="${k}" class="${sc === k ? 'on' : ''}"${dis ? ' disabled' : ''}>${label}</button>`;
+        panel.innerHTML = `
+          <div class="mm-sp-head"><b>Mindmap style</b><button type="button" data-sp-close title="Close">×</button></div>
+          <div class="mm-sp-scope">${scopeBtn('global', 'Global default')}${scopeBtn('map', 'This mindmap')}${scopeBtn('frame', frame ? 'Frame: ' + escapeHtml((frame.title || 'Frame').slice(0, 18)) : 'Frame', !frame)}</div>
+          ${sc !== 'global' ? `<label class="mm-sp-follow"><input type="checkbox" data-follow${inherits ? ' checked' : ''}/> Follow ${sc === 'frame' ? 'this mindmap' : 'global default'}</label>` : '<div class="mm-sp-note">Used by every mindmap and frame that has no style of its own.</div>'}
+          <div class="mm-sp-body"><div class="mm-sp-main">
+          <div class="mm-sp-label">Presets <span>sets everything below</span></div>
+          <div class="mm-sp-styles">${MM_STYLE_ORDER.map((id) => `<button type="button" data-style="${id}" class="${eff.style === id ? 'on' : ''}" title="${escapeAttr(MM_STYLES[id].hint)}">${this._stylePreviewSvg(id, eff.style === id ? eff.palette : '')}<span>${escapeHtml(MM_STYLES[id].label)}</span></button>`).join('')}</div>
+          <div class="mm-sp-label">Connections</div>
+          <div class="mm-sp-opts">${opt('branch', '', 'From preset', '')}${Object.keys(MM_BRANCHES).map((k) => opt('branch', k, MM_BRANCHES[k].label, BRANCH_ICON[k])).join('')}</div>
+          <label class="mm-sp-follow"><input type="checkbox" data-thin${cfg.hopThin ? ' checked' : ''}/> Thinner with each hop <span class="mm-sp-hint">(off = same thickness at every level)</span></label>
+          <div class="mm-sp-label">Cells</div>
+          <div class="mm-sp-opts">${opt('cell', '', 'From preset', '')}${Object.keys(MM_CELLS).map((k) => opt('cell', k, MM_CELLS[k].label, CELL_ICON[k])).join('')}</div>
+          <div class="mm-sp-label">Layout</div>
+          <div class="mm-sp-opts">${opt('layout', '', 'From preset', '')}${Object.keys(MM_LAYOUTS).map((k) => opt('layout', k, MM_LAYOUTS[k], '')).join('')}</div>
+          <div class="mm-sp-label">Font</div>
+          <div class="mm-sp-opts">${opt('font', '', 'From preset', '')}${FONT_FACES.map((f) => `<button type="button" data-opt="font" data-val="${f.id}" class="${(eff.font || '') === f.id ? 'on' : ''}" style="font-family:${escapeAttr(fontCss(f.id))}"><span>${escapeHtml(f.label)}</span></button>`).join('')}</div>
+          <label class="mm-sp-follow"><input type="checkbox" data-fsize${cfg.fontHop === null ? ' data-mixed="1"' : ''}${cfg.fontHop ? ' checked' : ''}/> Smaller text with each hop <span class="mm-sp-hint">(off = same size at every level${cfg.fontHop === null ? ' · now: preset sizes' : ''})</span></label>
+          <div class="mm-sp-label">Colour template</div>
+          <div class="mm-sp-palettes">${Object.keys(MM_PALETTES).map((pid) => `<button type="button" data-palette="${pid}" class="${cfg.paletteId === pid ? 'on' : ''}" title="${escapeAttr(MM_PALETTES[pid].label)}"><span class="mm-sp-sw">${MM_PALETTES[pid].colors.slice(0, 6).map((c) => `<i style="background:${c}"></i>`).join('')}</span><span>${escapeHtml(MM_PALETTES[pid].label)}</span></button>`).join('')}</div>
+          <div class="mm-sp-label">Text colour <span>same for every cell</span></div>
+          <div class="mm-sp-text">
+            <button type="button" data-tmode="style" class="${cfg.textMode === 'style' ? 'on' : ''}" title="Each style's own text colours">Style colours</button>
+            <button type="button" data-tmode="auto" class="${cfg.textMode === 'auto' ? 'on' : ''}" title="One colour for every cell: black or white, whichever reads best on the frame or canvas behind the tree">Auto contrast</button>
+            ${['#1a2130', '#ffffff', '#334155', '#1E3A8A', '#7C2D12', '#14532D', '#581C87', '#9F1239'].map((c) => `<button type="button" class="mm-sp-tc${cfg.textMode === 'color' && cfg.textColor.toLowerCase() === c.toLowerCase() ? ' on' : ''}" data-tcolor="${c}" style="background:${c}" title="${c}"></button>`).join('')}
+            <label class="mm-sp-tc mm-sp-tc-custom" title="Pick any colour"><input type="color" data-tcustom value="${cfg.textMode === 'color' ? cfg.textColor : '#1a2130'}"/></label>
+          </div>
+          <div class="mm-sp-label">Connection thickness <span data-wval>${cfg.width}px</span></div>
+          <div class="mm-sp-width"><input type="range" min="1" max="36" step="0.5" value="${cfg.width}" data-width/><button type="button" data-width-auto${eff.width ? '' : ' disabled'}>Auto</button></div>
+          <div class="mm-sp-actions"><button type="button" data-relayout title="Put branches back where this style places them (left/right), e.g. after you moved cells by hand">↻ Re-arrange branches</button></div>
+          </div><div class="mm-sp-side"><div class="mm-sp-label">Preview</div><div class="mm-sp-preview">${this._themePreviewSvg(cfg)}</div><div class="mm-sp-note">Esc to close</div></div></div>`;
+        panel.classList.toggle('is-inherit', inherits);
+        if (sc !== 'frame') {
+          const styled = (this.data.frames || []).filter((f) => normTheme(f.theme));
+          const covered = styled.filter((f) => this.data.rootIds.some((rid) => { const fr = this._frameOfRoot(this.data.nodes[rid]); return fr && fr.id === f.id; }));
+          if (covered.length) {
+            const note = document.createElement('div');
+            note.className = 'mm-sp-warn';
+            note.innerHTML = `${covered.length === 1 ? 'Frame' : covered.length + ' frames'} <b>${covered.map((f) => escapeHtml(f.title || 'Frame')).join(', ')}</b> ${covered.length === 1 ? 'has' : 'have'} its own style, so trees inside ${covered.length === 1 ? 'it' : 'them'} ignore these settings. <button type="button" data-unframe>Make ${covered.length === 1 ? 'it' : 'them'} follow this mindmap</button>`;
+            panel.querySelector('.mm-sp-scope').after(note);
+          }
+        }
+      };
+      const commit = (patch) => {
+        const own = this._themeChoice(sc, frame);
+        const base = own || (sc === 'frame' ? (normTheme(this.data.theme) || MM_GLOBAL) : MM_GLOBAL);
+        const next = Object.assign({}, base, patch);
+        if (patch.style) Object.assign(next, { palette: '', width: 0, branch: '', cell: '', layout: '', font: '', thin: '', fsize: '' });
+        if ('branch' in patch) { next.width = 0; next.thin = ''; }
+        if (patch.textMode || patch.textColor) this._effCache.clear();
+        this.setTheme(sc, next, frame && frame.id);
+        draw();
+      };
+      panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+      panel.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') this._closeStylePanel(); });
+      this._stylePanelEsc = (e) => { if (e.key === 'Escape' && this._stylePanel) { e.preventDefault(); e.stopPropagation(); this._closeStylePanel(); } };
+      document.addEventListener('keydown', this._stylePanelEsc, true);
+      panel.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b || b.disabled) return;
+        if (b.hasAttribute('data-sp-close')) return this._closeStylePanel();
+        if (b.dataset.scope) { sc = b.dataset.scope; return draw(); }
+        if (b.hasAttribute('data-unframe')) {
+          (this.data.frames || []).forEach((f) => { delete f.theme; });
+          this.setTheme(sc === 'global' ? 'global' : 'map', this._themeChoice(sc === 'global' ? 'global' : 'map'));
+          return draw();
+        }
+        if (b.dataset.style) return commit({ style: b.dataset.style });
+        if (b.dataset.palette) return commit({ palette: b.dataset.palette });
+        if (b.dataset.opt) return commit({ [b.dataset.opt]: b.dataset.val });
+        if (b.dataset.tmode) return commit({ textMode: b.dataset.tmode });
+        if (b.dataset.tcolor) return commit({ textMode: 'color', textColor: b.dataset.tcolor });
+        if (b.hasAttribute('data-width-auto')) return commit({ width: 0 });
+        if (b.hasAttribute('data-relayout')) {
+          const roots = sc === 'global' ? this._rootsInScope('global') : this._rootsInScope(sc, frame);
+          if (!roots.length) return;
+          this._applyThemeLayout(roots, this._rootTheme(roots[0]).layout === 'keep' ? 'both' : this._rootTheme(roots[0]).layout);
+          this.render();
+          this._emit();
+        }
+      });
+      panel.addEventListener('input', (e) => {
+        if (e.target.matches('[data-width]')) {
+          const v = panel.querySelector('[data-wval]');
+          if (v) v.textContent = e.target.value + 'px';
+          // Live preview; the change event below saves it (one undo step).
+          const own = this._themeChoice(sc, frame);
+          const base = own || (sc === 'frame' ? (normTheme(this.data.theme) || MM_GLOBAL) : MM_GLOBAL);
+          const tmp = Object.assign({}, base, { width: Number(e.target.value) });
+          if (sc === 'global') MM_GLOBAL = tmp;
+          else if (sc === 'frame' && frame) frame.theme = tmp;
+          else this.data.theme = tmp;
+          this.render();
+          const pv = panel.querySelector('.mm-sp-preview');
+          if (pv) pv.innerHTML = this._themePreviewSvg(themeCfg(tmp));
+        }
+      });
+      panel.addEventListener('change', (e) => {
+        if (e.target.matches('[data-width]')) commit({ width: Number(e.target.value) });
+        if (e.target.matches('[data-thin]')) commit({ thin: e.target.checked ? 'on' : 'off' });
+        if (e.target.matches('[data-fsize]')) commit({ fsize: e.target.checked ? 'on' : 'off' });
+        if (e.target.matches('[data-tcustom]')) commit({ textMode: 'color', textColor: e.target.value });
+        if (e.target.matches('[data-follow]')) {
+          if (e.target.checked) this.setTheme(sc, null, frame && frame.id);
+          else this.setTheme(sc, sc === 'frame' ? (normTheme(this.data.theme) || MM_GLOBAL) : MM_GLOBAL, frame && frame.id);
+          draw();
+        }
+      });
+      draw();
+    }
+
+    _closeStylePanel() {
+      if (this._stylePanel) { this._stylePanel.remove(); this._stylePanel = null; }
+      if (this._stylePanelEsc) { document.removeEventListener('keydown', this._stylePanelEsc, true); this._stylePanelEsc = null; }
+    }
+
     recolorVibrant() {
       if (this.readOnly) return;
       this.data.levelColorIdx = {};
@@ -3924,7 +4634,8 @@
       const clip = this._getStyleClip();
       this.els.menu.innerHTML = `
         <div class="mm-menu-label">Mindmap</div>
-        <button type="button" data-blank="recolor">🎨 Recolor with vibrant colors</button>
+        <button type="button" data-blank="style">🎨 Mindmap style…</button>
+        <button type="button" data-blank="recolor">Recolor classic levels</button>
         <button type="button" data-blank="add-root">＋ New root node</button>
         ${clip ? '<div class="mm-menu-sep"></div><div class="mm-menu-label">Copied style</div><div class="mm-style-chip" style="background:' + (clip.style.fill || '#fff') + ';border-color:' + (clip.style.border || '#ccc') + ';color:' + (clip.style.textColor || '#111') + '">Aa</div>' : ''}
       `;
@@ -3933,6 +4644,7 @@
         const a = b.dataset.blank;
         this._closeMenu();
         if (a === 'recolor') this.recolorVibrant();
+        if (a === 'style') this.openStylePanel();
         if (a === 'add-root') this.addNewRoot();
       }));
     }
@@ -4484,8 +5196,8 @@
     _styleTextEditor(n) {
       const ta = this._textEdit && this._textEdit.el;
       if (!ta || !n) return;
-      const fmt = n.format || defaultFormat();
-      ta.style.color = n.style.textColor || '#1a2130';
+      const fmt = this._effFormat(n);
+      ta.style.color = this._eff(n).text || '#1a2130';
       ta.style.fontWeight = fmt.bold ? '700' : '500';
       ta.style.fontStyle = fmt.italic ? 'italic' : 'normal';
       ta.style.textDecoration = fmt.underline ? 'underline' : 'none';
@@ -4673,6 +5385,7 @@
 
     render() {
       if (this._destroyed) return;
+      this._effCache.clear();
       const editing = this.editingId && this.data.nodes[this.editingId];
       if (editing && editing.type === 'text') {
         this._paintNodeStyles(editing);
@@ -4801,8 +5514,52 @@
         if (parent.collapsedDirs && parent.collapsedDirs[child.dir]) return;
         const a = this._edgePoint(parent, child.dir);
         const b = this._edgePoint(child, OPP[child.dir]);
+        const ce = this._eff(child);
+        if (!ce.t.plain) {
+          const selected = this.selectedLinkId === child.id;
+          const color = selected ? '#5ea882' : ce.link;
+          const dash = linkDash(child.style.linkStyle || parent.style.linkStyle);
+          let d;
+          if (ce.t.link === 'sketch') {
+            const arr = this._handArrow(a, b, child.dir, ce.depth, ce.w);
+            parts.push(`<path class="mm-link-hit" data-link="${escapeAttr(child.id)}" d="${arr.d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round"/>`);
+            parts.push(`<path class="mm-link-draw${selected ? ' is-selected' : ''}" data-link="${escapeAttr(child.id)}" d="${arr.d}" fill="none" stroke="${escapeAttr(color)}" stroke-width="${arr.w}" stroke-linecap="round" stroke-linejoin="round"${dash && !selected ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
+            parts.push(`<path class="mm-link-draw" data-link="${escapeAttr(child.id)}" d="${arr.head}" fill="${escapeAttr(color)}" stroke="${escapeAttr(color)}" stroke-width="1.5" stroke-linejoin="round"/>`);
+            return;
+          }
+          if (ce.t.link === 'arrow') {
+            const arr = this._sketchArrow(a, b, child.dir, ce.depth, ce.w);
+            d = arr.d;
+            parts.push(`<path class="mm-link-hit" data-link="${escapeAttr(child.id)}" d="${d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round"/>`);
+            parts.push(`<path class="mm-link-draw${selected ? ' is-selected' : ''}" data-link="${escapeAttr(child.id)}" d="${d} ${arr.head}" fill="none" stroke="${escapeAttr(color)}" stroke-width="${ce.w}" stroke-linecap="round" stroke-linejoin="round"${dash && !selected ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
+            return;
+          }
+          const pts = this._bezierPts(a, b, child.dir, child.style.linkCurve);
+          d = this._bezier(a, b, child.dir, child.style.linkCurve);
+          parts.push(`<path class="mm-link-hit" data-link="${escapeAttr(child.id)}" d="${d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round"/>`);
+          const hasKids = this.childrenOf(child.id, child.dir).length > 0 && !(child.collapsedDirs && child.collapsedDirs[child.dir]);
+          const w0 = ce.w0;
+          const w1 = ce.w;
+          if (ce.t.under && ce.shape === 'text' && hasKids && (child.dir === 'left' || child.dir === 'right')) {
+            // The branch carries on underneath the cell's text, like Coggle.
+            const y = child.y + child.h - 4;
+            const x1 = child.dir === 'right' ? child.x + child.w : child.x;
+            parts.push(`<path class="mm-link-draw" data-link="${escapeAttr(child.id)}" d="M ${b.x} ${y} L ${x1} ${y}" fill="none" stroke="${escapeAttr(color)}" stroke-width="${Math.max(1.4, w1).toFixed(1)}" stroke-linecap="round"/>`);
+          }
+          const amp = ce.t.wave ? this._waveAmp(child.id, a, b) : 0;
+          if (amp && parts.length) parts[parts.length - 1] = parts[parts.length - 1].replace(`d="${d}"`, `d="${polyD(branchPts(pts, amp, 44))}"`);
+          if (ce.w0 !== ce.w && !dash) {
+            const point = ce.t.point && !(ce.t.under && ce.shape === 'text' && hasKids);
+            parts.push(`<path class="mm-link-draw mm-link-taper${selected ? ' is-selected' : ''}" data-link="${escapeAttr(child.id)}" d="${taperPath(pts, w0, point ? Math.max(w1, 3) : w1, amp, point)}" fill="${escapeAttr(color)}" stroke="none"/>`);
+          } else if (amp) {
+            parts.push(`<path class="mm-link-draw${selected ? ' is-selected' : ''}" data-link="${escapeAttr(child.id)}" d="${polyD(branchPts(pts, amp, 44))}" fill="none" stroke="${escapeAttr(color)}" stroke-width="${ce.w}" stroke-linecap="round" stroke-linejoin="round"${dash && !selected ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
+          } else {
+            parts.push(`<path class="mm-link-draw${selected ? ' is-selected' : ''}" data-link="${escapeAttr(child.id)}" d="${d}" fill="none" stroke="${escapeAttr(color)}" stroke-width="${ce.w}" stroke-linecap="round"${dash && !selected ? ` stroke-dasharray="${escapeAttr(dash)}"` : ''}/>`);
+          }
+          return;
+        }
         const color = resolveVisibleLinkColor(this.data, child, parent, a, b, (x, y) => this._frameAtWorld(x, y));
-        const w = child.style.linkWidth || 2.25;
+        const w = ce.w;
         const dash = linkDash(child.style.linkStyle || parent.style.linkStyle);
         const d = this._bezier(a, b, child.dir, child.style.linkCurve);
         const selected = this.selectedLinkId === child.id;
@@ -4847,6 +5604,14 @@
     }
 
     _edgePoint(node, dir) {
+      const e = node && node.style && this._eff(node);
+      if (e && e.shape === 'underline' && (dir === 'right' || dir === 'left')) {
+        return { x: dir === 'right' ? node.x + node.w : node.x, y: node.y + node.h - 1 };
+      }
+      // Coggle branches run under a plain-text cell: attach at its bottom edge.
+      if (e && !e.t.plain && e.t.under && e.depth > 0 && e.shape === 'text' && (dir === 'right' || dir === 'left') && this.childrenOf(node.id).length) {
+        return { x: dir === 'right' ? node.x + node.w : node.x, y: node.y + node.h - 4 };
+      }
       if (dir === 'right') return { x: node.x + node.w, y: node.y + node.h / 2 };
       if (dir === 'left') return { x: node.x, y: node.y + node.h / 2 };
       if (dir === 'down') return { x: node.x + node.w / 2, y: node.y + node.h };
@@ -4878,7 +5643,7 @@
       return this._bezier(a, b, dir, child && child.style && child.style.linkCurve);
     }
 
-    _bezier(a, b, dir, curve) {
+    _bezierPts(a, b, dir, curve) {
       const t = clamp(curve == null ? 50 : Number(curve), 0, 100) / 100;
       if (dir === 'right' || dir === 'left') {
         const s = dir === 'right' ? 1 : -1;
@@ -4886,23 +5651,111 @@
         const dy = Math.abs(b.y - a.y);
         const c = Math.max(52, dx * (0.22 + t * 0.5), Math.min(dy * 0.42, Math.max(dx * 0.85, 52)));
         const e = Math.max(28, Math.min(c, dx * 0.55));
-        return `M ${a.x} ${a.y} C ${a.x + s * c} ${a.y}, ${b.x - s * e} ${b.y}, ${b.x} ${b.y}`;
+        return [a, { x: a.x + s * c, y: a.y }, { x: b.x - s * e, y: b.y }, b];
       }
       const s = dir === 'down' ? 1 : -1;
       const dy = Math.abs(b.y - a.y);
       const dx = Math.abs(b.x - a.x);
       const c = Math.max(52, dy * (0.22 + t * 0.5), Math.min(dx * 0.42, Math.max(dy * 0.85, 52)));
       const e = Math.max(28, Math.min(c, dy * 0.55));
-      return `M ${a.x} ${a.y} C ${a.x} ${a.y + s * c}, ${b.x} ${b.y - s * e}, ${b.x} ${b.y}`;
+      return [a, { x: a.x, y: a.y + s * c }, { x: b.x, y: b.y - s * e }, b];
+    }
+
+    // Wave size for a tree-branch connection: grows with length, bends one
+    // way or the other per link so neighbours don't move in lockstep.
+    _waveAmp(id, a, b) {
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 90) return 0;
+      // Bend toward where the branch is heading (up or down), so siblings
+      // fan out like a tree instead of crossing.
+      const dy = b.y - a.y;
+      const dxs = b.x >= a.x ? 1 : -1;
+      const toward = Math.abs(dy) < 6 ? 1 : (dy < 0 ? 1 : -1);
+      return Math.min(16, len * 0.06) * toward * dxs;
+    }
+
+    _bezier(a, b, dir, curve) {
+      const p = this._bezierPts(a, b, dir, curve);
+      return `M ${p[0].x} ${p[0].y} C ${p[1].x} ${p[1].y}, ${p[2].x} ${p[2].y}, ${p[3].x} ${p[3].y}`;
+    }
+
+    // Hand-drawn connector: a short, heavy arrow in the middle of the gap from
+    // the root; a curled hook (or a short straight arrow) between other cells.
+    // Returns { d, head } where head is a filled triangle.
+    _handArrow(a, b, dir, depth, w) {
+      const tri = (tip, from, size) => {
+        const ang = Math.atan2(tip.y - from.y, tip.x - from.x);
+        const p1 = { x: tip.x - size * Math.cos(ang - 0.5), y: tip.y - size * Math.sin(ang - 0.5) };
+        const p2 = { x: tip.x - size * Math.cos(ang + 0.5), y: tip.y - size * Math.sin(ang + 0.5) };
+        return `M ${tip.x.toFixed(1)} ${tip.y.toFixed(1)} L ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} Z`;
+      };
+      if (depth <= 1 || (dir !== 'left' && dir !== 'right')) {
+        const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const ux = (b.x - a.x) / len;
+        const uy = (b.y - a.y) / len;
+        const g = Math.min(len * 0.22, 40);
+        const p0 = { x: a.x + ux * g, y: a.y + uy * g };
+        const tip = { x: b.x - ux * g, y: b.y - uy * g };
+        const hs = Math.max(12, w * 4.2);
+        const end = { x: tip.x - ux * hs * 0.7, y: tip.y - uy * hs * 0.7 };
+        return { d: `M ${p0.x.toFixed(1)} ${p0.y.toFixed(1)} L ${end.x.toFixed(1)} ${end.y.toFixed(1)}`, head: tri(tip, p0, hs), w: w * 1.7 };
+      }
+      const s = dir === 'right' ? 1 : -1;
+      const gap = Math.min(18, Math.abs(b.x - a.x) * 0.2);
+      const tip = { x: b.x - s * gap, y: b.y };
+      const hs = Math.max(9, w * 3.2);
+      const end = { x: tip.x - s * hs * 0.7, y: tip.y };
+      const x0 = a.x + s * gap;
+      if (Math.abs(b.y - a.y) < 10) return { d: `M ${x0} ${b.y} L ${end.x} ${end.y}`, head: tri(tip, { x: x0, y: b.y }, hs), w };
+      const vy = b.y > a.y ? 1 : -1;
+      const y0 = a.y + vy * Math.min(14, Math.abs(b.y - a.y) * 0.25);
+      const xm = x0 + s * Math.min(26, Math.abs(end.x - x0) * 0.45);
+      const d = `M ${x0} ${y0} C ${xm} ${y0}, ${xm - s * 4} ${b.y}, ${xm + s * 6} ${b.y} L ${end.x} ${end.y}`;
+      return { d, head: tri(tip, { x: tip.x - s * 10, y: tip.y }, hs), w };
+    }
+
+    // Sketch-style connector: a straight arrow from the root, a hooked arrow
+    // (out, turn, across) between other cells. Returns { d, head }.
+    _sketchArrow(a, b, dir, depth, w) {
+      const gap = 12;
+      const head = Math.max(9, w * 3.4);
+      if (depth <= 1 || (dir !== 'left' && dir !== 'right')) {
+        const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const ux = (b.x - a.x) / len;
+        const uy = (b.y - a.y) / len;
+        const p0 = { x: a.x + ux * gap, y: a.y + uy * gap };
+        const p1 = { x: b.x - ux * gap, y: b.y - uy * gap };
+        return { d: `M ${p0.x} ${p0.y} L ${p1.x} ${p1.y}`, head: arrowHead(p1, p0, head) };
+      }
+      const s = dir === 'right' ? 1 : -1;
+      const tip = { x: b.x - s * gap, y: b.y };
+      if (Math.abs(b.y - a.y) < 8) return { d: `M ${a.x + s * gap} ${a.y} L ${tip.x} ${b.y}`, head: arrowHead(tip, { x: tip.x - s * 10, y: b.y }, head) };
+      const x0 = a.x + s * gap;
+      const xm = x0 + s * 18;
+      const r = Math.min(14, Math.abs(b.y - a.y) / 2);
+      const vy = b.y > a.y ? 1 : -1;
+      const d = `M ${x0} ${a.y} Q ${xm} ${a.y} ${xm} ${a.y + vy * r} L ${xm} ${b.y - vy * r} Q ${xm} ${b.y} ${xm + s * r} ${b.y} L ${tip.x} ${tip.y}`;
+      return { d, head: arrowHead(tip, { x: tip.x - s * 10, y: tip.y }, head) };
     }
 
     _paintNodeStyles(n) {
       const el = this.els.world.querySelector(`.mm-node[data-id="${CSS.escape(n.id)}"]`);
       if (!el) return null;
-      el.style.background = isTransparent(n.style.fill) ? 'transparent' : n.style.fill;
-      el.style.borderColor = isTransparent(n.style.border) ? 'transparent' : (n.style.border || n.style.fill);
-      el.style.color = n.style.textColor || '#1a2130';
-      const fmt = n.format || defaultFormat();
+      const e = this._eff(n);
+      SHAPES.forEach((sh) => el.classList.toggle('mm-sh-' + sh, !e.t.plain && e.shape === sh));
+      el.classList.toggle('mm-sh-pill', !e.t.plain && !!e.pill);
+      el.classList.toggle('mm-sh-empty', !e.t.plain && !!e.empty);
+      if (!e.t.plain && e.shape === 'hand') {
+        let h = 0;
+        for (let i = 0; i < n.id.length; i++) h = (h * 31 + n.id.charCodeAt(i)) >>> 0;
+        el.dataset.hv = String(h % 4);
+      } else delete el.dataset.hv;
+      el.style.borderBottom = '';
+      el.style.background = isTransparent(e.fill) ? 'transparent' : e.fill;
+      el.style.borderColor = isTransparent(e.border) ? 'transparent' : (e.border || e.fill);
+      if (!e.t.plain && e.shape === 'underline') el.style.borderBottom = `${Math.max(1.5, e.w)}px solid ${e.link}`;
+      el.style.color = e.text || '#1a2130';
+      const fmt = this._effFormat(n);
       el.style.fontWeight = fmt.bold ? '700' : '500';
       el.style.fontStyle = fmt.italic ? 'italic' : 'normal';
       el.style.textDecoration = fmt.underline ? 'underline' : 'none';
@@ -4942,7 +5795,7 @@
       const dragMoving = this._drag && this._drag.moved && (this._drag.kind === 'node-drag' || this._drag.kind === 'move-subtree' || this._drag.kind === 'move-tree' || this._drag.kind === 'group-drag');
       const inDrag = !!(dragMoving && (this._drag.origins || []).some((o) => o.id === n.id));
       el.classList.toggle('is-dragging', inDrag);
-      el.classList.toggle('is-clear', isTransparent(n.style.fill) && isTransparent(n.style.border));
+      el.classList.toggle('is-clear', isTransparent(this._eff(n).fill) && isTransparent(this._eff(n).border));
       const locked = this.isNodeLocked(n);
       el.classList.toggle('is-locked', locked);
       el.classList.toggle('has-note-open', !!(n.noteOpen && this._canNote(n)));
@@ -5771,11 +6624,11 @@
         btn.addEventListener('click', (e) => {
           e.preventDefault();
           const act = btn.getAttribute('data-fmt');
-          if (act === 'bold') this.applyFormat(n.id, { bold: !n.format.bold });
+          if (act === 'bold') this.applyFormat(n.id, { bold: !this._effFormat(n).bold });
           if (act === 'italic') this.applyFormat(n.id, { italic: !n.format.italic });
           if (act === 'underline') this.applyFormat(n.id, { underline: !n.format.underline });
-          if (act === 'smaller') this.applyFormat(n.id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
-          if (act === 'larger') this.applyFormat(n.id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+          if (act === 'smaller') this.applyFormat(n.id, { fontSize: clamp(this._effFormat(n).fontSize - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+          if (act === 'larger') this.applyFormat(n.id, { fontSize: clamp(this._effFormat(n).fontSize + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
           if (act === 'align-left') this.applyFormat(n.id, { align: 'left' });
           if (act === 'align-center') this.applyFormat(n.id, { align: 'center' });
           if (act === 'align-right') this.applyFormat(n.id, { align: 'right' });
@@ -5823,6 +6676,7 @@
       if (act === 'tool-frame') this._setTool(this.tool === 'frame' ? 'select' : 'frame');
       if (act === 'tool-connect') this._setTool(this.tool === 'connect' ? 'select' : 'connect');
       if (act === 'add-root') this.addNewRoot();
+      if (act === 'style') { if (this._stylePanel) this._closeStylePanel(); else this.openStylePanel(); }
       if (act === 'undo') this.undo();
       if (act === 'redo') this.redo();
       if (act === 'zoom-in') this.setZoom(this.data.viewport.zoom * 1.12);
@@ -5917,8 +6771,8 @@
           a,
           b,
           dir: child.dir,
-          color: resolveVisibleLinkColor(this.data, child, parent, a, b, (x, y) => this._frameAtWorld(x, y)),
-          width: child.style.linkWidth || 2.25,
+          color: this._eff(child).t.plain ? resolveVisibleLinkColor(this.data, child, parent, a, b, (x, y) => this._frameAtWorld(x, y)) : this._eff(child).link,
+          width: this._eff(child).t.plain ? (child.style.linkWidth || 2.25) : Math.max(this._eff(child).w, (this._eff(child).w + this._eff(child).w0) / 2),
           dash: linkDash(child.style.linkStyle || parent.style.linkStyle),
         });
       });
@@ -5939,7 +6793,16 @@
           dash: linkDash((from.style && from.style.linkStyle) || (to.style && to.style.linkStyle)),
         });
       });
-      return { nodes: this.nodesArr().filter((n) => !this.hiddenByCollapse(n.id)).map(clone), frames: clone(this.data.frames || []), links };
+      const effNode = (n) => {
+        const c = clone(n);
+        const e = this._eff(n);
+        if (!e.t.plain) {
+          Object.assign(c.style, { fill: e.fill, border: e.border, textColor: e.text });
+          Object.assign(c.format, this._effFormat(n));
+        }
+        return c;
+      };
+      return { nodes: this.nodesArr().filter((n) => !this.hiddenByCollapse(n.id)).map(effNode), frames: clone(this.data.frames || []), links };
     }
 
     _now() {
@@ -6355,6 +7218,7 @@
         <button type="button" data-m="paste"${this.isNodeLocked(n) ? ' disabled' : ''}>Paste as child</button>
         <button type="button" data-m="copy-style">Copy style <span class="mm-kbd">⌥⌘C</span></button>
         <button type="button" data-m="paste-style"${this.isNodeLocked(n) || !this._getStyleClip() ? ' disabled' : ''}>Paste style <span class="mm-kbd">⌥⌘V</span></button>
+        <button type="button" data-m="reset-look"${this.isNodeLocked(n) || !((n.style && n.style.own) || (n.format && n.format.own)) ? ' disabled' : ''}>Reset look to style</button>
         <button type="button" data-m="delete"${this.isNodeLocked(n) ? ' disabled' : ''}>Delete <span class="mm-kbd">⌫</span></button>
       `;
       this._placeMenu(x, y);
@@ -6489,6 +7353,7 @@
         <button type="button" data-m="rename"${f.locked ? ' disabled' : ''}>Rename</button>
         <button type="button" data-m="fit"${f.locked ? ' disabled' : ''}>Fit to content</button>
         <button type="button" data-m="expand">Expand all children</button>
+        <button type="button" data-m="style">🎨 Style for this frame…</button>
         <button type="button" data-m="duplicate">Duplicate</button>
         ${this.opts && this.opts.getPath ? '<button type="button" data-m="copylink">Copy link</button>' : ''}
         <button type="button" data-m="front">Bring to front</button>
@@ -6816,16 +7681,17 @@
       if (m === 'align-center') this.applyFormat(id, { align: 'center' });
       if (m === 'align-right') this.applyFormat(id, { align: 'right' });
       if (m === 'font') this.applyFormat(id, { fontFamily: btn.getAttribute('data-font') });
-      if (m === 'bold') this.applyFormat(id, { bold: !n.format.bold });
+      if (m === 'bold') this.applyFormat(id, { bold: !this._effFormat(n).bold });
       if (m === 'italic') this.applyFormat(id, { italic: !n.format.italic });
       if (m === 'underline') this.applyFormat(id, { underline: !n.format.underline });
-      if (m === 'size-up') this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
-      if (m === 'size-down') this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
-      if (m === 'link-w-up') this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) + 0.5, 1, 6) });
-      if (m === 'link-w-down') this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) - 0.5, 1, 6) });
+      if (m === 'size-up') this.applyFormat(id, { fontSize: clamp(this._effFormat(n).fontSize + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+      if (m === 'size-down') this.applyFormat(id, { fontSize: clamp(this._effFormat(n).fontSize - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) });
+      if (m === 'link-w-up') this.applyStyle(id, { linkWidth: clamp(this._eff(n).w + (this._eff(n).w >= 8 ? 2 : 0.5), 1, 40) });
+      if (m === 'link-w-down') this.applyStyle(id, { linkWidth: clamp(this._eff(n).w - (this._eff(n).w > 8 ? 2 : 0.5), 1, 40) });
       if (m === 'copy') this.copySubtree(id);
       if (m === 'copy-style') this.copyStyle(id);
       if (m === 'paste-style') this.pasteStyle();
+      if (m === 'reset-look') { this._closeMenu(); this.resetNodeLook(); return; }
       if (m === 'notes') {
         this._toggleNote(n);
         this._closeMenu();
@@ -6878,10 +7744,10 @@
       if (m === 'bold') { this._groupToggleFormat('bold'); this._closeMenu(); return; }
       if (m === 'italic') { this._groupToggleFormat('italic'); this._closeMenu(); return; }
       if (m === 'underline') { this._groupToggleFormat('underline'); this._closeMenu(); return; }
-      if (m === 'size-up') each((id, n) => this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
-      if (m === 'size-down') each((id, n) => this.applyFormat(id, { fontSize: clamp((n.format.fontSize || FONT_SIZE_DEFAULT) - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
-      if (m === 'link-w-up') each((id, n) => this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) + 0.5, 1, 6) }));
-      if (m === 'link-w-down') each((id, n) => this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) - 0.5, 1, 6) }));
+      if (m === 'size-up') each((id, n) => this.applyFormat(id, { fontSize: clamp(this._effFormat(n).fontSize + 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
+      if (m === 'size-down') each((id, n) => this.applyFormat(id, { fontSize: clamp(this._effFormat(n).fontSize - 1, FONT_SIZE_MIN, FONT_SIZE_MAX) }));
+      if (m === 'link-w-up') each((id, n) => this.applyStyle(id, { linkWidth: clamp(this._eff(n).w + (this._eff(n).w >= 8 ? 2 : 0.5), 1, 40) }));
+      if (m === 'link-w-down') each((id, n) => this.applyStyle(id, { linkWidth: clamp(this._eff(n).w - (this._eff(n).w > 8 ? 2 : 0.5), 1, 40) }));
       if (m === 'type') each((id) => this.setNodeType(id, btn.getAttribute('data-type')));
       if (m === 'align-box') { this.alignSelected(btn.getAttribute('data-box')); this._closeMenu(); return; }
       if (m === 'detach') { this.detachSelected(); this._closeMenu(); return; }
@@ -6908,6 +7774,7 @@
         return;
       }
       if (m === 'fill') this.applyFrameColor(id, btn.getAttribute('data-color'));
+      if (m === 'style') { this._closeMenu(); this.openStylePanel('frame', id); return; }
       if (m === 'export') {
         const format = btn.getAttribute('data-format');
         this._closeMenu();
