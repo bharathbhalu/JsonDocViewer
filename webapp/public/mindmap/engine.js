@@ -28,18 +28,20 @@
   // Below this zoom the world is not kept on a fixed-scale GPU layer (see .is-gpu-world).
   const GPU_WORLD_MIN_ZOOM = 0.35;
   const EXPORT_V = 18; // must match MindmapExport._v in export.js
+  // Vibrant palettes: light tints (readable with dark text), bright
+  // mid-tones and deep colours (text turns white automatically on dark fills).
   const NODE_PALETTE = [
-    '#ffffff', '#F3F5F8', '#E8F0FB', '#E5F3EA', '#FBF3DA', '#F8E8EE', '#EEE7F6', '#E1F3F4',
-    '#F8E9DC', '#ECEEF2', '#C9D8EE', '#C5E0CD', '#EED9A4', '#E8BFC9', '#D3C2E6', '#B5D8DE',
-    '#E5C4A8', '#C7CCD4', '#6E8CB5', '#5E9A76', '#C4A45A', '#B86B76', '#7A649E', '#4E8A93',
+    '#ffffff', '#F1F5F9', '#FFE4E6', '#FFEDD5', '#FEF3C7', '#DCFCE7', '#CFFAFE', '#DBEAFE',
+    '#E11D48', '#EA580C', '#D97706', '#16A34A', '#0891B2', '#2563EB', '#7C3AED', '#DB2777',
+    '#9F1239', '#9A3412', '#92400E', '#166534', '#155E75', '#1E3A8A', '#4C1D95', '#334155',
   ];
   const TEXT_PALETTE = [
-    '#1a2130', '#4b5563', '#6b7280', '#9aa3b2', '#f4f6fa', '#ffffff', '#c62828', '#1565c0',
-    '#2e7d32', '#6a1b9a', '#e65100', '#00695c', '#ad1457', '#283593', '#ef6c00', '#000000',
+    '#0f172a', '#334155', '#64748b', '#ffffff', '#e11d48', '#ea580c', '#ca8a04', '#16a34a',
+    '#0d9488', '#0891b2', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3', '#db2777', '#000000',
   ];
   const LINK_PALETTE = [
-    '#8AA8D4', '#7CBC9A', '#D4B85A', '#D48AA0', '#A88BC8', '#6FB3C0', '#D4A07A', '#90A4AE',
-    '#1565c0', '#2e7d32', '#c62828', '#6a1b9a', '#e65100', '#00838f', '#37474f', '#1a2130',
+    '#E11D48', '#EA580C', '#CA8A04', '#65A30D', '#16A34A', '#0D9488', '#0891B2', '#0284C7',
+    '#2563EB', '#4F46E5', '#7C3AED', '#9333EA', '#C026D3', '#DB2777', '#475569', '#0F172A',
   ];
   const LINK_STYLES = [
     { id: 'solid', label: 'Solid', dash: '' },
@@ -151,7 +153,7 @@
   }
 
   function defaultStyle() {
-    return { fill: '#D7E3FC', border: '#D7E3FC', textColor: '#1a2130', textColorManual: false, fillColorManual: false, linkColor: '#8AA8D4', linkWidth: 2.25, linkStyle: 'solid', linkCurve: 50, linkColorManual: false };
+    return { fill: '#4338CA', border: '#4338CA', textColor: '#ffffff', textColorManual: false, fillColorManual: false, linkColor: '#4338CA', linkWidth: 2.25, linkStyle: 'solid', linkCurve: 50, linkColorManual: false };
   }
 
   const FONT_FACES = [
@@ -244,6 +246,8 @@
   }
 
   function randomLevelColor(used) {
+    const vivid = firstUnused(VIVID_LINKS, used);
+    if (vivid) return vivid;
     const taken = new Set((used || []).map((c) => String(c).toLowerCase()));
     for (let i = 0; i < 28; i++) {
       const hue = Math.floor(Math.random() * 360);
@@ -255,12 +259,23 @@
     return hslToHex(Math.floor(Math.random() * 360), 60, 46);
   }
 
+  // Automatic level colours: curated vivid sets, used in order (then random).
+  // Deep, rich colours: fills take white text automatically (contrastText).
+  const VIVID_FILLS = ['#2563EB', '#16A34A', '#D97706', '#DB2777', '#7C3AED', '#0891B2', '#EA580C', '#65A30D', '#E11D48', '#4F46E5', '#0D9488', '#C026D3'];
+  const VIVID_LINKS = ['#1D4ED8', '#15803D', '#B45309', '#BE185D', '#6D28D9', '#0E7490', '#C2410C', '#4D7C0F', '#BE123C', '#4338CA', '#0F766E', '#A21CAF'];
+  const firstUnused = (list, used) => {
+    const taken = new Set((used || []).map((c) => String(c).toLowerCase()));
+    return list.find((c) => !taken.has(c.toLowerCase())) || null;
+  };
+
   function randomLevelFill(used) {
+    const vivid = firstUnused(VIVID_FILLS, used);
+    if (vivid) return vivid;
     const taken = new Set((used || []).map((c) => String(c).toLowerCase()));
     for (let i = 0; i < 32; i++) {
       const hue = Math.floor(Math.random() * 360);
-      const sat = 44 + Math.floor(Math.random() * 28);
-      const lit = 76 + Math.floor(Math.random() * 12);
+      const sat = 62 + Math.floor(Math.random() * 24);
+      const lit = 36 + Math.floor(Math.random() * 10);
       const hex = hslToHex(hue, sat, lit);
       if (!taken.has(hex.toLowerCase())) return hex;
     }
@@ -286,70 +301,63 @@
     return hue;
   }
 
+  // Root nodes: deep colours (white text), a different one per tree.
+  const ROOT_FILLS = ['#3730A3', '#1E40AF', '#5B21B6', '#9D174D', '#9A3412', '#115E59', '#075985', '#9F1239', '#6B21A8', '#155E75', '#166534', '#854D0E', '#86198F', '#334155'];
   function randomRootFill(used) {
-    const usedHues = (used || []).map(hueOfHex).filter((h) => h != null);
-    const bases = [210, 198, 168, 148, 38, 22, 350, 328, 268, 186, 16, 250];
-    for (let i = 0; i < 48; i++) {
-      let hue = bases[Math.floor(Math.random() * bases.length)] + Math.floor(Math.random() * 18) - 9;
-      hue = ((hue % 360) + 360) % 360;
-      let sat = 36 + Math.floor(Math.random() * 14);
-      let lit = 76 + Math.floor(Math.random() * 7);
-      if (hue >= 28 && hue <= 70) {
-        sat = 30 + Math.floor(Math.random() * 10);
-        lit = 80 + Math.floor(Math.random() * 5);
-      }
-      if (i < 36 && usedHues.some((u) => {
-        const d = Math.abs(u - hue) % 360;
-        return Math.min(d, 360 - d) < 28;
-      })) continue;
-      return hslToHex(hue, sat, lit);
-    }
-    return hslToHex(bases[Math.floor(Math.random() * bases.length)], 42, 78);
+    const taken = new Set((used || []).map((c) => String(c).toLowerCase()));
+    const free = ROOT_FILLS.filter((c) => !taken.has(c.toLowerCase()));
+    const pool = free.length ? free : ROOT_FILLS;
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
-  function fillForLevel(data, depth) {
-    if (depth < 1) return null;
-    if (!data.levelFillColors || typeof data.levelFillColors !== 'object' || Array.isArray(data.levelFillColors)) {
-      data.levelFillColors = {};
-    }
-    const key = String(depth);
-    if (data.levelFillColors[key]) return data.levelFillColors[key];
-    const used = Object.values(data.levelFillColors);
-    const hex = randomLevelFill(used);
-    data.levelFillColors[key] = hex;
-    return hex;
+  function rootIdOf(nodes, id) {
+    let cur = nodes[id];
+    const seen = new Set();
+    while (cur && cur.parentId && nodes[cur.parentId] && !seen.has(cur.id)) { seen.add(cur.id); cur = nodes[cur.parentId]; }
+    return cur ? cur.id : id;
+  }
+
+  // Each tree (root) gets its own random colour per level: key "rootId:depth".
+  // Fill and line share an index into VIVID_FILLS / VIVID_LINKS so they match.
+  function levelIndex(data, id) {
+    const depth = nodeDepth(data.nodes, id);
+    if (depth < 1) return -1;
+    if (!data.levelColorIdx || typeof data.levelColorIdx !== 'object' || Array.isArray(data.levelColorIdx)) data.levelColorIdx = {};
+    const rid = rootIdOf(data.nodes, id);
+    const key = rid + ':' + depth;
+    const have = data.levelColorIdx[key];
+    if (Number.isInteger(have) && have >= 0 && have < VIVID_FILLS.length) return have;
+    const prefix = rid + ':';
+    const usedTree = new Set(Object.keys(data.levelColorIdx).filter((k) => k.startsWith(prefix)).map((k) => data.levelColorIdx[k]));
+    const parentIdx = depth > 1 ? data.levelColorIdx[prefix + (depth - 1)] : undefined;
+    let pool = VIVID_FILLS.map((_, i) => i).filter((i) => !usedTree.has(i));
+    if (!pool.length) pool = VIVID_FILLS.map((_, i) => i).filter((i) => i !== parentIdx);
+    const idx = pool[Math.floor(Math.random() * pool.length)];
+    data.levelColorIdx[key] = idx;
+    return idx;
   }
 
   function applyHopFill(data, n) {
     if (!n || !n.parentId) return;
     if (!n.style) n.style = defaultStyle();
     if (n.style.fillColorManual) return;
-    const fill = fillForLevel(data, nodeDepth(data.nodes, n.id));
-    if (!fill) return;
+    const i = levelIndex(data, n.id);
+    if (i < 0) return;
+    const fill = VIVID_FILLS[i];
     n.style.fill = fill;
     n.style.border = fill;
     if (!n.style.textColorManual) n.style.textColor = contrastText(fill);
   }
 
-  function colorForLevel(data, depth) {
-    if (depth < 1) return '#8AA8D4';
-    if (!data.levelLinkColors || typeof data.levelLinkColors !== 'object' || Array.isArray(data.levelLinkColors)) {
-      data.levelLinkColors = {};
-    }
-    const key = String(depth);
-    if (data.levelLinkColors[key]) return data.levelLinkColors[key];
-    const used = Object.values(data.levelLinkColors);
-    const hue = (levelHueSeed(data) + (depth - 1) * 137.508 + used.length * 23) % 360;
-    let hex = hslToHex(hue, 56 + (depth % 3) * 8, 43 + (depth % 2) * 6);
-    if (used.some((c) => String(c).toLowerCase() === hex.toLowerCase())) hex = randomLevelColor(used);
-    data.levelLinkColors[key] = hex;
-    return hex;
+  function colorForNode(data, id) {
+    const i = levelIndex(data, id);
+    return i < 0 ? '#4338CA' : VIVID_LINKS[i];
   }
 
   function resolveLinkColor(data, child) {
     const style = (child && child.style) || {};
     if (style.linkColorManual && style.linkColor) return style.linkColor;
-    return colorForLevel(data, nodeDepth(data.nodes, child.id));
+    return colorForNode(data, child.id);
   }
 
   function hexRgb(hex) {
@@ -1127,7 +1135,7 @@
       if (!n.parentId) return;
       if (!n.style) n.style = defaultStyle();
       if (!n.style.linkColorManual) {
-        n.style.linkColor = colorForLevel(d, nodeDepth(d.nodes, n.id));
+        n.style.linkColor = colorForNode(d, n.id);
         n.style.linkColorManual = false;
       }
       applyHopFill(d, n);
@@ -2423,7 +2431,7 @@
         if (!n.parentId || !this.data.nodes[n.parentId]) return;
         if (!n.style) n.style = defaultStyle();
         if (!n.style.linkColorManual) {
-          n.style.linkColor = colorForLevel(this.data, nodeDepth(this.data.nodes, n.id));
+          n.style.linkColor = colorForNode(this.data, n.id);
         }
         applyHopFill(this.data, n);
       });
@@ -2801,7 +2809,7 @@
       this.data.nodes[id] = node;
       if (!node.style.linkColorManual) {
         node.style.linkColorManual = false;
-        node.style.linkColor = colorForLevel(this.data, nodeDepth(this.data.nodes, node.id));
+        node.style.linkColor = colorForNode(this.data, node.id);
       }
       applyHopFill(this.data, node);
       this._placeNewChild(parent, dir, id);
@@ -3815,7 +3823,7 @@
       this.data.rootIds = this.data.rootIds.filter((rid) => rid !== child.id);
       if (!child.style) child.style = defaultStyle();
       if (!child.style.linkColorManual) {
-        child.style.linkColor = colorForLevel(this.data, nodeDepth(this.data.nodes, child.id));
+        child.style.linkColor = colorForNode(this.data, child.id);
       }
       this._syncLevelLinkColors();
       this.selectedLinkId = child.id;
@@ -3848,6 +3856,85 @@
       this.render();
       this._emit();
       return true;
+    }
+
+    // ---------- copy / paste style ----------
+    _styleOf(n) {
+      const st = n.style || {};
+      const f = n.format || {};
+      const pick = (o, keys) => keys.reduce((a, k) => { if (o[k] !== undefined) a[k] = o[k]; return a; }, {});
+      return {
+        style: pick(st, ['fill', 'fillAlpha', 'border', 'textColor', 'textColorManual', 'fillColorManual', 'linkColor', 'linkColorManual', 'linkWidth', 'linkStyle', 'linkCurve']),
+        format: pick(f, ['bold', 'italic', 'underline', 'fontFamily', 'fontSize', 'align']),
+      };
+    }
+    copyStyle(id) {
+      const n = this.data.nodes[id || this.selectedId];
+      if (!n) return;
+      this._styleClip = this._styleOf(n);
+      try { localStorage.setItem('docviewer-mm-style', JSON.stringify(this._styleClip)); } catch (e) { /* memory only */ }
+      if (global.setStatus) global.setStatus('Style copied — select nodes and press ⌥⌘V (or right-click → Paste style)', 'ok');
+    }
+    _getStyleClip() {
+      if (this._styleClip) return this._styleClip;
+      try { const v = JSON.parse(localStorage.getItem('docviewer-mm-style') || 'null'); if (v && v.style) return v; } catch (e) { /* none */ }
+      return null;
+    }
+    pasteStyle() {
+      if (this.readOnly) return;
+      const clip = this._getStyleClip();
+      if (!clip) { if (global.setStatus) global.setStatus('Copy a style first (⌥⌘C or right-click → Copy style)', 'dirty'); return; }
+      const ids = this.selectedList().filter((id) => !this.isNodeLocked(id));
+      if (!ids.length) return;
+      this._applyToSelected((id) => {
+        if (this.isNodeLocked(id)) return;
+        this.applyStyle(id, clip.style);
+        this.applyFormat(id, clip.format);
+      });
+      if (global.setStatus) global.setStatus('Style pasted to ' + ids.length + ' node' + (ids.length === 1 ? '' : 's'), 'ok');
+    }
+
+    // Re-colour the whole map with the vivid level colours (keeps colours you
+    // picked by hand). Undo restores the old ones.
+    recolorVibrant() {
+      if (this.readOnly) return;
+      this.data.levelColorIdx = {};
+      const rootFills = [];
+      let n = 0;
+      Object.values(this.data.nodes).forEach((node) => {
+        if (!node || this.isNodeLocked(node)) return;
+        if (!node.style) node.style = defaultStyle();
+        const depth = nodeDepth(this.data.nodes, node.id);
+        if (!node.parentId) {
+          if (!node.style.fillColorManual || hexLum(node.style.fill) > 0.55) { const f = randomRootFill(rootFills); rootFills.push(f); Object.assign(node.style, { fill: f, border: f, fillColorManual: true }); if (!node.style.textColorManual) node.style.textColor = '#ffffff'; n++; }
+          return;
+        }
+        if (!node.style.linkColorManual) node.style.linkColor = colorForNode(this.data, node.id);
+        if (!node.style.fillColorManual) { applyHopFill(this.data, node); n++; }
+      });
+      this.render();
+      this._emit();
+      if (global.setStatus) global.setStatus('Recoloured ' + n + ' node' + (n === 1 ? '' : 's') + ' with vibrant colours (⌘Z to undo)', 'ok');
+    }
+
+    _openBlankMenu(x, y) {
+      if (this.readOnly) { this._closeMenu(); return; }
+      this._menuMode = 'blank';
+      this._menuNodeId = null;
+      const clip = this._getStyleClip();
+      this.els.menu.innerHTML = `
+        <div class="mm-menu-label">Mindmap</div>
+        <button type="button" data-blank="recolor">🎨 Recolor with vibrant colors</button>
+        <button type="button" data-blank="add-root">＋ New root node</button>
+        ${clip ? '<div class="mm-menu-sep"></div><div class="mm-menu-label">Copied style</div><div class="mm-style-chip" style="background:' + (clip.style.fill || '#fff') + ';border-color:' + (clip.style.border || '#ccc') + ';color:' + (clip.style.textColor || '#111') + '">Aa</div>' : ''}
+      `;
+      this._placeMenu(x, y);
+      this.els.menu.querySelectorAll('[data-blank]').forEach((b) => b.addEventListener('click', () => {
+        const a = b.dataset.blank;
+        this._closeMenu();
+        if (a === 'recolor') this.recolorVibrant();
+        if (a === 'add-root') this.addNewRoot();
+      }));
     }
 
     _groupToggleFormat(key) {
@@ -5394,6 +5481,8 @@
         <button type="button" data-insp="lock" title="${anyUnlocked ? 'Lock selected' : 'Unlock selected'}">${anyUnlocked ? 'Lock' : 'Unlock'}</button>
         ${ids.some((id) => this._canNote(this.data.nodes[id])) ? `<button type="button" data-insp="notes" class="${n.noteOpen ? 'active' : ''}" title="Add a note">${n.note && n.note.trim() ? 'Notes' : 'Add note'}</button>` : ''}
         <select data-insp="type" title="Cell type">${typeOpts}</select>
+        <button type="button" data-insp="copy-style" title="Copy style (⌥⌘C)">🖌 Copy</button>
+        <button type="button" data-insp="paste-style" title="Paste style onto the selection (⌥⌘V)"${this._getStyleClip() ? '' : ' disabled'}>🖌 Paste</button>
         <button type="button" data-insp="bold" class="${allBold ? 'active' : ''}" title="Bold"><b>B</b></button>
         <button type="button" data-insp="italic" class="${allItalic ? 'active' : ''}" title="Italic"><i>I</i></button>
         <button type="button" data-insp="underline" class="${allUnder ? 'active' : ''}" title="Underline"><u>U</u></button>
@@ -5416,6 +5505,8 @@
       };
       this._bindColorDrops(box);
       box.querySelector('[data-insp="type"]').addEventListener('change', (e) => each((id) => this.setNodeType(id, e.target.value)));
+      box.querySelector('[data-insp="copy-style"]').addEventListener('click', () => { this.copyStyle(this.selectedId); const pb = box.querySelector('[data-insp="paste-style"]'); if (pb) pb.disabled = false; });
+      box.querySelector('[data-insp="paste-style"]').addEventListener('click', () => this.pasteStyle());
       box.querySelector('[data-insp="bold"]').addEventListener('click', () => this._groupToggleFormat('bold'));
       box.querySelector('[data-insp="italic"]').addEventListener('click', () => this._groupToggleFormat('italic'));
       box.querySelector('[data-insp="underline"]').addEventListener('click', () => this._groupToggleFormat('underline'));
@@ -5664,7 +5755,10 @@
         if (ta && document.activeElement !== ta) ta.focus();
       };
       bar.querySelectorAll('button, select').forEach((btn) => {
-        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        // Buttons keep the text box focused; dropdowns must open normally
+        // (preventDefault on a <select> stops it from opening).
+        if (btn.tagName !== 'SELECT') btn.addEventListener('mousedown', (e) => e.preventDefault());
+        else btn.addEventListener('mousedown', (e) => e.stopPropagation());
         if (btn.tagName === 'SELECT') {
           btn.addEventListener('change', (e) => {
             const act = btn.getAttribute('data-fmt');
@@ -6112,7 +6206,7 @@
         this._openGroupMenu(clientX, clientY);
         return;
       }
-      this._closeMenu();
+      this._openBlankMenu(clientX, clientY);
     }
 
     _openLinkMenu(id, x, y) {
@@ -6259,6 +6353,8 @@
         <button type="button" data-m="lock">${n.locked ? 'Unlock' : 'Lock'}</button>
         <button type="button" data-m="copy">Copy <span class="mm-kbd">⌘C</span></button>
         <button type="button" data-m="paste"${this.isNodeLocked(n) ? ' disabled' : ''}>Paste as child</button>
+        <button type="button" data-m="copy-style">Copy style <span class="mm-kbd">⌥⌘C</span></button>
+        <button type="button" data-m="paste-style"${this.isNodeLocked(n) || !this._getStyleClip() ? ' disabled' : ''}>Paste style <span class="mm-kbd">⌥⌘V</span></button>
         <button type="button" data-m="delete"${this.isNodeLocked(n) ? ' disabled' : ''}>Delete <span class="mm-kbd">⌫</span></button>
       `;
       this._placeMenu(x, y);
@@ -6324,6 +6420,7 @@
         <div class="mm-menu-sep"></div>
         <button type="button" data-m="lock">${ids.some((id) => this.data.nodes[id] && !this.isNodeLocked(id)) ? 'Lock' : 'Unlock'}</button>
         <button type="button" data-m="copy">Copy <span class="mm-kbd">⌘C</span></button>
+        <button type="button" data-m="paste-style"${!this._getStyleClip() ? ' disabled' : ''}>Paste style to all <span class="mm-kbd">⌥⌘V</span></button>
         <button type="button" data-m="delete">Delete <span class="mm-kbd">⌫</span></button>
       `;
       this._placeMenu(x, y);
@@ -6727,6 +6824,8 @@
       if (m === 'link-w-up') this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) + 0.5, 1, 6) });
       if (m === 'link-w-down') this.applyStyle(id, { linkWidth: clamp((n.style.linkWidth || 2.25) - 0.5, 1, 6) });
       if (m === 'copy') this.copySubtree(id);
+      if (m === 'copy-style') this.copyStyle(id);
+      if (m === 'paste-style') this.pasteStyle();
       if (m === 'notes') {
         this._toggleNote(n);
         this._closeMenu();
@@ -6787,6 +6886,7 @@
       if (m === 'align-box') { this.alignSelected(btn.getAttribute('data-box')); this._closeMenu(); return; }
       if (m === 'detach') { this.detachSelected(); this._closeMenu(); return; }
       if (m === 'copy') { this.copySelected(); this._closeMenu(); return; }
+      if (m === 'paste-style') { this.pasteStyle(); this._closeMenu(); return; }
       if (m === 'lock') {
         const anyUnlocked = ids.some((id) => this.data.nodes[id] && !this.isNodeLocked(id));
         if (anyUnlocked) ids.forEach((id) => this.lockNode(id));
@@ -7513,6 +7613,11 @@
         this.selectedId = (this.selectedId && this.selectedIds.has(this.selectedId)) ? this.selectedId : ids[0] || null;
         this.selectedFrameId = null;
         this.render();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.altKey && (e.code === 'KeyC' || e.code === 'KeyV') && !typing && !inChrome) {
+        e.preventDefault();
+        if (e.code === 'KeyC') this.copyStyle(this.selectedId); else this.pasteStyle();
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && this.selectedList().length && !typing && !inChrome) {

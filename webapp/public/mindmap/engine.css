@@ -2232,3 +2232,4 @@ html[data-theme="light"] .mm-color-custom-well {
 
 /* Plain-text code nodes (e.g. pasted diagrams): show everything, no scroll. */
 .mm-code.is-plain { max-height: none; overflow: hidden; color: #e6edf3; }
+.mm-style-chip { margin: 4px 10px 8px; width: 46px; height: 26px; border-radius: 7px; border: 2px solid; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
