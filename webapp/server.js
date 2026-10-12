@@ -9,6 +9,7 @@ const SlidesCore = require(path.join(__dirname, 'public', 'slides', 'core.js'));
 const StocksCore = require(path.join(__dirname, 'public', 'stocks', 'core.js'));
 const TerminalCore = require(path.join(__dirname, 'public', 'terminal', 'core.js'));
 const RunbookCore = require(path.join(__dirname, 'public', 'runbook', 'core.js'));
+const LinkRewrite = require(path.join(__dirname, 'link-rewrite.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
 
@@ -2275,7 +2276,65 @@ app.post('/api/move', (req, res) => {
     // Bookmarks are stored as clean workspace paths ("a.md", not "./a.md").
     const relOf = (full) => path.relative(DATA_ROOT, full).split(path.sep).join('/');
     rewriteBookmarkPaths(relOf(fromFull), relOf(toFull));
-    res.json({ ok: true });
+    // Fix references to the moved file/folder everywhere in the data folder.
+    let updated = [];
+    try {
+      updated = LinkRewrite.rewriteAfterMove(DATA_ROOT, relOf(fromFull), relOf(toFull));
+      if (updated.length) commitFile(updated, `Update links: ${relOf(fromFull)} → ${relOf(toFull)}`);
+    } catch (e) {
+      console.error('Link update after move failed:', e.message);
+    }
+    res.json({ ok: true, updated });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Tidy assets: move images/files used by notes and boards (and per-note
+// "*-assets" folders) into assets/<kind>/, fix every link, and write all
+// markdown links from the data folder root. POST {apply:false} previews.
+app.post('/api/assets/tidy', (req, res) => {
+  try {
+    const plan = LinkRewrite.planAssetTidy(DATA_ROOT);
+    if (!(req.body && req.body.apply)) return res.json({ moves: plan.moves, relLinkFiles: plan.relLinkFiles });
+    const changed = new Set();
+    const moved = [];
+    for (const m of plan.moves) {
+      const fromFull = resolveSafe(m.from);
+      const toFull = resolveSafe(m.to);
+      if (!fs.existsSync(fromFull) || fs.existsSync(toFull)) continue;
+      fs.mkdirSync(path.dirname(toFull), { recursive: true });
+      fs.renameSync(fromFull, toFull);
+      rewriteBookmarkPaths(m.from, m.to);
+      LinkRewrite.rewriteAfterMove(DATA_ROOT, m.from, m.to).forEach((f) => changed.add(f));
+      moved.push(m);
+    }
+    // Relative links left in notes become data-root links.
+    (function walk(dir) {
+      for (const entry of safeReaddir(dir)) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!/\.(md|markdown)$/i.test(entry.name)) continue;
+        const rel = path.relative(DATA_ROOT, full).split(path.sep).join('/');
+        let text;
+        try { text = fs.readFileSync(full, 'utf8'); } catch (e) { continue; }
+        const next = LinkRewrite.normalizeMarkdown(text, rel);
+        if (next !== text) { fs.writeFileSync(full, next); changed.add(rel); }
+      }
+    })(DATA_ROOT);
+    // Remove "*-assets" folders that are now empty.
+    (function prune(dir) {
+      for (const entry of safeReaddir(dir)) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        prune(full);
+        if (/-assets$/i.test(entry.name)) { try { if (!fs.readdirSync(full).length) fs.rmdirSync(full); } catch (e) { /* keep */ } }
+      }
+    })(DATA_ROOT);
+    const paths = [...changed, ...moved.map((m) => m.to), ...moved.map((m) => m.from)];
+    if (paths.length) commitFile(paths, `Tidy assets: ${moved.length} moved into assets/, links updated in ${changed.size} files`);
+    res.json({ ok: true, moved, updated: [...changed] });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

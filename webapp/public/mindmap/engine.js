@@ -27,7 +27,7 @@
   const LINK_MAX_H = 108;
   // Below this zoom the world is not kept on a fixed-scale GPU layer (see .is-gpu-world).
   const GPU_WORLD_MIN_ZOOM = 0.35;
-  const EXPORT_V = 18; // must match MindmapExport._v in export.js
+  const EXPORT_V = 19; // must match MindmapExport._v in export.js
   // Vibrant palettes: light tints (readable with dark text), bright
   // mid-tones and deep colours (text turns white automatically on dark fills).
   const NODE_PALETTE = [
@@ -1234,7 +1234,7 @@
     accent: '<rect x="4" y="3" width="32" height="14" rx="3" fill="#fff" stroke="rgba(0,0,0,.15)"/><rect x="4" y="3" width="4" height="14" rx="1" fill="currentColor"/>',
     hand: '<path d="M6 4 Q20 2 34 4 Q37 10 34 16 Q20 18 6 16 Q3 10 6 4 Z" fill="currentColor" opacity=".45"/>',
   };
-  const MM_LAYOUTS = { keep: 'Keep as is', both: 'Both sides', right: 'Right side' };
+  const MM_LAYOUTS = { keep: 'Keep as is', both: 'Both sides', right: 'Right side', vertical: 'Top & bottom', down: 'Downward' };
   const MM_THEME_DEFAULT = { style: 'organic', palette: '', width: 0 };
 
   function normTheme(t) {
@@ -1361,6 +1361,85 @@
     const p1 = { x: tip.x - s * Math.cos(ang - 0.45), y: tip.y - s * Math.sin(ang - 0.45) };
     const p2 = { x: tip.x - s * Math.cos(ang + 0.45), y: tip.y - s * Math.sin(ang + 0.45) };
     return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${tip.x.toFixed(1)} ${tip.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+
+  // ---- Frame paper textures ----------------------------------------------
+  // Built from SVG noise (no downloads): lit fractal noise gives the paper's
+  // grain and tooth, low-frequency noise gives stains and mottling, a
+  // thresholded noise gives fibres and flecks. Tiles are stitched seamless.
+  const svgUrl = (inner, w, h) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h || w}'>${inner}</svg>`)}")`;
+  // Relief (grain / tooth) lit from the top-left; used with multiply.
+  const grain = (freq, oct, scale, seed, size, elev) => svgUrl(`<filter id='f' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='${freq}' numOctaves='${oct}' seed='${seed}' stitchTiles='stitch'/><feDiffuseLighting lighting-color='#ffffff' surfaceScale='${scale}'><feDistantLight azimuth='225' elevation='${elev || 58}'/></feDiffuseLighting></filter><rect width='100%' height='100%' filter='url(#f)'/>`, size);
+  // Soft colour mottling / stains: alpha follows the noise.
+  const mottle = (freq, oct, seed, rgb, k, b, size) => svgUrl(`<filter id='f' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='${freq}' numOctaves='${oct}' seed='${seed}' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 ${rgb[0]} 0 0 0 0 ${rgb[1]} 0 0 0 0 ${rgb[2]} ${k} 0 0 0 ${b}'/></filter><rect width='100%' height='100%' filter='url(#f)'/>`, size);
+  // Sparse flecks / fibres: only the noise peaks survive.
+  const flecks = (freqX, freqY, seed, rgb, table, size) => svgUrl(`<filter id='f' x='0' y='0' width='100%' height='100%'><feTurbulence type='turbulence' baseFrequency='${freqX} ${freqY}' numOctaves='2' seed='${seed}' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 ${rgb[0]} 0 0 0 0 ${rgb[1]} 0 0 0 0 ${rgb[2]} 1 0 0 0 0'/><feComponentTransfer><feFuncA type='discrete' tableValues='${table}'/></feComponentTransfer></filter><rect width='100%' height='100%' filter='url(#f)'/>`, size);
+  // Directional relief (ridges at an angle), on a large tile so the seam is
+  // rarely visible.
+  const ridges = (fx, fy, angle, scale, seed, size, elev) => svgUrl(`<filter id='f' x='${-size}' y='${-size}' width='${size * 3}' height='${size * 3}' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse'><feTurbulence type='fractalNoise' baseFrequency='${fx} ${fy}' numOctaves='5' seed='${seed}'/><feDiffuseLighting lighting-color='#ffffff' surfaceScale='${scale}'><feDistantLight azimuth='225' elevation='${elev}'/></feDiffuseLighting></filter><g transform='rotate(${angle} ${size / 2} ${size / 2})'><rect x='${-size}' y='${-size}' width='${size * 3}' height='${size * 3}' filter='url(#f)'/></g>`, size);
+  const tile = (w, h, inner) => svgUrl(inner, w, h);
+  const vignette = (rgba) => `radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, ${rgba} 100%)`;
+  const FRAME_TEXTURES = [
+    { id: '', label: 'None' },
+    { id: 'printer', label: 'Printer paper', base: '#fbfbf8', layers: [[grain(0.9, 3, 1.1, 3, 220), '220px', 'multiply']] },
+    // Whites copied from reference photos.
+    { id: 'crumpled', label: 'Crumpled white', base: '#f8f8f6', layers: [[vignette('rgba(120,120,115,0.10)'), '100% 100%', 'multiply'], [grain(0.0045, 3, 5, 61, 720, 80), '720px', 'multiply'], [grain(0.06, 3, 0.6, 62, 300, 80), '300px', 'multiply'], [grain(0.95, 2, 0.45, 63, 200, 70), '200px', 'multiply']] },
+    { id: 'finecold', label: 'Fine cold-press', base: '#f9f7f4', layers: [[mottle(0.006, 3, 64, [0.62, 0.6, 0.56], 0.18, -0.05, 600), '600px', 'multiply'], [grain(0.16, 4, 0.75, 65, 260, 76), '260px', 'multiply'], [grain(0.9, 2, 0.4, 66, 200, 72), '200px', 'multiply']] },
+    { id: 'roughdiag', label: 'Rough watercolour', base: '#f9f9f8', layers: [[ridges(0.012, 0.045, -32, 3.2, 67, 900, 66), '900px', 'multiply'], [grain(0.09, 4, 1.2, 68, 320, 70), '320px', 'multiply'], [grain(0.9, 2, 0.5, 69, 200, 70), '200px', 'multiply']] },
+    { id: 'felt', label: 'White felt', base: '#fafafb', layers: [[mottle(0.03, 3, 70, [0.6, 0.61, 0.65], 0.16, -0.06, 360), '360px', 'multiply'], [grain(0.3, 3, 0.7, 71, 260, 74), '260px', 'multiply'], [grain(0.95, 2, 0.4, 72, 200, 72), '200px', 'multiply']] },
+    // Whites and creams.
+    { id: 'bright', label: 'Bright white', base: '#ffffff', layers: [[grain(0.95, 2, 0.6, 31, 200), '200px', 'multiply']] },
+    { id: 'softwhite', label: 'Soft white', base: '#fbfaf7', layers: [[mottle(0.01, 3, 41, [0.6, 0.58, 0.52], 0.25, -0.08, 520), '520px', 'multiply'], [grain(0.8, 3, 0.9, 32, 220), '220px', 'multiply']] },
+    { id: 'eggshell', label: 'Eggshell', base: '#f8f5ec', layers: [[grain(0.22, 3, 0.9, 33, 260, 72), '260px', 'multiply'], [grain(0.9, 2, 0.6, 34, 200), '200px', 'multiply']] },
+    { id: 'ivory', label: 'Ivory', base: '#fbf6e6', layers: [[mottle(0.008, 3, 35, [0.75, 0.62, 0.35], 0.35, -0.12, 560), '560px', 'multiply'], [grain(0.85, 3, 0.8, 36, 220), '220px', 'multiply']] },
+    { id: 'cream', label: 'Cream', base: '#f7eed6', layers: [[mottle(0.009, 3, 37, [0.7, 0.55, 0.3], 0.4, -0.14, 560), '560px', 'multiply'], [grain(0.75, 3, 1.0, 38, 230), '230px', 'multiply']] },
+    { id: 'buttermilk', label: 'Buttermilk', base: '#f6e9c6', layers: [[mottle(0.007, 4, 39, [0.7, 0.5, 0.2], 0.45, -0.15, 600), '600px', 'multiply'], [grain(0.7, 3, 1.1, 40, 240), '240px', 'multiply']] },
+    { id: 'cottonrag', label: 'Cotton rag', base: '#faf8f2', layers: [[flecks(0.03, 0.5, 42, [0.55, 0.52, 0.45], '0 0 0 0 0 0 0 0.35', 320), '320px', 'multiply'], [grain(0.1, 4, 1.1, 43, 300, 72), '300px', 'multiply'], [grain(0.9, 2, 0.6, 44, 200), '200px', 'multiply']] },
+    { id: 'creamcotton', label: 'Cream cotton', base: '#f5edd9', layers: [[flecks(0.03, 0.5, 45, [0.55, 0.45, 0.3], '0 0 0 0 0 0 0 0.35', 320), '320px', 'multiply'], [grain(0.1, 4, 1.1, 46, 300, 72), '300px', 'multiply'], [grain(0.9, 2, 0.6, 47, 200), '200px', 'multiply']] },
+    { id: 'laid', label: 'Laid paper', base: '#f9f6ee', layers: [[tile(4, 4, "<rect width='4' height='1' fill='rgba(110,100,80,0.07)'/>"), '4px 4px', 'multiply'], [tile(98, 8, "<rect x='96' width='2' height='8' fill='rgba(110,100,80,0.10)'/>"), '98px 8px', 'multiply'], [grain(0.9, 2, 0.7, 48, 200), '200px', 'multiply']] },
+    { id: 'rice', label: 'Rice paper', base: '#fbf9f2', layers: [[flecks(0.015, 0.25, 49, [0.72, 0.68, 0.58], '0 0 0 0 0 0 0 0 0.55', 360), '360px', 'multiply'], [flecks(0.04, 0.12, 50, [0.8, 0.76, 0.66], '0 0 0 0 0 0 0 0.45', 300), '300px', 'multiply'], [grain(0.6, 3, 0.7, 51, 240), '240px', 'multiply']] },
+    { id: 'handmade', label: 'Handmade', base: '#f6f0e1', layers: [[vignette('rgba(150,125,80,0.18)'), '100% 100%', 'multiply'], [flecks(0.02, 0.3, 52, [0.5, 0.42, 0.3], '0 0 0 0 0 0 0 0.6', 340), '340px', 'multiply'], [flecks(0.6, 0.6, 53, [0.45, 0.38, 0.28], '0 0 0 0 0 0 0 0 0 0.5', 260), '260px', 'normal'], [grain(0.08, 4, 1.5, 54, 320, 68), '320px', 'multiply']] },
+    { id: 'vellum', label: 'Vellum', base: '#f4f3ef', layers: [[mottle(0.012, 4, 55, [0.55, 0.55, 0.52], 0.35, -0.1, 520), '520px', 'multiply'], [grain(0.95, 2, 0.4, 56, 200), '200px', 'multiply']] },
+    { id: 'newsprint', label: 'Newsprint', base: '#ecebe4', layers: [[flecks(0.7, 0.7, 57, [0.3, 0.3, 0.3], '0 0 0 0 0 0 0 0 0 0.4', 240), '240px', 'normal'], [mottle(0.01, 3, 58, [0.5, 0.5, 0.45], 0.3, -0.1, 520), '520px', 'multiply'], [grain(0.9, 2, 0.7, 59, 200), '200px', 'multiply']] },
+    { id: 'canvas', label: 'Canvas', base: '#f3efe6', layers: [[tile(5, 5, "<rect width='5' height='2' fill='rgba(90,80,60,0.12)'/><rect width='2' height='5' fill='rgba(90,80,60,0.12)'/>"), '5px 5px', 'multiply'], [grain(0.3, 3, 1.4, 60, 260), '260px', 'multiply']] },
+    { id: 'cotton', label: 'Watercolour (cold press)', base: '#faf6ee', layers: [[grain(0.035, 4, 3.2, 8, 360, 62), '360px', 'multiply'], [grain(0.7, 2, 0.9, 4, 200), '200px', 'multiply']] },
+    { id: 'parchment', label: 'Parchment', base: '#f0dfb8', layers: [[vignette('rgba(120,80,30,0.35)'), '100% 100%', 'multiply'], [mottle(0.006, 4, 11, [0.45, 0.3, 0.12], 0.7, -0.24, 640), '640px', 'multiply'], [grain(0.75, 4, 0.75, 6, 240), '240px', 'multiply']] },
+    { id: 'aged', label: 'Old paper', base: '#e9d9b4', layers: [[vignette('rgba(90,55,20,0.45)'), '100% 100%', 'multiply'], [mottle(0.011, 4, 21, [0.5, 0.33, 0.12], 0.85, -0.33, 520), '520px', 'multiply'], [flecks(0.9, 0.9, 5, [0.35, 0.22, 0.1], '0 0 0 0 0 0 0 0 0 0.6', 300), '300px', 'normal'], [grain(0.85, 3, 0.8, 2, 240), '240px', 'multiply']] },
+    { id: 'kraft', label: 'Kraft', base: '#c7a074', layers: [[flecks(0.06, 0.9, 9, [0.42, 0.27, 0.12], '0 0 0 0 0 0 0.25 0.5', 320), '320px', 'multiply'], [mottle(0.015, 3, 4, [0.4, 0.25, 0.1], 0.6, -0.2, 500), '500px', 'multiply'], [grain(0.75, 3, 1.6, 12, 240), '240px', 'multiply']] },
+    { id: 'recycled', label: 'Recycled', base: '#ece6d8', layers: [[flecks(0.5, 0.5, 14, [0.3, 0.28, 0.25], '0 0 0 0 0 0 0 0 0 0 0.85', 260), '260px', 'normal'], [flecks(0.08, 0.6, 3, [0.55, 0.5, 0.42], '0 0 0 0 0 0 0 0.45', 300), '300px', 'multiply'], [grain(0.85, 3, 1.2, 5, 220), '220px', 'multiply']] },
+    { id: 'linen', label: 'Linen', base: '#f2ede2', layers: [[tile(3, 3, "<rect width='3' height='1' fill='rgba(120,105,80,0.10)'/><rect width='1' height='3' fill='rgba(120,105,80,0.10)'/>"), '3px 3px', 'multiply'], [flecks(0.02, 0.9, 6, [0.5, 0.45, 0.35], '0 0 0 0 0 0 0.25', 280), '280px', 'multiply'], [grain(0.9, 2, 0.9, 9, 200), '200px', 'multiply']] },
+    { id: 'notebook', label: 'Notebook', base: '#fdfdfa', layers: [[tile(2000, 32, "<rect y='31' width='2000' height='1' fill='rgba(90,140,210,0.45)'/><rect x='63' width='2' height='32' fill='rgba(225,80,80,0.55)'/>"), '2000px 32px', 'normal'], [grain(0.9, 3, 0.9, 7, 220), '220px', 'multiply']] },
+    { id: 'graph', label: 'Graph paper', base: '#fbfcf8', layers: [[tile(100, 100, "<path d='M0 0.5H100M0.5 0V100' stroke='rgba(70,140,120,0.35)'/><path d='M0 20.5H100M0 40.5H100M0 60.5H100M0 80.5H100M20.5 0V100M40.5 0V100M60.5 0V100M80.5 0V100' stroke='rgba(70,140,120,0.16)'/>"), '100px 100px', 'normal'], [grain(0.9, 3, 0.8, 1, 220), '220px', 'multiply']] },
+    { id: 'dots', label: 'Dot grid', base: '#fcfbf7', layers: [[tile(24, 24, "<circle cx='12' cy='12' r='1.3' fill='rgba(60,70,90,0.35)'/>"), '24px 24px', 'normal'], [grain(0.9, 3, 0.9, 13, 220), '220px', 'multiply']] },
+    { id: 'cardboard', label: 'Cardboard', base: '#b8895a', layers: [[tile(9, 9, "<rect width='3' height='9' fill='rgba(0,0,0,0.07)'/><rect x='3' width='6' height='9' fill='rgba(255,255,255,0.05)'/>"), '9px 9px', 'multiply'], [flecks(0.04, 0.8, 2, [0.35, 0.2, 0.08], '0 0 0 0 0 0 0.3 0.55', 320), '320px', 'multiply'], [grain(0.6, 3, 2, 17, 260), '260px', 'multiply']] },
+    { id: 'cork', label: 'Cork board', base: '#c39563', layers: [[flecks(0.35, 0.35, 8, [0.38, 0.22, 0.08], '0 0 0 0 0.5 0.8 0.9', 260), '260px', 'multiply'], [flecks(0.6, 0.6, 19, [0.95, 0.85, 0.65], '0 0 0 0 0 0 0 0.6', 240), '240px', 'screen'], [grain(0.5, 3, 2.4, 23, 260, 50), '260px', 'multiply']] },
+    { id: 'blueprint', label: 'Blueprint', base: '#1f4e8c', layers: [[tile(100, 100, "<path d='M0 0.5H100M0.5 0V100' stroke='rgba(255,255,255,0.28)'/><path d='M0 20.5H100M0 40.5H100M0 60.5H100M0 80.5H100M20.5 0V100M40.5 0V100M60.5 0V100M80.5 0V100' stroke='rgba(255,255,255,0.12)'/>"), '100px 100px', 'normal'], [mottle(0.006, 3, 7, [1, 1, 1], 0.22, -0.06, 640), '640px', 'normal'], [grain(0.9, 2, 0.8, 4, 220), '220px', 'multiply']] },
+    { id: 'chalk', label: 'Chalkboard', base: '#2e3a33', layers: [[mottle(0.007, 4, 31, [1, 1, 1], 0.3, -0.09, 640), '640px', 'normal'], [flecks(0.7, 0.7, 4, [1, 1, 1], '0 0 0 0 0 0 0 0 0 0.25', 260), '260px', 'normal'], [grain(0.8, 3, 1.2, 15, 240), '240px', 'multiply']] },
+    { id: 'black', label: 'Black card', base: '#22232a', layers: [[flecks(0.6, 0.6, 22, [1, 1, 1], '0 0 0 0 0 0 0 0 0 0.12', 260), '260px', 'normal'], [grain(0.85, 3, 1.3, 26, 240), '240px', 'multiply']] },
+  ];
+  function textureById(id) { return FRAME_TEXTURES.find((t) => t.id === id && t.layers) || null; }
+  // Export (export.js) draws frame papers from the same definitions.
+  global.MindmapTextures = { byId: textureById, list: FRAME_TEXTURES };
+  // Apply a texture to an element's background (keeps anything else).
+  function paintTexture(el, tex) {
+    el.style.backgroundColor = tex.base;
+    const imgs = [];
+    const sizes = [];
+    const blends = [];
+    tex.layers.forEach(([img, size, blend]) => {
+      // A layer may hold two comma-joined gradients (grids): expand both.
+      imgs.push(img);
+      // Noise layers (grain, fibres, stains) grow when zoomed out so the
+      // paper still reads; ruled tiles keep their real spacing.
+      const noise = /feTurbulence/.test(img);
+      sizes.push(noise && /px/.test(size) ? size.replace(/(\d+(?:\.\d+)?)px/g, 'calc($1px * var(--mm-tex, 1))') : size);
+      blends.push(blend);
+    });
+    el.style.backgroundImage = imgs.join(', ');
+    el.style.backgroundSize = sizes.join(', ');
+    el.style.backgroundBlendMode = blends.join(', ');
+    el.style.backgroundRepeat = 'repeat';
+    el.style.backgroundPosition = '0 0';
   }
 
   const SHAPES = ['box', 'text', 'underline', 'card', 'pastel', 'hand', 'outline', 'tint', 'accent'];
@@ -1603,6 +1682,22 @@
       this.els.toolbar.addEventListener('click', (e) => this._onToolbarClick(e));
       this.els.exportMenu.addEventListener('click', (e) => this._onExportClick(e));
       this.els.menu.addEventListener('click', (e) => this._onMenuClick(e));
+      // Keep the Frames dropdown clear of the toolbar, which can wrap onto
+      // several lines on narrow windows.
+      const placeDock = () => {
+        const tb = this.els.toolbar;
+        const dock = this.els.framesDock;
+        if (!tb || !dock) return;
+        const host = this.els.root.getBoundingClientRect();
+        const r = tb.getBoundingClientRect();
+        dock.style.top = Math.round(r.bottom - host.top + 8) + 'px';
+      };
+      if (typeof ResizeObserver !== 'undefined') {
+        this._dockRo = new ResizeObserver(placeDock);
+        this._dockRo.observe(this.els.toolbar);
+        this._dockRo.observe(this.els.root);
+      }
+      requestAnimationFrame(placeDock);
       this.els.framesDock.addEventListener('pointerdown', (e) => e.stopPropagation());
       this.els.framesDock.addEventListener('click', (e) => {
         if (e.target.closest('[data-act="frames"]')) {
@@ -1738,6 +1833,7 @@
       window.removeEventListener('pointercancel', this._onPointerUp);
       if (this._zoomRaf) cancelAnimationFrame(this._zoomRaf);
       window.removeEventListener('keydown', this._onKey);
+      if (this._dockRo) this._dockRo.disconnect();
       window.removeEventListener('keyup', this._onKeyUp);
       window.removeEventListener('blur', this._onWinBlur);
       document.removeEventListener('mousedown', this._onDocDown);
@@ -2031,6 +2127,14 @@
       this.els.canvas.style.setProperty('--px', vp.x + 'px');
       this.els.canvas.style.setProperty('--py', vp.y + 'px');
       this.els.zoomLabel.textContent = Math.round(vp.zoom * 100) + '%';
+      // Paper grain scale: stepped so the texture isn't redrawn every tick.
+      const steps = [1, 1.5, 2, 3, 4, 6];
+      const want = 1 / Math.max(0.05, vp.zoom);
+      const tex = steps.reduce((best, st) => (st <= want * 1.15 ? st : best), 1);
+      if (this._texScale !== tex) {
+        this._texScale = tex;
+        this.els.world.style.setProperty('--mm-tex', String(tex));
+      }
     }
 
     setZoom(next, sx, sy) {
@@ -3018,6 +3122,7 @@
       if (this.readOnly) return null;
       const parent = this.data.nodes[parentId];
       if (!parent || this.isNodeLocked(parent)) return null;
+      dir = this._fitDir(parent, dir);
       if (parent.collapsedDirs && parent.collapsedDirs[dir]) return null;
       const inh = this.inheritProps(parent, dir);
       const id = uid('n_');
@@ -3309,6 +3414,7 @@
       const node = this.data.nodes[id];
       const parent = this.data.nodes[newParentId];
       if (!node || !parent || node.id === parent.id || !dir) return false;
+      dir = this._fitDir(parent, dir);
       if (this.isNodeLocked(node) || this.isNodeLocked(parent)) return false;
       let p = parent;
       while (p) {
@@ -3386,6 +3492,8 @@
       f.fill = fill;
       f.border = white ? '#c5c9d1' : fill;
       f.fillAlpha = 1;
+      delete f.texture;
+      delete f.bgImage;
       if (this._batching) return;
       this.render();
       this._emit();
@@ -4157,11 +4265,20 @@
         .sort((a, b) => (b.z || 0) - (a.z || 0))[0] || null;
     }
 
+    // The colour a frame mostly shows: its paper, its image's average tone,
+    // or its fill.
+    _frameTone(fr) {
+      const tex = textureById(fr.texture);
+      if (fr.bgImage) return fr.bgTone && (Number(fr.bgSoft) || 0) < 0.5 ? fr.bgTone : (fr.fill || '#ffffff');
+      if (tex) return tex.base;
+      return fr.fill && !isTransparent(fr.fill) ? fr.fill : null;
+    }
+
     // What a cell's text actually sits on: its own fill, else the frame, else the canvas.
     _cellBackdrop(root, fill) {
       if (fill && !isTransparent(fill) && parseHexColor(fill)) return fill;
       const fr = this._frameOfRoot(root);
-      if (fr && fr.fill && !isTransparent(fr.fill)) return fr.fill;
+      if (fr) { const tone = this._frameTone(fr); if (tone) return tone; }
       return typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark' ? '#161a22' : '#e8eaee';
     }
 
@@ -4170,13 +4287,14 @@
       let v = this._effCache.get(key);
       if (v === undefined) {
         const fr = this._frameOfRoot(root);
-        v = fr ? (!isTransparent(fr.fill) && hexLum(fr.fill || '#ffffff') < 0.4) : (typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark');
+        v = fr ? (!!this._frameTone(fr) && hexLum(this._frameTone(fr)) < 0.4) : (typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark');
         this._effCache.set(key, v);
       }
       return v;
     }
 
     _themeChoice(scope, frame) {
+      if (scope === 'tree') return frame ? normTheme(frame.theme) : null;
       if (scope === 'frame' && frame) return normTheme(frame.theme);
       if (scope === 'map') return normTheme(this.data.theme);
       return MM_GLOBAL;
@@ -4186,8 +4304,9 @@
       const key = 't:' + rid;
       let t = this._effCache.get(key);
       if (t) return t;
-      const fr = this._frameOfRoot(this.data.nodes[rid]);
-      t = themeCfg((fr && normTheme(fr.theme)) || normTheme(this.data.theme) || MM_GLOBAL);
+      const root = this.data.nodes[rid];
+      const fr = this._frameOfRoot(root);
+      t = themeCfg((root && normTheme(root.theme)) || (fr && normTheme(fr.theme)) || normTheme(this.data.theme) || MM_GLOBAL);
       this._effCache.set(key, t);
       return t;
     }
@@ -4305,13 +4424,17 @@
         if (!root || this.isNodeLocked(root)) return;
         const kids = DIRS.reduce((acc, d) => acc.concat(this.childrenOf(rid, d)), []);
         if (!kids.length) return;
-        const nRight = layout === 'right' ? kids.length : Math.ceil(kids.length / 2);
+        const vert = layout === 'vertical' || layout === 'down';
+        if (vert) root.orient = 'v'; else delete root.orient;
+        const A = vert ? 'down' : 'right';
+        const B = vert ? 'up' : 'left';
+        const nRight = layout === 'right' || layout === 'down' ? kids.length : Math.ceil(kids.length / 2);
         const anyCollapsed = (n) => DIRS.some((d) => n.collapsedDirs && n.collapsedDirs[d]);
-        const counters = { right: 0, left: 0 };
+        let ca = 0;
         kids.forEach((k, i) => {
-          const side = i < nRight ? 'right' : 'left';
+          const side = i < nRight ? A : B;
           k.dir = side;
-          k.order = side === 'left' ? kids.length - i : counters.right++;
+          k.order = side === B ? kids.length - i : ca++;
           this.descendants(k.id, false).forEach((d) => { d.dir = side; d.userPlaced = false; });
           [k].concat(this.descendants(k.id, false)).forEach((n) => {
             const c = anyCollapsed(n);
@@ -4321,13 +4444,81 @@
           k.userPlaced = false;
         });
         const rc = anyCollapsed(root);
-        if (rc) { root.collapsedDirs = defaultCollapsed(); root.collapsedDirs.right = true; root.collapsedDirs.left = true; }
+        if (rc) { root.collapsedDirs = defaultCollapsed(); root.collapsedDirs[A] = true; root.collapsedDirs[B] = true; }
         this._place(this._measure(root), root.x, root.y);
       });
     }
 
+    // Upright trees (rotated, or a top/bottom layout) grow children only up
+    // and down; sideways trees only left and right.
+    _isUpright(n) {
+      const root = n && this.treeRoot(n.id);
+      if (!root) return false;
+      if (root.orient === 'v') return true;
+      // Trees made upright before the flag existed: all branches up/down.
+      const kids = this.childrenOf(root.id);
+      return kids.length > 0 && kids.every((k) => k.dir === 'up' || k.dir === 'down');
+    }
+    _growDirs(n) {
+      return this._isUpright(n) ? ['up', 'down'] : ['left', 'right'];
+    }
+    _fitDir(n, dir) {
+      const ok = this._growDirs(n);
+      if (ok.includes(dir)) return dir;
+      const map = { right: 'down', left: 'up', down: 'right', up: 'left' };
+      return ok.includes(map[dir]) ? map[dir] : ok[1];
+    }
+
+    // Turn a tree a quarter: sideways (left/right) <-> upright (children above
+    // and below). right <-> down, left <-> up; the tree is then re-laid out.
+    rotateTree(id) {
+      if (this.readOnly) return;
+      const root = this.treeRoot(id || this.selectedId);
+      if (!root || this.isNodeLocked(root)) return;
+      const all = this.descendants(root.id, true);
+      const sideways = all.some((n) => n.parentId && (n.dir === 'left' || n.dir === 'right'));
+      const hasKids = all.some((n) => n.parentId);
+      const toUpright = hasKids ? sideways : root.orient !== 'v';
+      const map = toUpright ? { right: 'down', left: 'up', up: 'up', down: 'down' } : { down: 'right', up: 'left', right: 'right', left: 'left' };
+      if (toUpright) root.orient = 'v'; else delete root.orient;
+      const ids = new Set(all.map((n) => n.id));
+      all.forEach((n) => {
+        if (n.parentId && n.dir) n.dir = map[n.dir];
+        const c = n.collapsedDirs || defaultCollapsed();
+        const next = defaultCollapsed();
+        DIRS.forEach((d) => { if (c[d]) next[map[d]] = true; });
+        n.collapsedDirs = next;
+        n.userPlaced = false;
+      });
+      (this.data.links || []).forEach((l) => {
+        if (ids.has(l.fromId) && ids.has(l.toId)) {
+          if (l.fromDir) l.fromDir = map[l.fromDir] || l.fromDir;
+          if (l.toDir) l.toDir = map[l.toDir] || l.toDir;
+        }
+      });
+      this._effCache.clear();
+      this._place(this._measure(root), root.x, root.y);
+      this.render();
+      this._emit();
+      requestAnimationFrame(() => { if (!this._destroyed) { this._syncSizes({ preserveLayout: true }); this._place(this._measure(root), root.x, root.y); this.render(); } });
+      if (global.setStatus) global.setStatus(toUpright ? 'Tree rotated: children above and below (⌘Z to undo)' : 'Tree rotated: children left and right (⌘Z to undo)', 'ok');
+    }
+
+    // What a scope falls back to when it has no style of its own. For the
+    // tree scope, `ctx` is the tree's root node; for frames, the frame.
+    _inheritedTheme(scope, ctx) {
+      if (scope === 'tree') {
+        const fr = ctx && this._frameOfRoot(ctx);
+        return (fr && normTheme(fr.theme)) || normTheme(this.data.theme) || MM_GLOBAL;
+      }
+      if (scope === 'frame') return normTheme(this.data.theme) || MM_GLOBAL;
+      return MM_GLOBAL;
+    }
+
     _rootsInScope(scope, frame) {
+      if (scope === 'tree') return frame ? [frame.id] : [];
       return this.data.rootIds.filter((rid) => {
+        if (normTheme(this.data.nodes[rid] && this.data.nodes[rid].theme)) return false;
         const fr = this._frameOfRoot(this.data.nodes[rid]);
         const frT = fr && normTheme(fr.theme);
         if (scope === 'frame') return fr && frame && fr.id === frame.id;
@@ -4339,12 +4530,12 @@
     // Set (or clear, with t = null) the style for a scope and re-lay out.
     setTheme(scope, t, frameId) {
       if (this.readOnly && scope !== 'global') return;
-      const frame = frameId && (this.data.frames || []).find((f) => f.id === frameId);
+      const frame = scope === 'tree' ? (frameId && this.treeRoot(frameId)) : (frameId && (this.data.frames || []).find((f) => f.id === frameId));
       const next = t ? normTheme(t) : null;
       const prev = this._themeChoice(scope, frame);
       const layoutChanged = !prev || !next || prev.style !== next.style || prev.layout !== next.layout;
       if (scope === 'global') saveGlobalTheme(next || MM_THEME_DEFAULT);
-      else if (scope === 'frame' && frame) { if (next) frame.theme = next; else delete frame.theme; }
+      else if ((scope === 'frame' || scope === 'tree') && frame) { if (next) frame.theme = next; else delete frame.theme; }
       else if (next) this.data.theme = next; else delete this.data.theme;
       this._effCache.clear();
       const roots = this._rootsInScope(scope, frame);
@@ -4478,23 +4669,27 @@
       this._closeStylePanel();
       ensureMarkerFont();
       const frames = this.data.frames || [];
-      let frame = frameId ? frames.find((f) => f.id === frameId) : (this.selectedFrameId && frames.find((f) => f.id === this.selectedFrameId));
-      let sc = scope || (frame ? 'frame' : 'map');
+      const treeRoot = scope === 'tree' ? this.treeRoot(frameId) : (this.selectedId && this.data.nodes[this.selectedId] ? this.treeRoot(this.selectedId) : null);
+      let frame = scope === 'tree' ? null : frameId ? frames.find((f) => f.id === frameId) : (this.selectedFrameId && frames.find((f) => f.id === this.selectedFrameId));
+      if (!frame && treeRoot) frame = this._frameOfRoot(treeRoot);
+      let sc = scope || (this.selectedFrameId && frame ? 'frame' : 'map');
+      // The style target for a scope: the tree's root, the frame, or nothing.
+      const tgt = () => (sc === 'tree' ? treeRoot : frame);
       const panel = document.createElement('div');
       panel.className = 'mm-style-panel';
       this.els.root.appendChild(panel);
       this._stylePanel = panel;
       const draw = () => {
-        const own = this._themeChoice(sc, frame);
-        const eff = sc === 'frame' ? (own || normTheme(this.data.theme) || MM_GLOBAL) : sc === 'map' ? (own || MM_GLOBAL) : MM_GLOBAL;
+        const own = this._themeChoice(sc, tgt());
+        const eff = sc === 'global' ? MM_GLOBAL : (own || this._inheritedTheme(sc, tgt()));
         const cfg = themeCfg(eff);
         const inherits = sc !== 'global' && !own;
         const opt = (field, k, label, svg) => `<button type="button" data-opt="${field}" data-val="${k}" class="${(eff[field] || '') === k ? 'on' : ''}">${svg ? `<svg viewBox="0 0 40 20" width="40" height="20" aria-hidden="true">${svg}</svg>` : ''}<span>${escapeHtml(label)}</span></button>`;
         const scopeBtn = (k, label, dis) => `<button type="button" data-scope="${k}" class="${sc === k ? 'on' : ''}"${dis ? ' disabled' : ''}>${label}</button>`;
         panel.innerHTML = `
           <div class="mm-sp-head"><b>Mindmap style</b><button type="button" data-sp-close title="Close">×</button></div>
-          <div class="mm-sp-scope">${scopeBtn('global', 'Global default')}${scopeBtn('map', 'This mindmap')}${scopeBtn('frame', frame ? 'Frame: ' + escapeHtml((frame.title || 'Frame').slice(0, 18)) : 'Frame', !frame)}</div>
-          ${sc !== 'global' ? `<label class="mm-sp-follow"><input type="checkbox" data-follow${inherits ? ' checked' : ''}/> Follow ${sc === 'frame' ? 'this mindmap' : 'global default'}</label>` : '<div class="mm-sp-note">Used by every mindmap and frame that has no style of its own.</div>'}
+          <div class="mm-sp-scope">${scopeBtn('global', 'Global default')}${scopeBtn('map', 'This mindmap')}${scopeBtn('frame', frame ? 'Frame: ' + escapeHtml((frame.title || 'Frame').slice(0, 18)) : 'Frame', !frame)}${scopeBtn('tree', treeRoot ? 'Tree: ' + escapeHtml((stripTags(treeRoot.content) || 'Untitled').slice(0, 18)) : 'Tree (select a cell)', !treeRoot)}</div>
+          ${sc !== 'global' ? `<label class="mm-sp-follow"><input type="checkbox" data-follow${inherits ? ' checked' : ''}/> Follow ${sc === 'tree' ? (frame && normTheme(frame.theme) ? 'its frame' : 'this mindmap') : sc === 'frame' ? 'this mindmap' : 'global default'}</label>` : '<div class="mm-sp-note">Used by every mindmap, frame and tree that has no style of its own.</div>'}
           <div class="mm-sp-body"><div class="mm-sp-main">
           <div class="mm-sp-label">Presets <span>sets everything below</span></div>
           <div class="mm-sp-styles">${MM_STYLE_ORDER.map((id) => `<button type="button" data-style="${id}" class="${eff.style === id ? 'on' : ''}" title="${escapeAttr(MM_STYLES[id].hint)}">${this._stylePreviewSvg(id, eff.style === id ? eff.palette : '')}<span>${escapeHtml(MM_STYLES[id].label)}</span></button>`).join('')}</div>
@@ -4522,25 +4717,30 @@
           <div class="mm-sp-actions"><button type="button" data-relayout title="Put branches back where this style places them (left/right), e.g. after you moved cells by hand">↻ Re-arrange branches</button></div>
           </div><div class="mm-sp-side"><div class="mm-sp-label">Preview</div><div class="mm-sp-preview">${this._themePreviewSvg(cfg)}</div><div class="mm-sp-note">Esc to close</div></div></div>`;
         panel.classList.toggle('is-inherit', inherits);
-        if (sc !== 'frame') {
-          const styled = (this.data.frames || []).filter((f) => normTheme(f.theme));
-          const covered = styled.filter((f) => this.data.rootIds.some((rid) => { const fr = this._frameOfRoot(this.data.nodes[rid]); return fr && fr.id === f.id; }));
-          if (covered.length) {
+        if (sc !== 'tree') {
+          const covered = sc === 'frame' ? [] : (this.data.frames || []).filter((f) => normTheme(f.theme))
+            .filter((f) => this.data.rootIds.some((rid) => { const fr = this._frameOfRoot(this.data.nodes[rid]); return fr && fr.id === f.id; }));
+          const ownTrees = this.data.rootIds.map((rid) => this.data.nodes[rid])
+            .filter((r) => r && normTheme(r.theme) && (sc !== 'frame' || (frame && (this._frameOfRoot(r) || {}).id === frame.id)));
+          const bits = [];
+          if (covered.length) bits.push(`${covered.length === 1 ? 'frame' : covered.length + ' frames'} <b>${covered.map((f) => escapeHtml(f.title || 'Frame')).join(', ')}</b>`);
+          if (ownTrees.length) bits.push(`${ownTrees.length === 1 ? 'tree' : ownTrees.length + ' trees'} <b>${ownTrees.map((r) => escapeHtml((stripTags(r.content) || 'Untitled').slice(0, 20))).join(', ')}</b>`);
+          if (bits.length) {
             const note = document.createElement('div');
             note.className = 'mm-sp-warn';
-            note.innerHTML = `${covered.length === 1 ? 'Frame' : covered.length + ' frames'} <b>${covered.map((f) => escapeHtml(f.title || 'Frame')).join(', ')}</b> ${covered.length === 1 ? 'has' : 'have'} its own style, so trees inside ${covered.length === 1 ? 'it' : 'them'} ignore these settings. <button type="button" data-unframe>Make ${covered.length === 1 ? 'it' : 'them'} follow this mindmap</button>`;
+            note.innerHTML = `${bits.join(' and ')} ${covered.length + ownTrees.length === 1 ? 'has its' : 'have their'} own style and ignore${covered.length + ownTrees.length === 1 ? 's' : ''} these settings. <button type="button" data-unframe>Make ${covered.length + ownTrees.length === 1 ? 'it' : 'them'} follow</button>`;
             panel.querySelector('.mm-sp-scope').after(note);
           }
         }
       };
       const commit = (patch) => {
-        const own = this._themeChoice(sc, frame);
-        const base = own || (sc === 'frame' ? (normTheme(this.data.theme) || MM_GLOBAL) : MM_GLOBAL);
+        const own = this._themeChoice(sc, tgt());
+        const base = sc === 'global' ? MM_GLOBAL : (own || this._inheritedTheme(sc, tgt()));
         const next = Object.assign({}, base, patch);
         if (patch.style) Object.assign(next, { palette: '', width: 0, branch: '', cell: '', layout: '', font: '', thin: '', fsize: '' });
         if ('branch' in patch) { next.width = 0; next.thin = ''; }
         if (patch.textMode || patch.textColor) this._effCache.clear();
-        this.setTheme(sc, next, frame && frame.id);
+        this.setTheme(sc, next, tgt() && tgt().id);
         draw();
       };
       panel.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -4553,8 +4753,10 @@
         if (b.hasAttribute('data-sp-close')) return this._closeStylePanel();
         if (b.dataset.scope) { sc = b.dataset.scope; return draw(); }
         if (b.hasAttribute('data-unframe')) {
-          (this.data.frames || []).forEach((f) => { delete f.theme; });
-          this.setTheme(sc === 'global' ? 'global' : 'map', this._themeChoice(sc === 'global' ? 'global' : 'map'));
+          if (sc !== 'frame') (this.data.frames || []).forEach((f) => { delete f.theme; });
+          this.data.rootIds.forEach((rid) => { const r = this.data.nodes[rid]; if (r && (sc !== 'frame' || (frame && (this._frameOfRoot(r) || {}).id === frame.id))) delete r.theme; });
+          if (sc === 'frame') this.setTheme('frame', this._themeChoice('frame', frame), frame && frame.id);
+          else this.setTheme(sc === 'global' ? 'global' : 'map', this._themeChoice(sc === 'global' ? 'global' : 'map'));
           return draw();
         }
         if (b.dataset.style) return commit({ style: b.dataset.style });
@@ -4564,7 +4766,7 @@
         if (b.dataset.tcolor) return commit({ textMode: 'color', textColor: b.dataset.tcolor });
         if (b.hasAttribute('data-width-auto')) return commit({ width: 0 });
         if (b.hasAttribute('data-relayout')) {
-          const roots = sc === 'global' ? this._rootsInScope('global') : this._rootsInScope(sc, frame);
+          const roots = sc === 'global' ? this._rootsInScope('global') : this._rootsInScope(sc, tgt());
           if (!roots.length) return;
           this._applyThemeLayout(roots, this._rootTheme(roots[0]).layout === 'keep' ? 'both' : this._rootTheme(roots[0]).layout);
           this.render();
@@ -4576,11 +4778,11 @@
           const v = panel.querySelector('[data-wval]');
           if (v) v.textContent = e.target.value + 'px';
           // Live preview; the change event below saves it (one undo step).
-          const own = this._themeChoice(sc, frame);
-          const base = own || (sc === 'frame' ? (normTheme(this.data.theme) || MM_GLOBAL) : MM_GLOBAL);
+          const own = this._themeChoice(sc, tgt());
+          const base = sc === 'global' ? MM_GLOBAL : (own || this._inheritedTheme(sc, tgt()));
           const tmp = Object.assign({}, base, { width: Number(e.target.value) });
           if (sc === 'global') MM_GLOBAL = tmp;
-          else if (sc === 'frame' && frame) frame.theme = tmp;
+          else if ((sc === 'frame' || sc === 'tree') && tgt()) tgt().theme = tmp;
           else this.data.theme = tmp;
           this.render();
           const pv = panel.querySelector('.mm-sp-preview');
@@ -4593,9 +4795,107 @@
         if (e.target.matches('[data-fsize]')) commit({ fsize: e.target.checked ? 'on' : 'off' });
         if (e.target.matches('[data-tcustom]')) commit({ textMode: 'color', textColor: e.target.value });
         if (e.target.matches('[data-follow]')) {
-          if (e.target.checked) this.setTheme(sc, null, frame && frame.id);
-          else this.setTheme(sc, sc === 'frame' ? (normTheme(this.data.theme) || MM_GLOBAL) : MM_GLOBAL, frame && frame.id);
+          if (e.target.checked) this.setTheme(sc, null, tgt() && tgt().id);
+          else this.setTheme(sc, this._inheritedTheme(sc, tgt()), tgt() && tgt().id);
           draw();
+        }
+      });
+      draw();
+    }
+
+    // Frame background: paper textures, or an image (cover / fit / tile) with
+    // an optional white wash so text stays readable.
+    openFrameBackground(frameId) {
+      const f = (this.data.frames || []).find((x) => x.id === frameId);
+      if (!f || this.readOnly) return;
+      this._closeStylePanel();
+      const panel = document.createElement('div');
+      panel.className = 'mm-style-panel mm-bg-panel';
+      this.els.root.appendChild(panel);
+      this._stylePanel = panel;
+      this._stylePanelEsc = (e) => { if (e.key === 'Escape' && this._stylePanel) { e.preventDefault(); e.stopPropagation(); this._closeStylePanel(); } };
+      document.addEventListener('keydown', this._stylePanelEsc, true);
+      const apply = (patch, live) => {
+        Object.keys(patch).forEach((k) => { if (patch[k] == null || patch[k] === '') delete f[k]; else f[k] = patch[k]; });
+        this._effCache.clear();
+        this.render();
+        if (!live) { this._emit(); draw(); }
+      };
+      const draw = () => {
+        panel.innerHTML = `
+          <div class="mm-sp-head"><b>Frame background · ${escapeHtml(f.title || 'Frame')}</b><button type="button" data-x title="Close (Esc)">×</button></div>
+          <div class="mm-sp-label">Paper</div>
+          <div class="mm-bg-grid">${FRAME_TEXTURES.map((t) => `<button type="button" data-tex="${t.id}" class="${!f.bgImage && (f.texture || '') === t.id ? 'on' : ''}"><span class="mm-bg-sw" data-sw="${t.id}"></span><span>${escapeHtml(t.label)}</span></button>`).join('')}</div>
+          <div class="mm-sp-label">Image</div>
+          <div class="mm-bg-img">
+            ${f.bgImage ? `<span class="mm-bg-thumb" style="background-image:url('${String(f.bgImage).replace(/'/g, '%27')}')"></span>` : ''}
+            <label class="mm-bg-btn">Choose image…<input type="file" accept="image/*" data-file hidden/></label>
+            <input type="url" data-url placeholder="or paste an image URL" spellcheck="false"/>
+            <button type="button" class="mm-bg-btn" data-use-url>Use</button>
+            ${f.bgImage ? '<button type="button" class="mm-bg-btn" data-noimg>Remove image</button>' : ''}
+          </div>
+          ${f.bgImage ? `<div class="mm-sp-opts">${[['cover', 'Fill frame'], ['contain', 'Fit whole image'], ['tile', 'Tile']].map(([k, l]) => `<button type="button" data-fit="${k}" class="${(f.bgFit || 'cover') === k ? 'on' : ''}"><span>${l}</span></button>`).join('')}</div>
+          <div class="mm-sp-label">Soften image <span data-softv>${Math.round((Number(f.bgSoft) || 0) * 100)}%</span></div>
+          <div class="mm-sp-width"><input type="range" min="0" max="85" step="5" value="${Math.round((Number(f.bgSoft) || 0) * 100)}" data-soft/></div>` : ''}
+          <div class="mm-sp-note">Esc to close · picking a frame colour later replaces the paper</div>`;
+        panel.querySelectorAll('[data-sw]').forEach((sw) => {
+          const t = textureById(sw.dataset.sw);
+          if (t) paintTexture(sw, t); else sw.style.background = f.fill || '#ffffff';
+        });
+      };
+      const setImage = (src) => {
+        const img = new Image();
+        img.onload = () => {
+          // Keep files small: at most 1800px on the long side, as JPEG
+          // (PNG when it has transparency is not worth the size here).
+          const max = 1800;
+          const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.naturalWidth * k));
+          c.height = Math.max(1, Math.round(img.naturalHeight * k));
+          const g = c.getContext('2d');
+          g.fillStyle = '#ffffff';
+          g.fillRect(0, 0, c.width, c.height);
+          g.drawImage(img, 0, 0, c.width, c.height);
+          let url = src;
+          let tone = '';
+          try {
+            url = c.toDataURL('image/jpeg', 0.86);
+            const t = document.createElement('canvas');
+            t.width = 1; t.height = 1;
+            t.getContext('2d').drawImage(c, 0, 0, 1, 1);
+            const d = t.getContext('2d').getImageData(0, 0, 1, 1).data;
+            tone = '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+          } catch (e) { /* cross-origin URL: keep the link, no tone */ }
+          apply({ bgImage: url, bgTone: tone, texture: '', bgFit: f.bgFit || 'cover' });
+        };
+        img.onerror = () => { if (global.setStatus) global.setStatus('Could not load that image', 'error'); };
+        if (/^https?:/i.test(src)) img.crossOrigin = 'anonymous';
+        img.src = src;
+      };
+      panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+      panel.addEventListener('keydown', (e) => e.stopPropagation());
+      panel.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.hasAttribute('data-x')) return this._closeStylePanel();
+        if (b.dataset.tex !== undefined) return apply({ texture: b.dataset.tex, bgImage: '', bgTone: '' });
+        if (b.dataset.fit) return apply({ bgFit: b.dataset.fit });
+        if (b.hasAttribute('data-noimg')) return apply({ bgImage: '', bgTone: '', bgSoft: '' });
+        if (b.hasAttribute('data-use-url')) { const u = panel.querySelector('[data-url]').value.trim(); if (u) setImage(u); }
+      });
+      panel.addEventListener('change', (e) => {
+        if (e.target.matches('[data-file]') && e.target.files[0]) {
+          const r = new FileReader();
+          r.onload = () => setImage(r.result);
+          r.readAsDataURL(e.target.files[0]);
+        }
+        if (e.target.matches('[data-soft]')) apply({ bgSoft: Number(e.target.value) / 100 });
+      });
+      panel.addEventListener('input', (e) => {
+        if (e.target.matches('[data-soft]')) {
+          panel.querySelector('[data-softv]').textContent = e.target.value + '%';
+          apply({ bgSoft: Number(e.target.value) / 100 }, true);
         }
       });
       draw();
@@ -5482,7 +5782,22 @@
       el.style.top = f.y + 'px';
       el.style.width = f.w + 'px';
       el.style.height = f.h + 'px';
-      el.style.background = hexAlpha(f.fill || '#ffffff', 1);
+      const tex = textureById(f.texture);
+      el.style.background = '';
+      if (f.bgImage) {
+        const soft = clamp(Number(f.bgSoft) || 0, 0, 0.85);
+        const fit = f.bgFit === 'contain' ? 'contain' : f.bgFit === 'tile' ? 'auto' : 'cover';
+        el.style.backgroundColor = f.fill || '#ffffff';
+        el.style.backgroundImage = `linear-gradient(rgba(255,255,255,${soft}), rgba(255,255,255,${soft})), url("${String(f.bgImage).replace(/"/g, '%22')}")`;
+        el.style.backgroundSize = `100% 100%, ${fit}`;
+        el.style.backgroundRepeat = `no-repeat, ${f.bgFit === 'tile' ? 'repeat' : 'no-repeat'}`;
+        el.style.backgroundPosition = 'center, center';
+        el.style.backgroundBlendMode = 'normal, normal';
+      } else if (tex) {
+        paintTexture(el, tex);
+      } else {
+        el.style.background = hexAlpha(f.fill || '#ffffff', 1);
+      }
       el.style.borderColor = f.border || '#c5c9d1';
       el.classList.toggle('selected', this.selectedFrameId === f.id);
       el.classList.toggle('is-locked', !!f.locked);
@@ -5823,6 +6138,7 @@
         n.noteOpen ? 'no' : '',
         (n.note || '').length,
         n.parentId ? '' : 'root',
+        this._isUpright(n) ? 'v' : 'h',
         global.hljs ? 'hl' : '',
       ].join('|');
       if (el.dataset.sig === sig) return;
@@ -5901,10 +6217,11 @@
         body = `<div class="mm-node-body">${escapeHtml(n.content || '')}</div>`;
       }
 
+      const grow = this._growDirs(n);
       const ports = DIRS.map((d) => {
         const count = this.immediateCount(n.id, d);
         const collapsed = !!(n.collapsedDirs && n.collapsedDirs[d]);
-        const hoverAdd = d === 'left' || d === 'right';
+        const hoverAdd = grow.includes(d);
         const add = (!locked && !collapsed && hoverAdd)
           ? `<button type="button" class="mm-handle" data-add="${d}" title="Add ${d}">+</button>`
           : '';
@@ -5928,6 +6245,8 @@
     _portSideAt(el, clientX, clientY) {
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) return null;
+      const n = this.data.nodes[el.dataset.id];
+      if (n && this._isUpright(n)) return clientY - r.top < r.height / 2 ? 'up' : 'down';
       const x = clientX - r.left;
       return x < r.width / 2 ? 'left' : 'right';
     }
@@ -6742,7 +7061,7 @@
     async _doExport(format, rect) {
       // A standalone file has export.js inlined and no server to fetch from.
       const stale = !isStandaloneDoc() && global.MindmapExport && global.MindmapExport._v !== EXPORT_V;
-      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=25');
+      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=27');
       if (!global.MindmapExport) throw new Error('Export module failed to load');
       const scene = this._exportScene();
       return global.MindmapExport.run(format, rect, scene, this.els);
@@ -7170,7 +7489,7 @@
       this._menuMode = 'node';
       const counts = {};
       DIRS.forEach((d) => { counts[d] = this.immediateCount(id, d); });
-      const addInner = DIRS.filter((d) => !(n.collapsedDirs && n.collapsedDirs[d])).map((d) => `<button type="button" data-m="add" data-dir="${d}">${d[0].toUpperCase() + d.slice(1)}${d === 'right' ? ' <span class="mm-kbd">→</span>' : ''}</button>`).join('');
+      const addInner = this._growDirs(n).filter((d) => !(n.collapsedDirs && n.collapsedDirs[d])).map((d) => `<button type="button" data-m="add" data-dir="${d}">${d[0].toUpperCase() + d.slice(1)}${d === 'right' ? ' <span class="mm-kbd">→</span>' : ''}</button>`).join('');
       const collapseInner = DIRS.filter((d) => counts[d]).map((d) => `<button type="button" data-m="toggle" data-dir="${d}">${n.collapsedDirs && n.collapsedDirs[d] ? 'Expand' : 'Collapse'} ${d} (${counts[d]})</button>`).join('');
       const typeInner = `
         <button type="button" data-m="type" data-type="text">Text</button>
@@ -7216,6 +7535,8 @@
         <button type="button" data-m="lock">${n.locked ? 'Unlock' : 'Lock'}</button>
         <button type="button" data-m="copy">Copy <span class="mm-kbd">⌘C</span></button>
         <button type="button" data-m="paste"${this.isNodeLocked(n) ? ' disabled' : ''}>Paste as child</button>
+        <button type="button" data-m="tree-style">🎨 Style for this tree…</button>
+        <button type="button" data-m="rotate"${this.isNodeLocked(n) ? ' disabled' : ''}>⟳ Rotate tree <span class="mm-kbd">⌥R</span></button>
         <button type="button" data-m="copy-style">Copy style <span class="mm-kbd">⌥⌘C</span></button>
         <button type="button" data-m="paste-style"${this.isNodeLocked(n) || !this._getStyleClip() ? ' disabled' : ''}>Paste style <span class="mm-kbd">⌥⌘V</span></button>
         <button type="button" data-m="reset-look"${this.isNodeLocked(n) || !((n.style && n.style.own) || (n.format && n.format.own)) ? ' disabled' : ''}>Reset look to style</button>
@@ -7354,6 +7675,7 @@
         <button type="button" data-m="fit"${f.locked ? ' disabled' : ''}>Fit to content</button>
         <button type="button" data-m="expand">Expand all children</button>
         <button type="button" data-m="style">🎨 Style for this frame…</button>
+        <button type="button" data-m="paper"${f.locked ? ' disabled' : ''}>🖼 Paper &amp; background…</button>
         <button type="button" data-m="duplicate">Duplicate</button>
         ${this.opts && this.opts.getPath ? '<button type="button" data-m="copylink">Copy link</button>' : ''}
         <button type="button" data-m="front">Bring to front</button>
@@ -7692,6 +8014,8 @@
       if (m === 'copy-style') this.copyStyle(id);
       if (m === 'paste-style') this.pasteStyle();
       if (m === 'reset-look') { this._closeMenu(); this.resetNodeLook(); return; }
+      if (m === 'rotate') { this._closeMenu(); this.rotateTree(id); return; }
+      if (m === 'tree-style') { this._closeMenu(); this.openStylePanel('tree', id); return; }
       if (m === 'notes') {
         this._toggleNote(n);
         this._closeMenu();
@@ -7775,6 +8099,7 @@
       }
       if (m === 'fill') this.applyFrameColor(id, btn.getAttribute('data-color'));
       if (m === 'style') { this._closeMenu(); this.openStylePanel('frame', id); return; }
+      if (m === 'paper') { this._closeMenu(); this.openFrameBackground(id); return; }
       if (m === 'export') {
         const format = btn.getAttribute('data-format');
         this._closeMenu();
@@ -8482,6 +8807,11 @@
         this.render();
         return;
       }
+      if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyR' && this.selectedId && !typing && !inChrome) {
+        e.preventDefault();
+        this.rotateTree(this.selectedId);
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.altKey && (e.code === 'KeyC' || e.code === 'KeyV') && !typing && !inChrome) {
         e.preventDefault();
         if (e.code === 'KeyC') this.copyStyle(this.selectedId); else this.pasteStyle();
@@ -8535,7 +8865,7 @@
         // off the left of its parent gets a left child, and so on. Roots
         // have no direction, so they default to the right.
         const sel = this.data.nodes[this.selectedId];
-        const dir = sel && sel.parentId && DIRS.includes(sel.dir) ? sel.dir : 'right';
+        const dir = sel && sel.parentId && DIRS.includes(sel.dir) ? this._fitDir(sel, sel.dir) : (this._isUpright(sel) ? 'down' : 'right');
         const child = this.addChild(this.selectedId, dir);
         if (child) this.startEdit(child.id);
       }

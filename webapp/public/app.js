@@ -426,6 +426,10 @@ body { font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter
 .md img { max-width: 100%; border-radius: 4px; }
 .md hr { height: 1px; border: 0; background: var(--line); margin: 1.5em 0; }
 .md .md-missing { color: var(--muted); font-style: italic; }
+.md a.md-board-link { display: inline-block; border-radius: 6px; }
+.md a.md-board-link:hover img { outline: 2px solid var(--link); outline-offset: 2px; }
+.md a.md-board-cap { display: block; margin: 4px 0 12px; font-size: 0.85em; color: var(--link); text-decoration: none; }
+.md a.md-board-cap:hover { text-decoration: underline; }
 .md .md-mermaid { margin: 0 0 1em; padding: 12px; border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; text-align: center; }
 .md .md-mermaid svg { max-width: 100%; height: auto; }
 .md .md-mermaid.is-error { color: #d92d20; text-align: left; font-size: 13px; white-space: pre-wrap; }
@@ -450,6 +454,9 @@ function boardTargetOf(fromPath, href) {
 }
 
 let markdownBoardRenderer = null;
+// Zoom of the rendered markdown (kept across files and reloads).
+const clampMdZoom = (v) => Math.min(3, Math.max(0.5, Number(v) || 1));
+let mdPreviewZoom = (() => { try { return clampMdZoom(localStorage.getItem('docviewer-md-zoom')); } catch (e) { return 1; } })();
 // Images that point at a board frame / gantt view are rendered live (from
 // the current board) to data URLs before the preview is built.
 async function renderMarkdownBoardImages(source, relPath) {
@@ -491,6 +498,23 @@ function renderMarkdownDoc(source, relPath, boardImages, mermaidSvgs) {
       if (typeof r === 'string') {
         img.setAttribute('src', r);
         img.classList.add('md-board-img');
+        // Every embedded frame links back to the frame on its board.
+        const target = t.path + '#' + t.ref;
+        if (!img.closest('a')) {
+          const a = document.createElement('a');
+          a.setAttribute('data-open', target);
+          a.setAttribute('href', '#');
+          a.className = 'md-board-link';
+          a.title = 'Open this frame';
+          img.replaceWith(a);
+          a.appendChild(img);
+          const cap = document.createElement('a');
+          cap.setAttribute('data-open', target);
+          cap.setAttribute('href', '#');
+          cap.className = 'md-board-cap';
+          cap.textContent = '↗ Open frame' + (img.getAttribute('alt') ? ': ' + img.getAttribute('alt') : '');
+          a.after(cap);
+        }
       } else {
         const note = document.createElement('span');
         note.className = 'md-missing';
@@ -522,6 +546,14 @@ function renderMarkdownDoc(source, relPath, boardImages, mermaidSvgs) {
   const body = tpl.innerHTML.trim() || '<p class="md-missing">This file is empty.</p>';
   return `<!DOCTYPE html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${MARKDOWN_CSS}</style></head>`
     + `<body><article class="md">${body}</article>`
+    // Smooth pinch / ⌘-scroll / ⌘± zoom of the document (not the whole app):
+    // batched per frame, keeps the point under the pointer still.
+    + `<script>(function(){var art=document.querySelector('.md');var z=${clampMdZoom(mdPreviewZoom)},t=z,raf=0,ax=0,ay=0,g=1;art.style.zoom=z;`
+    + `function ap(){raf=0;var k=t/z;if(Math.abs(k-1)<0.001)return;var sx=scrollX,sy=scrollY;z=t;art.style.zoom=z;scrollTo((sx+ax)*k-ax,(sy+ay)*k-ay);parent.postMessage({type:'docviewer-md-zoom',zoom:z},'*');}`
+    + `function to(v,x,y){t=Math.min(3,Math.max(0.5,v));ax=x;ay=y;if(!raf)raf=requestAnimationFrame(ap);}`
+    + `addEventListener('wheel',function(e){if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();var d=e.deltaMode?e.deltaY*16:e.deltaY;d=Math.max(-24,Math.min(24,d));to(t*Math.exp(-d*0.01),e.clientX,e.clientY);},{passive:false});`
+    + `addEventListener('gesturestart',function(e){e.preventDefault();g=t;},{passive:false});addEventListener('gesturechange',function(e){e.preventDefault();to(g*e.scale,e.clientX,e.clientY);},{passive:false});`
+    + `addEventListener('keydown',function(e){if(!(e.metaKey||e.ctrlKey))return;var c=innerWidth/2,m=innerHeight/2;if(e.key==='='||e.key==='+'){e.preventDefault();to(t*1.1,c,m);}else if(e.key==='-'){e.preventDefault();to(t/1.1,c,m);}else if(e.key==='0'){e.preventDefault();to(1,c,m);}});})();<\/script>`
     + `<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[data-open]');if(!a)return;e.preventDefault();parent.postMessage({type:'docviewer-open',path:a.getAttribute('data-open')},'*');});<\/script>`
     // In-page "#heading" links and outline clicks (the app sends the heading's index).
     + `<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(!a||a.hasAttribute('data-open'))return;var t=document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));if(t){e.preventDefault();t.scrollIntoView({block:'start'});}});`
@@ -580,6 +612,11 @@ window.addEventListener('message', (e) => {
   if (!htmlPreviewFrame || e.source !== htmlPreviewFrame.contentWindow) return;
   const d = e.data;
   if (d && d.type === 'docviewer-run' && typeof d.code === 'string' && typeof runInTerminal === 'function') { runInTerminal(d.code); return; }
+  if (d && d.type === 'docviewer-md-zoom' && typeof d.zoom === 'number') {
+    mdPreviewZoom = clampMdZoom(d.zoom);
+    try { localStorage.setItem('docviewer-md-zoom', String(mdPreviewZoom)); } catch (err) { /* per session only */ }
+    return;
+  }
   if (!d || d.type !== 'docviewer-open' || typeof d.path !== 'string' || !d.path) return;
   const [path, ref] = d.path.split('#');
   if (!path || path.split('/').includes('..')) return;
@@ -2048,6 +2085,30 @@ async function renamePath(fromPath, isFolder) {
   await movePath(fromPath, parent ? `${parent}/${newName}` : newName, 'Rename');
 }
 
+// Move images/files used by notes and boards into assets/<kind>/ and make
+// every link a data-root link. Shows what will happen first.
+window.tidyAssets = async function tidyAssets() {
+  if (isDirty && typeof saveCurrentFile === 'function') await saveCurrentFile();
+  const post = (apply) => fetch('/api/assets/tidy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apply }) }).then((r) => r.json());
+  const plan = await post(false);
+  if (plan.error) { await uiAlert('Could not plan: ' + plan.error); return; }
+  const n = plan.moves.length;
+  const r = plan.relLinkFiles.length;
+  if (!n && !r) { await uiAlert('Everything is tidy: assets are in assets/ and links are written from the data folder.'); return; }
+  const sample = plan.moves.slice(0, 8).map((m) => '• ' + m.from + ' → ' + m.to).join('\n') + (n > 8 ? '\n… and ' + (n - 8) + ' more' : '');
+  const ok = await uiConfirm(
+    (n ? n + ' asset' + (n === 1 ? '' : 's') + ' will move into assets/:\n' + sample + '\n\n' : '')
+    + (r ? r + ' note' + (r === 1 ? ' has' : 's have') + ' relative links that will be rewritten from the data folder root.\n\n' : '')
+    + 'Every link to the moved files is updated, and the change is saved to history.',
+    { title: 'Tidy assets', okLabel: 'Tidy now' });
+  if (!ok) return;
+  const res = await post(true);
+  if (res.error) { await uiAlert('Tidy failed: ' + res.error); return; }
+  await loadTree();
+  setStatus(`Moved ${res.moved.length} asset${res.moved.length === 1 ? '' : 's'} · links updated in ${res.updated.length} file${res.updated.length === 1 ? '' : 's'}`, 'ok');
+  if (currentPath && res.updated.includes(currentPath) && !isDirty) await openFile(currentPath, undefined, { force: true, skipDirty: true });
+};
+
 async function movePath(fromPath, toPath, verb) {
   // A move expands the destination folder so the item stays visible.
   const toFolderPath = verb === 'Move' && toPath.includes('/')
@@ -2063,6 +2124,7 @@ async function movePath(fromPath, toPath, verb) {
     alert(verb + ' failed: ' + data.error);
     return;
   }
+  if (window.FileTabs) window.FileTabs.renamed(fromPath, toPath);
   // The open file may be the moved path itself or live under a moved folder.
   const wasCurrent = !!currentPath
     && (currentPath === fromPath || currentPath.startsWith(fromPath + '/'));
@@ -2081,6 +2143,16 @@ async function movePath(fromPath, toPath, verb) {
     rememberLastFile(newCurrent);
     currentPathEl.textContent = newCurrent;
     highlightActiveRow(newCurrent);
+  }
+  // The server fixed links to the moved item in other files. Reload the
+  // open file if it was one of them, so a save can't put the old links back.
+  const updated = Array.isArray(data.updated) ? data.updated : [];
+  if (updated.length) {
+    setStatus(`Updated links in ${updated.length} file${updated.length === 1 ? '' : 's'}`, 'ok');
+    if (currentPath && updated.includes(currentPath)) {
+      if (isDirty) await uiAlert('Links in this file were updated on disk because of the ' + verb.toLowerCase() + '. Your unsaved edits still have the old links — reopen the file to get the fixed version.');
+      else await openFile(currentPath, undefined, { force: true, skipDirty: true });
+    }
   }
 
   const past = verb === 'Rename' ? 'Renamed' : 'Moved';
@@ -2307,8 +2379,8 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=109', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=159', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=110', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=172', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
@@ -2355,7 +2427,7 @@ function ensureRunbookAssets() {
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
   return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
-    .then(() => ensureScript('/slides/engine.js?v=11', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
+    .then(() => ensureScript('/slides/engine.js?v=13', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
 }
 
 // Slides render live windows of mindmap/flow frames and gantt charts, so
@@ -2449,6 +2521,7 @@ function closeOpenFile() {
   currentLang = null;
   currentDataFormat = null;
   currentPathEl.textContent = 'No file open';
+  if (window.FileTabs) window.FileTabs.refresh();
   saveBtn.disabled = true;
   saveAsBtn.disabled = true;
   if (exportFileBtn) exportFileBtn.disabled = true;
@@ -2570,6 +2643,7 @@ async function openPdf(relPath) {
   currentLang = null;
   currentDataFormat = null;
   currentPathEl.textContent = relPath;
+  if (window.FileTabs) window.FileTabs.opened(relPath);
   markClean();
   saveBtn.disabled = true;
   saveAsBtn.disabled = true;
@@ -2615,6 +2689,7 @@ async function openFile(relPath, lineToReveal, opts) {
   const data = await res.json();
   if (token !== openToken) return;
   if (!res.ok) {
+    if (window.FileTabs && res.status === 404) window.FileTabs.failed(relPath);
     alert('Failed to open file: ' + data.error);
     return;
   }
@@ -2626,6 +2701,7 @@ async function openFile(relPath, lineToReveal, opts) {
   currentLang = monacoLanguageForPath(relPath);
   currentDataFormat = langForPath(relPath);
   currentPathEl.textContent = relPath;
+  if (window.FileTabs) window.FileTabs.opened(relPath);
   markClean();
   saveBtn.disabled = false;
   historyBtn.disabled = false;

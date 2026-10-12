@@ -2316,3 +2316,15 @@ html[data-theme="light"] .mm-color-custom-well {
 .mm-sp-width button:disabled { opacity: .45; cursor: default; }
 :root[data-theme="dark"] .mm-sp-width button, :root[data-theme="dark"] .mm-sp-actions button, :root[data-theme="dark"] .mm-sp-warn button { background: #2a303d; color: #e6e9ef; border-color: #444c5c; }
 .mm-sp-hint { color: #889; font-size: 12px; }
+.mm-bg-panel { width: min(640px, calc(100% - 32px)); }
+.mm-bg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.mm-bg-grid button { border: 2px solid transparent; background: none; border-radius: 10px; padding: 0 0 4px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; font: 12px/1.2 ui-sans-serif, system-ui, sans-serif; color: inherit; }
+.mm-bg-grid button.on { border-color: #4f7cd6; }
+.mm-bg-sw { display: block; height: 64px; border-radius: 8px; border: 1px solid rgba(20, 30, 50, 0.15); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3); }
+.mm-bg-img { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mm-bg-img input[type="url"] { flex: 1; min-width: 160px; padding: 5px 8px; border: 1px solid #ccd3dd; border-radius: 6px; font: inherit; background: transparent; color: inherit; }
+.mm-bg-btn { border: 1px solid #ccd3dd; background: #fff; color: #334; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+.mm-bg-thumb { width: 64px; height: 40px; border-radius: 6px; background-size: cover; background-position: center; border: 1px solid rgba(0,0,0,0.15); }
+.mm-bg-panel .mm-sp-opts { margin-top: 8px; }
+:root[data-theme="dark"] .mm-bg-btn { background: #2a303d; color: #e6e9ef; border-color: #444c5c; }
+:root[data-theme="dark"] .mm-bg-img input[type="url"] { border-color: #444c5c; }

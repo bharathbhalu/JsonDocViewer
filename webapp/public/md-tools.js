@@ -144,14 +144,11 @@
 
   // ---------- paths ----------
   // Link from the open .md file to a workspace path, relative and URL-safe.
+  // Links are written from the data folder root ("/assets/images/a.png"):
+  // they keep working wherever the note moves, and renames are fixed up by
+  // the server.
   function relLink(target) {
-    const from = (currentPath || '').split('/').slice(0, -1);
-    const to = target.split('/');
-    let i = 0;
-    while (i < from.length && i < to.length - 1 && from[i] === to[i]) i++;
-    const up = from.slice(i).map(() => '..');
-    const rel = up.concat(to.slice(i)).join('/') || to[to.length - 1];
-    return rel.split('/').map((seg) => encodeURIComponent(seg).replace(/%2E/g, '.')).join('/');
+    return '/' + String(target).replace(/^\/+/, '').split('/').map((seg) => encodeURIComponent(seg).replace(/%2E/g, '.')).join('/');
   }
 
   function mdText(v) {
@@ -450,11 +447,13 @@
   }
 
   // ---------- image ----------
-  function assetsFolder() {
-    const p = currentPath || '';
-    const dir = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
-    const base = p.split('/').pop().replace(/\.(md|markdown)$/i, '');
-    return (dir ? dir + '/' : '') + base + '-assets';
+  // One shared assets folder in the data root, by kind of file.
+  function assetsFolder(name) {
+    const n = String(name || '.png').toLowerCase();
+    if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|avif|heic)$/.test(n)) return 'assets/images';
+    if (/\.(mp4|mov|webm|m4v|mp3|wav|m4a|ogg|flac)$/.test(n)) return 'assets/media';
+    if (/\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|csv|txt|rtf)$/.test(n)) return 'assets/docs';
+    return 'assets/files';
   }
 
   function openImageDialog() {
@@ -513,7 +512,7 @@
         const res = await fetch('/api/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dest: assetsFolder(), files: [{ name: file.name || 'image.png', content, encoding: 'base64' }] }),
+          body: JSON.stringify({ dest: assetsFolder(file.name || 'image.png'), files: [{ name: file.name || 'image.png', content, encoding: 'base64' }] }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.imported || !data.imported.length) throw new Error(data.error || 'Upload failed');

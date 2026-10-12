@@ -9,7 +9,7 @@
   const WHOLE = '__all__';
   const SOURCE_KINDS = { mindmap: 'Mindmap', flow: 'Flow', gantt: 'Gantt' };
   const EXPORT_URLS = {
-    mindmap: '/mindmap/export.js?v=25',
+    mindmap: '/mindmap/export.js?v=27',
     flow: '/flow/export.js?v=14',
   };
 

@@ -33,6 +33,7 @@
       { id: 'sidebar', title: 'Show / hide the Project panel', hint: 'Alt+1', icon: '⇤', run: click('sidebar-toggle') },
       { id: 'settings', title: 'Settings (data folder, window, network)', icon: '⚙', run: () => openDataFolder() },
       { id: 'refresh', title: 'Refresh file tree', icon: '↻', run: () => loadTree() },
+      { id: 'tidyassets', title: 'Tidy assets into assets/ and fix links…', icon: '🗂', run: () => window.tidyAssets && window.tidyAssets() },
       { id: 'termhere', title: 'Open terminal (workspace folder)', icon: '>_', run: () => openTerminalHere('') },
       { id: 'newterm', title: 'New terminal / Claude from template…', icon: '✳', run: () => openTemplateGallery('') },
       { id: 'cursorws', title: 'Open workspace in Cursor', icon: '⌁', run: () => openInCursor('') },

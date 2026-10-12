@@ -271,6 +271,50 @@
     return parts.join('');
   }
 
+  // A frame's paper texture or background image, clipped to its rounded
+  // rectangle. Paper layers are seamless SVG tiles (same as on screen),
+  // drawn as patterns with the same blend modes.
+  function frameBackground(f, x, y, idx) {
+    const src = f.src;
+    if (!src) return '';
+    const T = global.MindmapTextures;
+    const tex = T && src.texture ? T.byId(src.texture) : null;
+    if (!tex && !src.bgImage) return '';
+    const id = 'mmfbg' + idx;
+    const box = `x="${q(x)}" y="${q(y)}" width="${q(f.w)}" height="${q(f.h)}"`;
+    let defs = `<clipPath id="${id}c"><rect ${box} rx="16"/></clipPath>`;
+    let body = '';
+    if (src.bgImage) {
+      const fit = src.bgFit === 'contain' ? 'xMidYMid meet' : 'xMidYMid slice';
+      body += `<rect ${box} fill="${escapeXml(src.fill || '#ffffff')}"/>`;
+      body += `<image ${box} preserveAspectRatio="${fit}" href="${escapeXml(src.bgImage)}"/>`;
+      const soft = Math.min(0.85, Math.max(0, Number(src.bgSoft) || 0));
+      if (soft) body += `<rect ${box} fill="#ffffff" fill-opacity="${soft}"/>`;
+    } else {
+      body += `<rect ${box} fill="${escapeXml(tex.base)}"/>`;
+      tex.layers.forEach(([img, size, blend], i) => {
+        const mode = blend && blend !== 'normal' ? ` style="mix-blend-mode:${blend}"` : '';
+        if (/^radial-gradient/.test(img)) {
+          const c = (img.match(/(rgba?\([^)]*\))\s+100%/) || [])[1] || 'rgba(0,0,0,0.2)';
+          defs += `<radialGradient id="${id}r${i}" cx="50%" cy="50%" r="70%"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="${escapeXml(c)}"/></radialGradient>`;
+          body += `<rect ${box} fill="url(#${id}r${i})"${mode}/>`;
+          return;
+        }
+        const m = img.match(/^url\("(.*)"\)$/);
+        if (!m) return;
+        const [pw, ph] = String(size).split(/\s+/).map((v) => parseFloat(v));
+        // Embedded frames are usually shown smaller than 1:1: enlarge the
+        // grain of big frames so the paper stays visible (not ruled tiles).
+        const grow = /feTurbulence/.test(m[1]) ? Math.min(4, Math.max(1, f.w / 700)) : 1;
+        const tw = (pw || 200) * grow;
+        const th = (ph || pw || 200) * grow;
+        defs += `<pattern id="${id}p${i}" patternUnits="userSpaceOnUse" x="${q(x)}" y="${q(y)}" width="${tw}" height="${th}"><image width="${tw}" height="${th}" href="${escapeXml(m[1])}"/></pattern>`;
+        body += `<rect ${box} fill="url(#${id}p${i})"${mode}/>`;
+      });
+    }
+    return `<defs>${defs}</defs><g clip-path="url(#${id}c)" style="isolation:isolate">${body}</g>`;
+  }
+
   function buildSvg(scene, rect, els, opts) {
     const compact = !!(opts && opts.compact);
     const imageData = (opts && opts.images) || {};
@@ -295,7 +339,8 @@
         const title = el.querySelector('.mm-frame-title');
         return {
           x, y, w: fw, h: fh,
-          fill: cssColor(el.style.background || cs.backgroundColor, '#ffffff'),
+          src: (scene.frames || []).find((fr) => fr.id === el.dataset.id),
+          fill: cssColor(el.style.backgroundColor || cs.backgroundColor, '#ffffff'),
           border: cssColor(el.style.borderColor || cs.borderColor, '#c5c9d1'),
           title: title ? title.textContent.trim() : 'Frame',
           titleColor: title ? cssColor(title.style.color || getComputedStyle(title).color, '#5B7EAE') : '#5B7EAE',
@@ -306,6 +351,7 @@
         const fill = isTransparent(f.fill) ? 'none' : (f.fill || '#ffffff');
         return {
           x: f.x, y: f.y, w: f.w, h: f.h,
+          src: f,
           fill, border: isTransparent(f.border) ? 'none' : (f.border || '#c5c9d1'),
           title: f.title || 'Frame',
           titleColor: '#5B7EAE',
@@ -313,12 +359,16 @@
         };
       });
 
-    frames.forEach((f) => {
+    frames.forEach((f, fi) => {
       if (!overlaps(f, rect)) return;
       const dash = f.dashed ? ' stroke-dasharray="7 6"' : '';
       const fill = isTransparent(f.fill) ? 'none' : f.fill;
       const stroke = isTransparent(f.border) ? 'none' : f.border;
-      parts.push(`<rect x="${q(f.x - ox)}" y="${q(f.y - oy)}" width="${q(f.w)}" height="${q(f.h)}" rx="16" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="1.5"${dash}/>`);
+      const bg = frameBackground(f, f.x - ox, f.y - oy, fi);
+      if (bg) {
+        parts.push(bg);
+        parts.push(`<rect x="${q(f.x - ox)}" y="${q(f.y - oy)}" width="${q(f.w)}" height="${q(f.h)}" rx="16" fill="none" stroke="${escapeXml(stroke)}" stroke-width="1.5"${dash}/>`);
+      } else parts.push(`<rect x="${q(f.x - ox)}" y="${q(f.y - oy)}" width="${q(f.w)}" height="${q(f.h)}" rx="16" fill="${escapeXml(fill)}" stroke="${escapeXml(stroke)}" stroke-width="1.5"${dash}/>`);
       parts.push(`<text x="${q(f.x - ox + 10)}" y="${q(f.y - oy - 18)}" fill="#5B7EAE" font-size="34" font-weight="800" font-family="system-ui,sans-serif">${escapeXml(f.title)}</text>`);
     });
 
@@ -422,7 +472,7 @@
   }
 
   global.MindmapExport = {
-    _v: 18,
+    _v: 19,
     // Used by slides to render a live window of a frame.
     buildSvg,
     inlineImages,
