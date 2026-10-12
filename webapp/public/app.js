@@ -2415,7 +2415,7 @@ function ensureTerminalAssets() {
     .then(() => loadGlobalScript('/vendor/xterm/addon-fit.js?v=6', () => !!window.FitAddon, ['FitAddon']))
     .then(() => loadGlobalScript('/vendor/xterm/addon-web-links.js?v=6', () => !!window.WebLinksAddon, ['WebLinksAddon']))
     .then(() => ensureScript('/terminal/core.js?v=2', 'data-tm-core', () => !!window.TerminalCore))
-    .then(() => ensureScript('/terminal/engine.js?v=6', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
+    .then(() => ensureScript('/terminal/engine.js?v=9', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
 }
 
 function ensureRunbookAssets() {

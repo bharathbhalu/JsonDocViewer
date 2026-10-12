@@ -1959,3 +1959,26 @@ html[data-theme="dark"] .conn-badge.secure { color: #4ade80; }
 .ft-x { border: 0; background: none; color: var(--muted); width: 18px; height: 18px; border-radius: 4px; font-size: 14px; line-height: 1; cursor: pointer; padding: 0; opacity: 0; }
 .ft-tab:hover .ft-x, .ft-tab.on .ft-x { opacity: 1; }
 .ft-x:hover { background: var(--line-strong); color: var(--ink); }
+
+/* ---- Notes panel ---- */
+#notes-panel { position: relative; flex: 0 0 auto; display: flex; flex-direction: column; min-width: 220px; max-width: 720px; height: 100vh; box-sizing: border-box; background: var(--panel); border-left: 1px solid var(--line-strong); }
+#notes-panel[hidden] { display: none; }
+.np-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
+.np-grip:hover { background: var(--accent-soft); }
+.np-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 6px; }
+.np-tabs { display: flex; gap: 2px; background: var(--bg); padding: 3px; border-radius: 8px; flex: 1; }
+.np-tabs button { flex: 1; border: 0; background: none; color: var(--muted); border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.np-tabs button.on { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.np-min { border: 1px solid var(--line-strong); background: var(--panel); color: var(--muted); border-radius: 7px; width: 28px; height: 28px; cursor: pointer; font-size: 14px; }
+.np-min:hover { color: var(--ink); background: var(--accent-soft); }
+.np-sub { padding: 0 12px 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-text { flex: 1; margin: 0 10px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--ink); font: 13.5px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; resize: none; outline: none; }
+.np-text:focus { border-color: var(--accent); }
+.np-text:disabled { opacity: 0.6; }
+.np-foot { padding: 6px 12px 10px; font-size: 11.5px; color: var(--muted); min-height: 16px; }
+#notes-rail { flex: 0 0 auto; width: 26px; height: 100vh; border: 0; border-left: 1px solid var(--line-strong); background: var(--bg); color: var(--muted); cursor: pointer; padding: 0; position: relative; }
+#notes-rail[hidden] { display: none; }
+#notes-rail span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; letter-spacing: 0.04em; white-space: nowrap; }
+#notes-rail:hover { color: var(--ink); background: var(--accent-soft); }
+#notes-rail.has-note::after { content: ''; position: absolute; top: 10px; left: 50%; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; background: var(--warn); }
+#main:fullscreen ~ #notes-panel, #main:fullscreen ~ #notes-rail { display: none; }

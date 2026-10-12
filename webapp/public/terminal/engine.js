@@ -130,7 +130,7 @@
         scrollback: 10000,
         allowProposedApi: true,
         macOptionIsMeta: true,
-        // Inside tmux with mouse mode on, ⌥-drag still selects text for copying.
+        // ⌥-drag selects text here; a plain drag goes to tmux (see _initClipboard).
         macOptionClickForcesSelection: true,
         rightClickSelectsWord: false,
         theme: themeColors(),
@@ -167,6 +167,20 @@
         if (!this.data.copyOnSelect) return;
         setTimeout(() => { if (t.hasSelection()) { const sel = t.getSelection(); if (sel && sel !== this._lastCopied) this._copy(sel, true); } }, 0);
       });
+      // Plain click / drag goes to tmux (panes, borders, tmux copy-mode).
+      // ⌥-drag (or Shift-drag) selects text in the terminal itself; xterm
+      // forces a local selection on ⌥ (Mac) or Shift (others), so the other
+      // key is presented as that one.
+      const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+      const set = (e, k, v) => { try { Object.defineProperty(e, k, { get: () => v }); } catch (err) { /* ignore */ } };
+      const asLocal = (e) => {
+        if (e.button !== 0 && !(e.type.endsWith('move') && (e.buttons & 1))) return;
+        if (e.metaKey || e.ctrlKey) return;
+        // Plain click / drag goes to tmux. ⌥ (and Shift) drags select here.
+        if (e.altKey) { if (!mac) set(e, 'shiftKey', true); return; }
+        if (e.shiftKey && mac) set(e, 'altKey', true);
+      };
+      ['mousedown', 'mousemove', 'mouseup', 'pointerdown', 'pointermove', 'pointerup'].forEach((ev) => this.termEl.addEventListener(ev, asLocal, true));
       // Right-click is ours: keep it from reaching tmux (mouse mode would also
       // pop tmux's own menu). Shift + right-click goes to tmux instead.
       const swallow = (e) => { if (e.button === 2 && !e.shiftKey) { e.stopPropagation(); } };

@@ -603,8 +603,31 @@ function removeFavoritesUnder(relPath) {
   if (items.length !== store.items.length) writeBookmarks({ ...store, items });
 }
 
+// --- Notes panel: a note per file plus one shared scratchpad, kept in the
+// data folder's state (<data>/.accretion/notes.json). File notes follow
+// renames and moves.
+const NOTES_FILE_NAME = 'notes.json';
+function readNotes() {
+  try {
+    const v = JSON.parse(fs.readFileSync(stateFile(NOTES_FILE_NAME), 'utf8'));
+    return { files: (v && typeof v.files === 'object' && v.files) || {}, scratch: (v && v.scratch) || { text: '', updatedAt: '' } };
+  } catch (e) {
+    return { files: {}, scratch: { text: '', updatedAt: '' } };
+  }
+}
+function rewriteNotePaths(from, to) {
+  const store = readNotes();
+  let changed = false;
+  Object.keys(store.files).forEach((k) => {
+    const moved = k === from ? to : k.startsWith(from + '/') ? to + k.slice(from.length) : null;
+    if (moved && moved !== k) { store.files[moved] = store.files[k]; delete store.files[k]; changed = true; }
+  });
+  if (changed) writeJsonAtomic(stateFile(NOTES_FILE_NAME), store);
+}
+
 function rewriteBookmarkPaths(from, to) {
   rewriteTagPaths(from, to);
+  try { rewriteNotePaths(from, to); } catch (e) { /* notes are best effort */ }
   const store = readBookmarks();
   let changed = false;
   const items = store.items.map((it) => {
@@ -2335,6 +2358,30 @@ app.post('/api/assets/tidy', (req, res) => {
     const paths = [...changed, ...moved.map((m) => m.to), ...moved.map((m) => m.from)];
     if (paths.length) commitFile(paths, `Tidy assets: ${moved.length} moved into assets/, links updated in ${changed.size} files`);
     res.json({ ok: true, moved, updated: [...changed] });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/notes', (req, res) => {
+  const store = readNotes();
+  const p = String(req.query.path || '');
+  res.json({ file: p ? (store.files[p] || { text: '', updatedAt: '' }) : null, scratch: store.scratch, count: Object.keys(store.files).length });
+});
+app.post('/api/notes', (req, res) => {
+  try {
+    const { scope, path: p, text } = req.body || {};
+    if (typeof text !== 'string' || text.length > 2 * 1024 * 1024) return res.status(400).json({ error: 'text is required (max 2 MB)' });
+    const store = readNotes();
+    const entry = { text, updatedAt: new Date().toISOString() };
+    if (scope === 'scratch') store.scratch = entry;
+    else {
+      if (!p) return res.status(400).json({ error: 'path is required' });
+      resolveSafe(p);
+      if (text.trim()) store.files[p] = entry; else delete store.files[p];
+    }
+    writeJsonAtomic(stateFile(NOTES_FILE_NAME), store);
+    res.json({ ok: true, updatedAt: entry.updatedAt });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
