@@ -669,6 +669,16 @@ async function openFileAt(path, ref) {
 function isPdfPath(p) {
   return /\.pdf$/i.test(p || '');
 }
+// Files shown in the viewer instead of the editor.
+function viewerKindFor(p) {
+  const ext = ((/\.([a-z0-9]+)$/i.exec(p || '') || [])[1] || '').toLowerCase();
+  if (/^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)) return 'image';
+  if (/^(mp3|wav|m4a|aac|flac|ogg|opus|aiff?)$/.test(ext)) return 'audio';
+  if (/^(mp4|m4v|mov|webm)$/.test(ext)) return 'video';
+  if (/^(zip|gz|tgz|tar|7z|rar|dmg|pkg|exe|bin|so|dylib|o|a|class|jar|woff2?|ttf|otf|eot|psd|ai|sketch|fig|docx?|xlsx?|pptx?|odt|ods|odp|key|numbers|pages|heic|tiff?|mkv|avi|sqlite|db)$/.test(ext)) return 'other';
+  return null;
+}
+let currentIsViewer = false;
 
 function applyFileIcon(el, p, kind) {
   el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-stocks', 'icon-terminal', 'icon-runbook', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
@@ -1884,7 +1894,7 @@ async function exportStandaloneFile(fileName) {
 function exportCurrentFile() {
   if (!currentPath) return;
   const name = currentPath.split('/').pop();
-  if (isPdfPath(currentPath)) {
+  if (isPdfPath(currentPath) || currentIsViewer) {
     downloadHref(currentPath);
     setStatus('Exported ' + name, 'ok');
     return;
@@ -2484,7 +2494,7 @@ function markClean() {
 }
 
 function noteUnsaved(fromBoard) {
-  if (!currentPath || isPdfPath(currentPath) || previewMode) return;
+  if (!currentPath || isPdfPath(currentPath) || currentIsViewer || previewMode) return;
   if (fromBoard && Date.now() < ignoreDirtyUntil) return;
   editGen++;
   if (!isDirty) {
@@ -2537,6 +2547,7 @@ function syncBoardIntoEditor() {
 // Leave the open file and show the Today screen (no file open).
 function closeOpenFile() {
   currentPath = null;
+  currentIsViewer = false;
   previewMode = null;
   markClean();
   setWelcomeVisible(true);
@@ -2650,6 +2661,177 @@ function hidePdfFrame() {
   pdfFrame.removeAttribute('src');
 }
 
+// Viewer for images, audio, video and any other non-text file: shows it (or
+// its details), with Download and Replace file… (upload a new version).
+async function openViewer(relPath, kind, opts) {
+  if (relPath === currentPath && currentIsViewer) {
+    highlightActiveRow(relPath);
+    return;
+  }
+  const token = ++openToken;
+  if (!(opts && opts.skipDirty) && !(await confirmLeaveIfDirty())) return;
+  if (token !== openToken) return;
+  destroyBoard();
+  currentPath = relPath;
+  currentIsViewer = true;
+  previewMode = null;
+  setWelcomeVisible(false);
+  rememberLastFile(relPath);
+  currentLang = null;
+  currentDataFormat = null;
+  currentPathEl.textContent = relPath;
+  if (window.FileTabs) window.FileTabs.opened(relPath);
+  markClean();
+  saveBtn.disabled = true;
+  saveAsBtn.disabled = true;
+  if (exportFileBtn) exportFileBtn.disabled = false;
+  setStandaloneVisible(false);
+  if (fullscreenBtn) fullscreenBtn.disabled = false;
+  convertBtn.disabled = true;
+  historyBtn.disabled = true;
+  commitBtn.disabled = true;
+  findInFileBtn.disabled = true;
+  collapseAllBtn.disabled = true;
+  expandAllBtn.disabled = true;
+  viewToggleBtn.classList.add('hidden');
+  backToLatestBtn.classList.add('hidden');
+  if (editor) {
+    editor.setModel(monaco.editor.createModel('', 'plaintext'));
+    editor.updateOptions({ readOnly: true });
+  }
+  highlightActiveRow(relPath);
+  setStatus(kind === 'image' ? 'Image' : kind === 'audio' ? 'Audio' : kind === 'video' ? 'Video' : 'File', '');
+  setViewMode('viewer');
+  renderFileViewer(relPath, kind);
+}
+
+const fileViewerEl = (() => {
+  const el = document.createElement('div');
+  el.id = 'file-viewer';
+  el.className = 'hidden';
+  const area = document.getElementById('editor-area');
+  if (area) area.appendChild(el);
+  return el;
+})();
+
+function fmtBytes(n) {
+  if (!(n >= 0)) return '';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + ' ' + u[i];
+}
+
+async function renderFileViewer(relPath, kind) {
+  const el = fileViewerEl;
+  const raw = '/api/raw?path=' + encodeURIComponent(relPath) + '&t=' + Date.now();
+  const name = relPath.split('/').pop();
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let stage = '';
+  if (kind === 'image') {
+    stage = `<div class="fv-stage fv-checker" data-zoomable><img class="fv-img" alt="${esc(name)}" src="${raw}" draggable="false"></div>`;
+  } else if (kind === 'audio') {
+    stage = `<div class="fv-stage fv-center"><div class="fv-audio"><div class="fv-big">🎵</div><div class="fv-name">${esc(name)}</div><audio controls preload="metadata" src="${raw}"></audio></div></div>`;
+  } else if (kind === 'video') {
+    stage = `<div class="fv-stage fv-center fv-dark"><video class="fv-video" controls preload="metadata" src="${raw}"></video></div>`;
+  } else {
+    stage = `<div class="fv-stage fv-center"><div class="fv-card"><div class="fv-big">📦</div><div class="fv-name">${esc(name)}</div><div class="fv-note">This file can't be shown or edited here. Download it, or replace it with a new version.</div></div></div>`;
+  }
+  el.innerHTML = `<div class="fv-bar">
+      <span class="fv-title">${esc(name)}</span><span class="fv-meta" data-meta></span>
+      <span class="fv-sp"></span>
+      ${kind === 'image' ? '<button type="button" data-fv="fit">Fit</button><button type="button" data-fv="100">100%</button><button type="button" data-fv="out">−</button><span class="fv-zoom" data-zoom>Fit</span><button type="button" data-fv="in">+</button><span class="fv-sep"></span>' : ''}
+      <button type="button" data-fv="download">⤓ Download</button>
+      <button type="button" data-fv="replace" class="fv-primary">⇪ Replace file…</button>
+      <input type="file" data-fv-file hidden>
+    </div>${stage}`;
+  // Details
+  fetch('/api/file-info?path=' + encodeURIComponent(relPath)).then((r) => r.json()).then((d) => {
+    const meta = el.querySelector('[data-meta]');
+    if (!meta || currentPath !== relPath) return;
+    const parts = [d.mime, fmtBytes(d.size), d.modified ? 'modified ' + new Date(d.modified).toLocaleString() : ''];
+    meta.dataset.base = parts.filter(Boolean).join(' · ');
+    const im = el.querySelector('.fv-img');
+    meta.textContent = (im && im.naturalWidth ? im.naturalWidth + ' × ' + im.naturalHeight + ' px · ' : '') + meta.dataset.base;
+  }).catch(() => {});
+  // Image zoom: fit by default, wheel / pinch / buttons to zoom, drag to pan.
+  if (kind === 'image') {
+    const img = el.querySelector('.fv-img');
+    const box = el.querySelector('.fv-stage');
+    const label = el.querySelector('[data-zoom]');
+    let z = 0; // 0 = fit
+    const apply = () => {
+      if (!img.naturalWidth) return;
+      if (!z) { img.style.width = ''; img.style.maxWidth = '100%'; img.style.maxHeight = '100%'; label.textContent = 'Fit'; box.classList.add('fv-center'); return; }
+      box.classList.remove('fv-center');
+      img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
+      img.style.width = Math.round(img.naturalWidth * z) + 'px';
+      label.textContent = Math.round(z * 100) + '%';
+    };
+    const fitScale = () => Math.min(box.clientWidth / img.naturalWidth, box.clientHeight / img.naturalHeight, 1);
+    const zoomTo = (nz, cx, cy) => {
+      const before = z || fitScale();
+      const r = box.getBoundingClientRect();
+      const px = (cx == null ? r.width / 2 : cx - r.left) + box.scrollLeft;
+      const py = (cy == null ? r.height / 2 : cy - r.top) + box.scrollTop;
+      z = Math.max(0.05, Math.min(16, nz));
+      apply();
+      const k = z / before;
+      box.scrollLeft = px * k - (cx == null ? r.width / 2 : cx - r.left);
+      box.scrollTop = py * k - (cy == null ? r.height / 2 : cy - r.top);
+    };
+    img.addEventListener('load', () => {
+      const meta = el.querySelector('[data-meta]');
+      const dims = img.naturalWidth + ' × ' + img.naturalHeight + ' px';
+      if (meta) meta.textContent = dims + (meta.dataset.base ? ' · ' + meta.dataset.base : '');
+      apply();
+    });
+    box.addEventListener('wheel', (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      zoomTo((z || fitScale()) * Math.exp(-Math.max(-24, Math.min(24, e.deltaY)) * 0.01), e.clientX, e.clientY);
+    }, { passive: false });
+    let pan = null;
+    box.addEventListener('pointerdown', (e) => { if (!z) return; pan = { x: e.clientX, y: e.clientY, l: box.scrollLeft, t: box.scrollTop }; box.setPointerCapture(e.pointerId); box.classList.add('fv-panning'); });
+    box.addEventListener('pointermove', (e) => { if (!pan) return; box.scrollLeft = pan.l - (e.clientX - pan.x); box.scrollTop = pan.t - (e.clientY - pan.y); });
+    box.addEventListener('pointerup', () => { pan = null; box.classList.remove('fv-panning'); });
+    box.addEventListener('dblclick', (e) => { if (z) { z = 0; apply(); } else zoomTo(1, e.clientX, e.clientY); });
+    el.querySelector('[data-fv="fit"]').addEventListener('click', () => { z = 0; apply(); });
+    el.querySelector('[data-fv="100"]').addEventListener('click', () => zoomTo(1));
+    el.querySelector('[data-fv="in"]').addEventListener('click', () => zoomTo((z || fitScale()) * 1.25));
+    el.querySelector('[data-fv="out"]').addEventListener('click', () => zoomTo((z || fitScale()) / 1.25));
+  }
+  el.querySelector('[data-fv="download"]').addEventListener('click', () => downloadHref(relPath));
+  const picker = el.querySelector('[data-fv-file]');
+  el.querySelector('[data-fv="replace"]').addEventListener('click', () => picker.click());
+  picker.addEventListener('change', async () => {
+    const f = picker.files && picker.files[0];
+    if (!f) return;
+    const sameType = (f.name.split('.').pop() || '').toLowerCase() === (name.split('.').pop() || '').toLowerCase();
+    const ok = await uiConfirm(`Replace "${name}" with "${f.name}" (${fmtBytes(f.size)})?` + (sameType ? '' : '\n\nThe new file has a different type; the name stays "' + name + '".') + '\n\nThe old version stays in History.', { title: 'Replace file', okLabel: 'Replace' });
+    if (!ok) return;
+    setStatus('Uploading…');
+    try {
+      const content = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = () => reject(r.error); r.readAsDataURL(f); });
+      const res = await fetch('/api/file/replace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: relPath, content }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || 'Upload failed');
+      setStatus('Replaced ' + name + ' (' + fmtBytes(d.size) + ')', 'ok');
+      renderFileViewer(relPath, kind);
+    } catch (err) {
+      uiAlert('Could not replace the file: ' + ((err && err.message) || err), { title: 'Replace file' });
+      setStatus('', '');
+    }
+  });
+}
+
+function hideFileViewer() {
+  if (!fileViewerEl || fileViewerEl.classList.contains('hidden')) return;
+  fileViewerEl.querySelectorAll('audio, video').forEach((m) => { try { m.pause(); } catch (e) { /* ignore */ } });
+  fileViewerEl.innerHTML = '';
+  fileViewerEl.classList.add('hidden');
+}
+
 async function openPdf(relPath) {
   if (relPath === currentPath) {
     highlightActiveRow(relPath);
@@ -2660,6 +2842,7 @@ async function openPdf(relPath) {
   if (token !== openToken) return;
   destroyBoard();
   currentPath = relPath;
+  currentIsViewer = false;
   previewMode = null;
   setWelcomeVisible(false);
   rememberLastFile(relPath);
@@ -2693,6 +2876,7 @@ async function openPdf(relPath) {
 
 async function openFile(relPath, lineToReveal, opts) {
   if (isPdfPath(relPath)) return openPdf(relPath);
+  if (viewerKindFor(relPath)) return openViewer(relPath, viewerKindFor(relPath));
   if (relPath === currentPath && lineToReveal == null && !(opts && opts.force)) {
     highlightActiveRow(relPath);
     return;
@@ -2713,11 +2897,14 @@ async function openFile(relPath, lineToReveal, opts) {
   if (token !== openToken) return;
   if (!res.ok) {
     if (window.FileTabs && res.status === 404) window.FileTabs.failed(relPath);
+    // Not text: show it in the viewer (details, download, replace).
+    if (data && data.binary) return openViewer(relPath, 'other', { skipDirty: true });
     alert('Failed to open file: ' + data.error);
     return;
   }
   destroyBoard();
   currentPath = relPath;
+  currentIsViewer = false;
   previewMode = null;
   setWelcomeVisible(false);
   rememberLastFile(relPath);
@@ -2883,6 +3070,14 @@ function setViewMode(mode) {
   document.getElementById('editor').classList.add('hidden');
   mindmapStage.classList.add('hidden');
   if (mode !== 'pdf') hidePdfFrame();
+  if (mode !== 'viewer') hideFileViewer();
+  if (mode === 'viewer') {
+    fileViewerEl.classList.remove('hidden');
+    viewToggleBtn.classList.add('hidden');
+    findInFileBtn.disabled = true;
+    if (window.syncMarkdownToolbar) window.syncMarkdownToolbar();
+    return;
+  }
 
   if (mode === 'pdf') {
     if (pdfFrame && currentPath) {
@@ -2978,7 +3173,7 @@ async function postFileContent(relPath, content) {
 }
 
 async function saveCurrentFile() {
-  if (!currentPath || isPdfPath(currentPath) || previewMode) return false;
+  if (!currentPath || isPdfPath(currentPath) || currentIsViewer || previewMode) return false;
   if (saveInFlight) return saveInFlight;
   saveInFlight = (async () => {
     clearTimeout(autoSaveTimer);

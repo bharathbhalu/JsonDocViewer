@@ -1982,3 +1982,29 @@ html[data-theme="dark"] .conn-badge.secure { color: #4ade80; }
 #notes-rail:hover { color: var(--ink); background: var(--accent-soft); }
 #notes-rail.has-note::after { content: ''; position: absolute; top: 10px; left: 50%; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; background: var(--warn); }
 #main:fullscreen ~ #notes-panel, #main:fullscreen ~ #notes-rail { display: none; }
+
+/* ---- File viewer (images, audio, video, other files) ---- */
+#file-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#file-viewer.hidden { display: none; }
+.fv-bar { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line-strong); background: var(--panel); flex-wrap: wrap; }
+.fv-title { font-weight: 700; }
+.fv-meta { color: var(--muted); font-size: 12px; }
+.fv-sp { flex: 1; }
+.fv-sep { width: 1px; height: 18px; background: var(--line-strong); margin: 0 4px; }
+.fv-bar button { border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.fv-bar button:hover { background: var(--accent-soft); }
+.fv-bar .fv-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fv-zoom { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+.fv-stage { flex: 1; overflow: auto; min-height: 0; position: relative; }
+.fv-stage.fv-center { display: flex; align-items: center; justify-content: center; padding: 16px; }
+.fv-stage.fv-dark { background: #0d0f14; }
+.fv-checker { background-color: var(--panel); background-image: linear-gradient(45deg, rgba(127,127,127,.12) 25%, transparent 25%, transparent 75%, rgba(127,127,127,.12) 75%), linear-gradient(45deg, rgba(127,127,127,.12) 25%, transparent 25%, transparent 75%, rgba(127,127,127,.12) 75%); background-size: 20px 20px; background-position: 0 0, 10px 10px; }
+.fv-img { display: block; object-fit: contain; box-shadow: 0 4px 20px rgba(0,0,0,.18); user-select: none; }
+.fv-stage:not(.fv-center) .fv-img { margin: 16px; cursor: grab; }
+.fv-stage.fv-panning .fv-img { cursor: grabbing; }
+.fv-video { max-width: 100%; max-height: 100%; border-radius: 8px; background: #000; }
+.fv-audio, .fv-card { text-align: center; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 14px; padding: 28px 32px; min-width: 320px; box-shadow: var(--shadow); }
+.fv-audio audio { width: 100%; margin-top: 14px; }
+.fv-big { font-size: 44px; }
+.fv-name { font-weight: 700; margin-top: 6px; word-break: break-all; }
+.fv-note { color: var(--muted); font-size: 13px; margin-top: 8px; max-width: 360px; }

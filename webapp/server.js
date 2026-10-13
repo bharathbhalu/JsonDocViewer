@@ -2034,6 +2034,12 @@ app.get('/api/raw', (req, res) => {
     if (!stat || !stat.isFile()) {
       return res.status(404).json({ error: 'File not found' });
     }
+    // Audio / video for the file viewer: streamed with Range support so
+    // seeking works.
+    const mediaExt = (path.extname(full).slice(1) || '').toLowerCase();
+    if (/^(mp3|wav|m4a|aac|flac|ogg|opus|aiff|aif|mp4|m4v|mov|webm|mkv)$/.test(mediaExt)) {
+      return res.sendFile(full, { headers: { 'Content-Type': MIME_BY_EXT[mediaExt], 'Cache-Control': 'no-cache' }, acceptRanges: true, dotfiles: 'allow' });
+    }
     // PDFs (viewer) and images (slides) only.
     const imageType = imageTypeFor(full);
     if (!/\.pdf$/i.test(full) && !imageType) {
@@ -2228,6 +2234,43 @@ app.post('/api/import', (req, res) => {
 
 const MAX_EDITABLE_SIZE = 40 * 1024 * 1024;
 
+// Details for the file viewer (images, media, any binary file).
+const MIME_BY_EXT = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif', heic: 'image/heic', tif: 'image/tiff', tiff: 'image/tiff',
+  mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg', aiff: 'audio/aiff', aif: 'audio/aiff',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
+  pdf: 'application/pdf', zip: 'application/zip', gz: 'application/gzip', tar: 'application/x-tar', '7z': 'application/x-7z-compressed',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+app.get('/api/file-info', (req, res) => {
+  try {
+    const full = resolveSafe(req.query.path);
+    const stat = fs.existsSync(full) && fs.statSync(full);
+    if (!stat || !stat.isFile()) return res.status(404).json({ error: 'File not found' });
+    const ext = (path.extname(full).slice(1) || '').toLowerCase();
+    res.json({ path: req.query.path, size: stat.size, modified: stat.mtime.toISOString(), mime: MIME_BY_EXT[ext] || 'application/octet-stream', binary: isLikelyBinary(full) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Replace a file's contents with an uploaded version (any type), keeping its
+// name and place; saved to history.
+app.post('/api/file/replace', (req, res) => {
+  try {
+    const { path: rel, content, message } = req.body || {};
+    if (!rel || typeof content !== 'string') return res.status(400).json({ error: 'path and content are required' });
+    const full = resolveSafe(rel);
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return res.status(404).json({ error: 'File not found' });
+    const buf = Buffer.from(content, 'base64');
+    fs.writeFileSync(full, buf);
+    const commit = commitFile(rel, String(message || '').trim() || 'Replace ' + rel);
+    res.json({ ok: true, size: buf.length, commit });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/file', (req, res) => {
   try {
     const full = resolveSafe(req.query.path);
@@ -2236,7 +2279,7 @@ app.get('/api/file', (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
     if (isLikelyBinary(full)) {
-      return res.status(400).json({ error: 'This looks like a binary file and cannot be edited here' });
+      return res.status(400).json({ error: 'This looks like a binary file and cannot be edited here', binary: true });
     }
     if (stat.size > MAX_EDITABLE_SIZE) {
       return res.status(400).json({ error: 'File is too large to open in the editor (limit 40MB)' });
