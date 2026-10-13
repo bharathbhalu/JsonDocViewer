@@ -92,6 +92,7 @@
     static serializeToHtml(data) { return C.serializeToHtml(data); }
 
     destroy() {
+      if (this._chromeRo) this._chromeRo.disconnect();
       this._clearLockHold();
       this._unbind();
       this.container.innerHTML = '';
@@ -326,6 +327,23 @@
         exportMenu: root.querySelector('.fl-export-menu'),
       };
       this.els.root.classList.toggle('is-readonly', this.readOnly);
+      // The toolbar wraps onto more lines in narrow windows: keep the
+      // inspector and the Frames dock just below whatever it really covers.
+      const place = () => {
+        const host = root.getBoundingClientRect();
+        const tb = this.els.toolbar.getBoundingClientRect();
+        let y = tb.bottom - host.top + 8;
+        this.els.inspector.style.top = Math.round(y) + 'px';
+        const ins = this.els.inspector;
+        if (ins.offsetHeight && getComputedStyle(ins).display !== 'none' && ins.children.length) y = ins.getBoundingClientRect().bottom - host.top + 8;
+        if (this.els.framesDock) this.els.framesDock.style.top = Math.round(y) + 'px';
+      };
+      this._placeChrome = place;
+      if (typeof ResizeObserver !== 'undefined') {
+        this._chromeRo = new ResizeObserver(place);
+        [this.els.toolbar, this.els.inspector, root].forEach((el) => this._chromeRo.observe(el));
+      }
+      requestAnimationFrame(place);
     }
 
     _bind() {

@@ -2386,7 +2386,7 @@ function ensureMindmapAssets() {
 function ensureFlowAssets() {
   ensureStylesheet('/flow/engine.css?v=24', 'data-fl-css');
   return ensureScript('/flow/core.js?v=21', 'data-fl-core', () => !!window.FlowCore)
-    .then(() => ensureScript('/flow/engine.js?v=39', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
+    .then(() => ensureScript('/flow/engine.js?v=40', 'data-fl-js', () => typeof window.FlowEngine === 'function'));
 }
 
 function ensureKanbanAssets() {
