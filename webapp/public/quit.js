@@ -10,11 +10,43 @@
         <div style="max-width:440px;text-align:center">
           <img src="icon.svg" alt="" width="72" height="72" style="border-radius:18px;margin-bottom:12px;opacity:.85">
           <h1 style="margin:0 0 6px;font-size:22px">Accretion has stopped</h1>
-          <p style="margin:0 0 16px;color:var(--muted,#667085)">The server is no longer running. You can close this window.</p>
-          <p style="margin:0;font-size:13px;color:var(--muted,#667085)">To start again: double-click <b>Accretion.app</b>, or run <code>./run.sh</code> in the app folder.</p>
+          <p id="acc-stop-msg" style="margin:0 0 18px;color:var(--muted,#667085)">The server is no longer running. Start it again and this window reconnects by itself.</p>
+          <button type="button" id="acc-start" style="font:inherit;font-weight:600;padding:10px 22px;border-radius:10px;border:0;background:#4f6ef7;color:#fff;cursor:pointer">Start Accretion</button>
+          <p style="margin:18px 0 0;font-size:13px;color:var(--muted,#667085)">Or double-click <b>Accretion.app</b>, or run <code>./run.sh</code> in the app folder.</p>
         </div>
       </div>`;
     document.title = 'Accretion — stopped';
+    const msg = document.getElementById('acc-stop-msg');
+    const btn = document.getElementById('acc-start');
+    let tries = 0;
+    let started = false;
+    let wasDown = false;
+    // accretion://start is handled by Accretion.app (built by setup.sh --app);
+    // it starts the server in the background.
+    btn.addEventListener('click', () => {
+      started = true;
+      tries = 0;
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      msg.textContent = 'Starting Accretion — this window reconnects when it is ready.';
+      location.href = 'accretion://start';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Start Accretion'; }, 8000);
+    });
+    // Reconnect as soon as the server answers (started here or elsewhere).
+    (function poll() {
+      fetch('/api/config', { cache: 'no-store' }).then((r) => {
+        // Only after it has really gone down: right after Quit the old server
+        // can still answer for a moment.
+        if (r.status < 500 && wasDown) { location.reload(); return; }
+        if (r.status < 500) { setTimeout(poll, 500); return; }
+        throw new Error('down');
+      }).catch(() => {
+        wasDown = true;
+        tries++;
+        if (started && tries === 10) msg.textContent = 'Still waiting — is Accretion.app installed? You can also run ./run.sh in the app folder.';
+        setTimeout(poll, 1500);
+      });
+    })();
   }
 
   async function quitApp() {
@@ -63,9 +95,9 @@
       uiAlert(String((err && err.message) || err), { title: 'Quit' });
       return;
     }
-    stoppedScreen();
-    // App windows (Accretion.app / installed app) can usually close themselves.
-    setTimeout(() => { try { window.close(); } catch (e) { /* tab: stays on the stopped screen */ } }, 600);
+    // Stay on a "stopped" screen with a Start button (the window is kept open
+    // so Accretion can be started again from here).
+    setTimeout(stoppedScreen, 400);
   }
 
   document.addEventListener('keydown', (e) => {
@@ -76,5 +108,33 @@
     }
   }, true);
 
+  // Hard reload: save, drop the offline caches, and reload everything from
+  // the server (scripts, styles, boards) — like ⌘⇧R, from inside the app.
+  async function hardReload() {
+    try {
+      if (typeof isDirty !== 'undefined' && isDirty && typeof saveCurrentFile === 'function') {
+        if (typeof setStatus === 'function') setStatus('Saving…');
+        await saveCurrentFile();
+      }
+    } catch (e) { /* reload anyway */ }
+    if (typeof setStatus === 'function') setStatus('Reloading…');
+    try { if (window.caches) await Promise.all((await caches.keys()).map((k) => caches.delete(k))); } catch (e) { /* none */ }
+    try {
+      if (navigator.serviceWorker) await Promise.all((await navigator.serviceWorker.getRegistrations()).map((r) => r.unregister()));
+    } catch (e) { /* none */ }
+    // A fresh URL makes the page itself skip any cached copy; the app's
+    // scripts and styles are revalidated with the server on load.
+    const u = new URL(location.href);
+    u.searchParams.set('reload', Date.now().toString(36));
+    location.replace(u.toString());
+  }
+
+  // Drop the ?reload= marker once the fresh page is up.
+  try {
+    const u = new URL(location.href);
+    if (u.searchParams.has('reload')) { u.searchParams.delete('reload'); history.replaceState(null, '', u.toString()); }
+  } catch (e) { /* ignore */ }
+
+  window.hardReload = hardReload;
   window.quitApp = quitApp;
 })();

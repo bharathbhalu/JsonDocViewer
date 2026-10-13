@@ -291,6 +291,25 @@ function validSession(req) {
   const want = crypto.createHmac('sha256', secret).update(String(exp)).digest('hex');
   return mac.length === want.length && crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(want));
 }
+// Signed, short-lived file links. The Markdown preview runs in a sandboxed
+// frame whose requests don't carry the sign-in cookie, so on other devices
+// its images would get 401; the app asks for signed /api/raw links instead.
+const RAW_SIG_HOURS = 24;
+function rawSig(relPath, exp) {
+  const { secret } = networkConfig();
+  return crypto.createHmac('sha256', String(secret || '')).update('raw:' + relPath + ':' + exp).digest('hex').slice(0, 32);
+}
+function validRawSig(req) {
+  const { secret, enabled } = networkConfig();
+  if (!enabled || !secret) return false;
+  const p = String(req.query.path || '');
+  const exp = Number(req.query.exp);
+  const sig = String(req.query.sig || '');
+  if (!p || !exp || exp < Date.now() || sig.length !== 32) return false;
+  const want = rawSig(p, exp);
+  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want));
+}
+
 // Brute-force guard: 8 tries per 5 minutes per address.
 const loginTries = new Map();
 function tooManyTries(ip) {
@@ -394,6 +413,7 @@ app.use((req, res, next) => {
     return res.status(403).type('text').send('Network access needs a password. On the computer running Accretion, open Settings and turn on "Allow other devices".');
   }
   if (req.path === '/login' || req.path === '/accretion-ca.crt' || /^\/(icon\.svg|icon-\d+\.png|manifest\.webmanifest)$/.test(req.path)) return next();
+  if (req.method === 'GET' && req.path === '/api/raw' && validRawSig(req)) return next();
   if (!validSession(req)) {
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Sign in required' });
     return res.status(401).type('html').send(LOGIN_PAGE(''));
@@ -1992,6 +2012,19 @@ app.post('/api/favorites/category/delete', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// Signed links for files shown inside the Markdown preview (see rawSig).
+app.post('/api/raw-sign', (req, res) => {
+  const paths = Array.isArray(req.body && req.body.paths) ? req.body.paths.slice(0, 500) : [];
+  if (!networkConfig().enabled || isLocalRequest(req)) return res.json({ sigs: {} });
+  const exp = Date.now() + RAW_SIG_HOURS * 3600e3;
+  const sigs = {};
+  paths.forEach((p) => {
+    if (typeof p !== 'string' || !p) return;
+    try { resolveSafe(p); sigs[p] = { exp, sig: rawSig(p, exp) }; } catch (e) { /* outside the data folder */ }
+  });
+  res.json({ sigs });
 });
 
 app.get('/api/raw', (req, res) => {

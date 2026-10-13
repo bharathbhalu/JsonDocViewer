@@ -454,6 +454,26 @@ function boardTargetOf(fromPath, href) {
 }
 
 let markdownBoardRenderer = null;
+// Signed /api/raw links for images in the preview on other devices (the
+// sandboxed preview frame can't send the sign-in cookie).
+let markdownRawSigs = {};
+async function signMarkdownImages(source, relPath) {
+  markdownRawSigs = {};
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) return;
+  const tpl = markdownTemplate(source);
+  const paths = [];
+  tpl.content.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (boardTargetOf(relPath, src)) return;
+    const ws = resolveWorkspaceLink(relPath, src);
+    if (ws && !paths.includes(ws)) paths.push(ws);
+  });
+  if (!paths.length) return;
+  try {
+    const r = await fetch('/api/raw-sign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths }) });
+    if (r.ok) markdownRawSigs = (await r.json()).sigs || {};
+  } catch (e) { /* images stay unsigned */ }
+}
 // Zoom of the rendered markdown (kept across files and reloads).
 const clampMdZoom = (v) => Math.min(3, Math.max(0.5, Number(v) || 1));
 let mdPreviewZoom = (() => { try { return clampMdZoom(localStorage.getItem('docviewer-md-zoom')); } catch (e) { return 1; } })();
@@ -524,7 +544,10 @@ function renderMarkdownDoc(source, relPath, boardImages, mermaidSvgs) {
       return;
     }
     const ws = resolveWorkspaceLink(relPath, src);
-    if (ws) img.setAttribute('src', origin + '/api/raw?path=' + encodeURIComponent(ws));
+    if (ws) {
+      const sg = markdownRawSigs[ws];
+      img.setAttribute('src', origin + '/api/raw?path=' + encodeURIComponent(ws) + (sg ? '&exp=' + sg.exp + '&sig=' + sg.sig : ''));
+    }
   });
   // Links: other workspace files (and frames/slides in them) open in the
   // app; external ones in a new tab.
@@ -2379,8 +2402,8 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=110', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=172', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=115', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=176', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
@@ -2886,9 +2909,10 @@ function setViewMode(mode) {
       ensureMarkdownLibs()
         .then(() => Promise.all([
           renderMarkdownBoardImages(source, path).catch(() => ({})),
+          signMarkdownImages(source, path).catch(() => {}),
           /```\s*mermaid/i.test(source) ? renderMermaidBlocks(source, dark).catch((e) => [{ error: 'Mermaid could not load: ' + ((e && e.message) || e) }]) : [],
         ]))
-        .then(([boardImages, mermaidSvgs]) => {
+        .then(([boardImages, , mermaidSvgs]) => {
         if (!stillWanted()) return;
         try {
           setPreviewDoc(renderMarkdownDoc(source, path, boardImages, mermaidSvgs));

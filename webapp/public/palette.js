@@ -37,6 +37,7 @@
       { id: 'termhere', title: 'Open terminal (workspace folder)', icon: '>_', run: () => openTerminalHere('') },
       { id: 'newterm', title: 'New terminal / Claude from template…', icon: '✳', run: () => openTemplateGallery('') },
       { id: 'cursorws', title: 'Open workspace in Cursor', icon: '⌁', run: () => openInCursor('') },
+      { id: 'hardreload', title: 'Hard reload Accretion (fresh from the server)', icon: '↻', run: () => window.hardReload && window.hardReload() },
       { id: 'quit', title: 'Quit Accretion (stop the server)', hint: MOD + '⇧Q', icon: '⏻', run: () => quitApp() },
     ];
     if (fileOpen()) {

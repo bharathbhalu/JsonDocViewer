@@ -95,6 +95,7 @@
             </div></div>
           <p class="df-label">Application</p>
           <label class="df-switch df-autostart hidden"><input type="checkbox" data-autostart> Start Accretion at login <span class="md-note">— runs in the background so the Dock app and reminders always work</span></label>
+          <div class="df-quit"><button type="button" data-hardreload>↻ Hard reload</button><span class="md-note">Saves, then reloads the whole app fresh from the server (clears cached files).</span></div>
           <div class="df-quit"><button type="button" data-quitapp>⏻ Quit Accretion</button><span class="md-note">Saves, then stops the server (⌘⇧Q). Start again with Accretion.app or ./run.sh.</span></div>
           <p class="df-label">Switch to</p>
           <div class="df-row"><input type="text" class="df-input" placeholder="/Users/you/Ideas or ~/Ideas" spellcheck="false"${locked ? ' disabled' : ''}><button type="button" data-browse${locked ? ' disabled' : ''}>📂 Browse…</button><button type="button" class="md-primary" data-go${locked ? ' disabled' : ''}>Switch</button></div>
@@ -267,6 +268,8 @@
     })();
     const qb = ov.querySelector('[data-quitapp]');
     if (qb) qb.addEventListener('click', () => { close(); if (window.quitApp) quitApp(); });
+    const hr = ov.querySelector('[data-hardreload]');
+    if (hr) hr.addEventListener('click', () => { close(); if (window.hardReload) hardReload(); });
     const inst = ov.querySelector('[data-install]');
     if (inst) inst.addEventListener('click', async () => {
       if (installEvent) {

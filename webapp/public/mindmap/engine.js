@@ -821,6 +821,20 @@
     return h * 3600 + min * 60 + sec;
   }
 
+  // "1:23", "1:02:03", "83" or "83.5" -> seconds (null when empty/invalid).
+  function parseLoopTime(v) {
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return null;
+    if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+    const p = parseTimestamp(t);
+    return p == null ? null : p;
+  }
+  function normLoop(l) {
+    const a = l && Number.isFinite(Number(l.a)) && l.a !== null ? Math.max(0, Number(l.a)) : null;
+    const b = l && Number.isFinite(Number(l.b)) && l.b !== null ? Math.max(0, Number(l.b)) : null;
+    return { on: !!(l && l.on), a, b };
+  }
+
   function extractTimestamps(text) {
     const out = [];
     const seen = new Set();
@@ -1603,6 +1617,22 @@
                 </div>
                 <textarea data-media-note placeholder="Write a note. Click ＋ to add 1:23, then click a time to jump."></textarea>
                 <div class="mm-yt-stamps" data-yt-stamps hidden></div>
+                <div class="mm-yt-loop" data-yt-loop hidden>
+                  <label class="mm-yt-loop-on" title="Play the part between the two times over and over"><input type="checkbox" data-loop-on> ⟳ Loop</label>
+                  <span class="mm-yt-loop-range">
+                    <input type="text" data-loop-a placeholder="0:00" spellcheck="false" title="Loop start (m:ss)"/><button type="button" data-loop-set="a" title="Start the loop at the current time">now</button>
+                    <span>→</span>
+                    <input type="text" data-loop-b placeholder="1:30" spellcheck="false" title="Loop end (m:ss)"/><button type="button" data-loop-set="b" title="End the loop at the current time">now</button>
+                  </span>
+                  <div class="mm-yt-saved">
+                    <div class="mm-yt-saved-head"><span>Saved loops</span><span class="mm-yt-saved-acts"><button type="button" data-loop-cancel hidden>Cancel</button><button type="button" data-loop-save title="Save the current loop and speed with a name">＋ Save loop</button></span></div>
+                    <div class="mm-yt-saved-list" data-loop-list></div>
+                  </div>
+                  <span class="mm-yt-speed" title="Playback speed">
+                    <span>Speed</span>
+                    ${[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => `<button type="button" data-yt-rate="${r}">${r}×</button>`).join('')}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -1641,6 +1671,7 @@
         ytMark: root.querySelector('.mm-yt-mark'),
         ytStampBtn: root.querySelector('.mm-yt-stamp-btn'),
         ytStamps: root.querySelector('[data-yt-stamps]'),
+        ytLoop: root.querySelector('[data-yt-loop]'),
         mediaNote: root.querySelector('[data-media-note]'),
       };
     }
@@ -1732,10 +1763,42 @@
             e.preventDefault();
             this._insertYtTimestamp();
           }
+          const rateBtn = e.target.closest('[data-yt-rate]');
+          if (rateBtn) {
+            e.preventDefault();
+            this._setYtRate(Number(rateBtn.getAttribute('data-yt-rate')));
+          }
+          if (e.target.closest('[data-loop-save]')) { e.preventDefault(); if (this._ytEditId) this._updateYtLoop(); else this._saveYtLoop(); }
+          if (e.target.closest('[data-loop-cancel]')) { e.preventDefault(); this._ytEditId = null; this._syncYtLoopUi(); }
+          const editBtn = e.target.closest('[data-loop-edit]');
+          if (editBtn) { e.preventDefault(); e.stopPropagation(); this._editYtLoop(editBtn.getAttribute('data-loop-edit')); return; }
+          const delBtn = e.target.closest('[data-loop-del]');
+          if (delBtn) { e.preventDefault(); e.stopPropagation(); this._deleteYtLoop(delBtn.getAttribute('data-loop-del')); return; }
+          const useBtn = e.target.closest('[data-loop-use]');
+          if (useBtn) { e.preventDefault(); this._useYtLoop(useBtn.getAttribute('data-loop-use')); }
+          const setBtn = e.target.closest('[data-loop-set]');
+          if (setBtn) {
+            e.preventDefault();
+            this._setYtLoop({ [setBtn.getAttribute('data-loop-set')]: Math.round(this._ytCurrentSeconds() * 10) / 10 });
+          }
           const seekBtn = e.target.closest('[data-yt-seek]');
           if (seekBtn) {
             e.preventDefault();
             this._seekYoutube(Number(seekBtn.getAttribute('data-yt-seek')));
+          }
+        });
+      }
+      if (this.els.ytLoop) {
+        this.els.ytLoop.addEventListener('dblclick', (e) => {
+          const b = e.target.closest('[data-loop-use]');
+          if (b) { e.preventDefault(); this._renameYtLoop(b.getAttribute('data-loop-use')); }
+        });
+        this.els.ytLoop.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); });
+        this.els.ytLoop.addEventListener('change', (e) => {
+          if (e.target.matches('[data-loop-on]')) this._setYtLoop({ on: e.target.checked });
+          if (e.target.matches('[data-loop-a], [data-loop-b]')) {
+            const v = parseLoopTime(e.target.value);
+            this._setYtLoop({ [e.target.matches('[data-loop-a]') ? 'a' : 'b']: v });
           }
         });
       }
@@ -3607,6 +3670,7 @@
           : 'Write a note…';
       }
       if (showStamps) this._renderYtStamps();
+      this._syncYtLoopUi();
       this.els.ytModal.hidden = false;
       this.els.ytModal.classList.add('is-open');
       this.els.root.classList.add('is-yt-open');
@@ -3624,7 +3688,7 @@
     _startYtClock() {
       this._stopYtClock();
       this._tickYtClock();
-      this._ytClock = setInterval(() => this._tickYtClock(), 400);
+      this._ytClock = setInterval(() => this._tickYtClock(), this._ytLoopOf().on ? 120 : 400);
     }
 
     _ytCurrentSeconds() {
@@ -3636,7 +3700,181 @@
       return 0;
     }
 
+    // A–B loop on a YouTube node: { on, a, b } in seconds, saved on the node.
+    _ytLoopOf() {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      return n ? normLoop(n.ytLoop) : normLoop(null);
+    }
+
+    _setYtLoop(patch) {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      if (!n || this.readOnly) return;
+      const next = Object.assign(normLoop(n.ytLoop), patch);
+      // Setting both ends turns the loop on; keep a before b.
+      if (('a' in patch || 'b' in patch) && next.a != null && next.b != null) {
+        if (next.b < next.a) { const t = next.a; next.a = next.b; next.b = t; }
+        if (!('on' in patch)) next.on = true;
+      }
+      if (next.on && (next.a == null || next.b == null || next.b - next.a < 0.5)) next.on = false;
+      n.ytLoop = next;
+      this._syncYtLoopUi();
+      this._emit();
+      if (next.on) {
+        const t = this._ytCurrentSeconds();
+        if (t < next.a || t >= next.b) this._seekYoutube(next.a);
+        this._startYtClock();
+      }
+      this._renderNode(n);
+    }
+
+    // Playback speed for the open video, saved on its node (1 = normal).
+    _setYtRate(rate) {
+      const r = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].includes(rate) ? rate : 1;
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      if (n && !this.readOnly) {
+        if (r === 1) delete n.ytRate; else n.ytRate = r;
+        this._emit();
+        this._renderNode(n);
+      }
+      this._applyYtRate(r);
+      this._syncYtLoopUi();
+    }
+
+    _applyYtRate(rate) {
+      try { if (this._ytPlayer && typeof this._ytPlayer.setPlaybackRate === 'function') this._ytPlayer.setPlaybackRate(rate); } catch (e) { /* not ready */ }
+    }
+
+    _ytRateOf() {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      const r = n && Number(n.ytRate);
+      return r > 0 ? r : 1;
+    }
+
+    // Named loops on a YouTube node: [{ id, name, a, b, rate }].
+    _ytSaved() {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      return n && Array.isArray(n.ytLoops) ? n.ytLoops : [];
+    }
+
+    async _saveYtLoop() {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      if (!n || this.readOnly) return;
+      const l = normLoop(n.ytLoop);
+      if (l.a == null || l.b == null) {
+        if (global.uiAlert) global.uiAlert('Set a start and an end time first (type them, or press "now").', { title: 'Save loop' });
+        return;
+      }
+      const list = this._ytSaved();
+      const suggest = 'Loop ' + (list.length + 1);
+      const name = global.uiPrompt
+        ? await global.uiPrompt(`Name for ${formatTimestamp(l.a)} → ${formatTimestamp(l.b)} at ${this._ytRateOf()}×`, suggest, { title: 'Save loop', okLabel: 'Save' })
+        : suggest;
+      if (name == null) return;
+      n.ytLoops = list.concat([{ id: uid('l_'), name: String(name).trim().slice(0, 60) || suggest, a: l.a, b: l.b, rate: this._ytRateOf() }]);
+      this._emit();
+      this._syncYtLoopUi();
+    }
+
+    _useYtLoop(id) {
+      const item = this._ytSaved().find((x) => x.id === id);
+      if (!item) return;
+      this._setYtRate(Number(item.rate) || 1);
+      this._setYtLoop({ a: item.a, b: item.b, on: true });
+      this._seekYoutube(item.a);
+    }
+
+    // Edit a saved loop: load it into the controls, change start / end /
+    // speed, then Update writes them back to it.
+    _editYtLoop(id) {
+      if (this.readOnly) return;
+      this._useYtLoop(id);
+      this._ytEditId = id;
+      this._syncYtLoopUi();
+    }
+
+    _updateYtLoop() {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      const item = this._ytSaved().find((x) => x.id === this._ytEditId);
+      this._ytEditId = null;
+      if (!n || !item || this.readOnly) { this._syncYtLoopUi(); return; }
+      const l = normLoop(n.ytLoop);
+      if (l.a == null || l.b == null) { this._syncYtLoopUi(); return; }
+      Object.assign(item, { a: l.a, b: l.b, rate: this._ytRateOf() });
+      this._emit();
+      this._syncYtLoopUi();
+      if (global.setStatus) global.setStatus(`Updated loop "${item.name}"`, 'ok');
+    }
+
+    async _renameYtLoop(id) {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      const item = this._ytSaved().find((x) => x.id === id);
+      if (!n || !item || this.readOnly || !global.uiPrompt) return;
+      const name = await global.uiPrompt('Rename loop', item.name, { title: 'Rename loop', okLabel: 'Rename' });
+      if (name == null || !String(name).trim()) return;
+      item.name = String(name).trim().slice(0, 60);
+      this._emit();
+      this._syncYtLoopUi();
+    }
+
+    _deleteYtLoop(id) {
+      const n = this._mediaNodeId && this.data.nodes[this._mediaNodeId];
+      if (!n || this.readOnly) return;
+      n.ytLoops = this._ytSaved().filter((x) => x.id !== id);
+      if (!n.ytLoops.length) delete n.ytLoops;
+      this._emit();
+      this._syncYtLoopUi();
+    }
+
+    _syncYtLoopUi() {
+      const box = this.els.ytLoop;
+      if (!box) return;
+      const live = !!this._ytVideoId && !ytEmbedBlocked();
+      box.hidden = !live;
+      if (!live) return;
+      const l = this._ytLoopOf();
+      const on = box.querySelector('[data-loop-on]');
+      const a = box.querySelector('[data-loop-a]');
+      const b = box.querySelector('[data-loop-b]');
+      on.checked = l.on;
+      on.disabled = this.readOnly || l.a == null || l.b == null;
+      if (document.activeElement !== a) a.value = l.a == null ? '' : formatTimestamp(l.a);
+      if (document.activeElement !== b) b.value = l.b == null ? '' : formatTimestamp(l.b);
+      [a, b].forEach((x) => { x.readOnly = this.readOnly; });
+      const list = box.querySelector('[data-loop-list]');
+      if (list) {
+        const saved = this._ytSaved();
+        list.innerHTML = saved.length ? saved.map((x) => {
+          const active = l.on && Math.abs(l.a - x.a) < 0.05 && Math.abs(l.b - x.b) < 0.05 && Math.abs(this._ytRateOf() - (Number(x.rate) || 1)) < 0.01;
+          const editing = this._ytEditId === x.id;
+          return `<button type="button" class="mm-yt-saved-item${active ? ' on' : ''}${editing ? ' editing' : ''}" data-loop-use="${escapeAttr(x.id)}" title="Play this loop · double-click to rename">`
+            + `<b>${escapeHtml(x.name)}</b><span>${formatTimestamp(x.a)}–${formatTimestamp(x.b)}${Number(x.rate) && Number(x.rate) !== 1 ? ' · ' + x.rate + '×' : ''}</span>`
+            + `${this.readOnly ? '' : `<i data-loop-edit="${escapeAttr(x.id)}" title="Edit start, end and speed">✎</i><i data-loop-del="${escapeAttr(x.id)}" title="Delete">×</i>`}</button>`;
+        }).join('') : '<span class="mm-yt-saved-empty">Set a loop and speed, then ＋ Save loop.</span>';
+      }
+      const saveBtn = box.querySelector('[data-loop-save]');
+      const cancelBtn = box.querySelector('[data-loop-cancel]');
+      const editing = this._ytEditId && this._ytSaved().find((x) => x.id === this._ytEditId);
+      if (!editing) this._ytEditId = null;
+      if (saveBtn) {
+        saveBtn.hidden = this.readOnly;
+        saveBtn.textContent = editing ? `✓ Update "${editing.name.slice(0, 18)}"` : '＋ Save loop';
+        saveBtn.title = editing ? 'Save the current start, end and speed into this loop' : 'Save the current loop and speed with a name';
+      }
+      if (cancelBtn) cancelBtn.hidden = !editing;
+      box.classList.toggle('is-editing', !!editing);
+      const rate = this._ytRateOf();
+      box.querySelectorAll('[data-yt-rate]').forEach((btn) => btn.classList.toggle('on', Number(btn.getAttribute('data-yt-rate')) === rate));
+      box.classList.toggle('is-on', l.on);
+    }
+
     _tickYtClock() {
+      const loop = this._ytLoopOf();
+      if (loop.on && this._ytPlayer && typeof this._ytPlayer.seekTo === 'function') {
+        const t = this._ytCurrentSeconds();
+        if (t >= loop.b - 0.12 || t < loop.a - 1.5) {
+          try { this._ytPlayer.seekTo(loop.a, true); } catch (e) { /* not ready */ }
+        }
+      }
       const label = '＋ ' + formatTimestamp(this._ytCurrentSeconds());
       if (this.els.ytMark && !this.els.ytMark.hidden) this.els.ytMark.textContent = label;
       if (this.els.ytStampBtn && !this.els.ytStampBtn.hidden) this.els.ytStampBtn.textContent = label;
@@ -3778,6 +4016,8 @@
           playerVars,
           events: {
             onReady: (e) => {
+              const rate = this._ytRateOf();
+              if (rate !== 1) { try { e.target.setPlaybackRate(rate); } catch (err) { /* ignore */ } }
               if (start > 0) {
                 e.target.seekTo(start, true);
                 e.target.playVideo();
@@ -3792,7 +4032,7 @@
     _openYoutube(vid, node, startSec) {
       const id = youtubeId(vid);
       if (!id) return;
-      const seekTo = startSec != null && !Number.isNaN(Number(startSec)) ? Number(startSec) : null;
+      let seekTo = startSec != null && !Number.isNaN(Number(startSec)) ? Number(startSec) : null;
       if (this._ytOpen && this._ytVideoId === id && (this._ytPlayer || ytEmbedBlocked())) {
         this._mediaNodeId = node && node.id ? node.id : this._mediaNodeId;
         if (this.els.mediaNote && node) {
@@ -3805,6 +4045,8 @@
       }
       this._destroyYtPlayer();
       this._ytVideoId = id;
+      const loop = normLoop(node && node.ytLoop);
+      if (seekTo == null && loop.on) seekTo = loop.a; // start where the loop starts
       if (ytEmbedBlocked()) this._openYtWindow(id, seekTo);
       this._showMediaModal('YouTube', ytEmbedBlocked() ? this._ytLocalHtml(id) : '<div class="mm-yt-player-host"></div>', false, node);
       if (!ytEmbedBlocked()) this._mountYtPlayer(id, seekTo);
@@ -3906,6 +4148,8 @@
         this.els.ytStamps.hidden = true;
         this.els.ytStamps.innerHTML = '';
       }
+      if (this.els.ytLoop) this.els.ytLoop.hidden = true;
+      this._ytEditId = null;
       if (this.els.mediaNote) this.els.mediaNote.value = '';
       if (this.els.ytTitle) this.els.ytTitle.textContent = 'YouTube';
       this._syncYtExt('');
@@ -6132,6 +6376,7 @@
         fmt.fontFamily, fmt.fontSize, fmt.align, fmt.bold, fmt.italic, fmt.underline,
         n.collapsedDirs.left ? 1 : 0, n.collapsedDirs.right ? 1 : 0,
         n.collapsedDirs.up ? 1 : 0, n.collapsedDirs.down ? 1 : 0,
+        n.type === 'youtube' ? JSON.stringify(n.ytLoop || '') + (n.ytRate || '') + ((n.ytLoops || []).length) : '',
         this.immediateCount(n.id, 'left'), this.immediateCount(n.id, 'right'),
         this.immediateCount(n.id, 'up'), this.immediateCount(n.id, 'down'),
         locked ? 'L' : '',
@@ -6179,6 +6424,7 @@
           body += `<button type="button" class="mm-yt-play" data-play-yt="${escapeAttr(vid)}" title="Play video">
             <img class="mm-yt-thumb" alt="" src="https://i.ytimg.com/vi/${encodeURIComponent(vid)}/hqdefault.jpg" draggable="false" decoding="async"/>
             <span class="mm-yt-play-btn" aria-hidden="true"></span>
+            ${normLoop(n.ytLoop).on || Number(n.ytRate) > 0 ? `<span class="mm-yt-loop-badge">${normLoop(n.ytLoop).on ? `⟳ ${formatTimestamp(n.ytLoop.a)}–${formatTimestamp(n.ytLoop.b)}` : ''}${normLoop(n.ytLoop).on && Number(n.ytRate) > 0 ? ' · ' : ''}${Number(n.ytRate) > 0 ? n.ytRate + '×' : ''}</span>` : ''}
           </button>`;
         }
       } else if (n.type === 'image') {
