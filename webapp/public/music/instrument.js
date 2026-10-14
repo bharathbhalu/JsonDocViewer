@@ -60,6 +60,47 @@
       s.start(when);
       s.stop(end + 0.02);
     },
+    // Sustained, voice-like tone for melodies: soft attack, holds for the
+    // note's length, glides from the previous pitch when notes join up.
+    voice(midi, when, dur, gain, fromMidi) {
+      const ctx = this.ctx();
+      const f = T.freqOf(midi);
+      const end = when + Math.max(0.06, dur);
+      const out = ctx.createGain();
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = Math.min(4000, f * 5);
+      lp.Q.value = 0.4;
+      const g = gain == null ? 0.35 : gain;
+      const att = fromMidi != null ? 0.015 : 0.04;
+      out.gain.setValueAtTime(0.0001, when);
+      out.gain.linearRampToValueAtTime(g, when + att);
+      out.gain.setValueAtTime(g, Math.max(when + att, end - 0.04));
+      out.gain.linearRampToValueAtTime(0.0001, end + 0.06);
+      const vib = ctx.createOscillator();
+      const vibG = ctx.createGain();
+      vib.frequency.value = 5.2;
+      vibG.gain.setValueAtTime(0, when);
+      vibG.gain.linearRampToValueAtTime(f * 0.006, when + Math.min(0.4, dur));
+      vib.connect(vibG);
+      [['triangle', 1], ['sine', 0.5]].forEach(([type, mul]) => {
+        const o = ctx.createOscillator();
+        o.type = type;
+        const og = ctx.createGain();
+        og.gain.value = mul;
+        if (fromMidi != null && fromMidi !== midi) {
+          o.frequency.setValueAtTime(T.freqOf(fromMidi) * (type === 'sine' ? 2 : 1), when);
+          o.frequency.exponentialRampToValueAtTime(f * (type === 'sine' ? 2 : 1), when + 0.06);
+        } else o.frequency.setValueAtTime(f * (type === 'sine' ? 2 : 1), when);
+        vibG.connect(o.frequency);
+        o.connect(og).connect(lp);
+        o.start(when);
+        o.stop(end + 0.1);
+      });
+      vib.start(when);
+      vib.stop(end + 0.1);
+      lp.connect(out).connect(ctx.destination);
+    },
     strum(midis, kind, down) {
       const ctx = this.ctx();
       const list = down === false ? midis.slice().reverse() : midis;
@@ -726,7 +767,7 @@
 
     // Notes edited (piano roll / import): refresh positions; save if asked.
     notesChanged(save) { this._posSig = null; this._liveKey = ''; if (save) this.changed(); }
-    hear(p) { Synth.play(p + (this.t.pitch || 0), 0, this.synthKind, 0.6); }
+    hear(p) { if (this.t.noteSound === 'voice') Synth.voice(p + (this.t.pitch || 0), Synth.ctx().currentTime + 0.01, 0.4, 0.35); else Synth.play(p + (this.t.pitch || 0), 0, this.synthKind, 0.6); }
 
     // "Notes only" / "Both": play note events with the synth as they pass.
     _sonify(sec) {
@@ -738,9 +779,19 @@
       const minC = this.t.minConf || 0;
       const rate = m.playbackRate || 1;
       const ctx = Synth.ctx();
+      const voice = this.t.noteSound === 'voice';
+      const tr = this.t.pitch || 0;
       this.t.noteEvents.forEach((n) => {
         const at = n.t + off;
-        if (at > last && at <= sec && (n.c == null || n.c >= minC)) Synth.playFor(n.p + (this.t.pitch || 0), ctx.currentTime + 0.01, this.synthKind, 0.25 + 0.5 * (n.v == null ? 0.7 : n.v), n.d / rate);
+        if (!(at > last && at <= sec && (n.c == null || n.c >= minC))) return;
+        const vel = n.v == null ? 0.7 : n.v;
+        if (voice) {
+          // Glide in from the previous note if it ends right where this starts.
+          const prev = this._sonPrev;
+          const joined = prev && Math.abs(prev.t + prev.d - n.t) < 0.06 ? prev.p + tr : null;
+          Synth.voice(n.p + tr, ctx.currentTime + 0.01, n.d / rate, 0.18 + 0.22 * vel, joined);
+          this._sonPrev = n;
+        } else Synth.playFor(n.p + tr, ctx.currentTime + 0.01, this.synthKind, 0.25 + 0.5 * vel, n.d / rate);
       });
     }
 

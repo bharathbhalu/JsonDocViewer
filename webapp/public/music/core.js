@@ -135,6 +135,7 @@
       beatOffset: num(s.beatOffset, 0, 600) || 0,
       stems: normStems(s.stems),
       playMode: ['original', 'notes', 'both'].includes(s.playMode) ? s.playMode : 'original',
+      noteSound: s.noteSound === 'voice' ? 'voice' : 'instrument',
       minConf: num(s.minConf, 0, 1) || 0,
       extra: s.extra && typeof s.extra === 'object' ? s.extra : undefined,
     };

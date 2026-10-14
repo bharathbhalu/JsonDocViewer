@@ -2447,11 +2447,11 @@ function ensureGanttAssets() {
 
 function ensureMusicAssets() {
   ensureStylesheet('/music/engine.css?v=5', 'data-mu-css');
-  return ensureScript('/music/core.js?v=5', 'data-mu-core', () => !!window.MusicCore)
+  return ensureScript('/music/core.js?v=6', 'data-mu-core', () => !!window.MusicCore)
     .then(() => ensureScript('/music/theory.js?v=1', 'data-mu-theory', () => !!window.MusicTheory))
     .then(() => ensureScript('/music/player.js?v=3', 'data-mu-player', () => typeof window.MusicPlayer === 'function'))
-    .then(() => ensureScript('/music/pianoroll.js?v=2', 'data-mu-roll', () => typeof window.MusicPianoRoll === 'function'))
-    .then(() => ensureScript('/music/instrument.js?v=3', 'data-mu-inst', () => typeof window.MusicInstrument === 'function'))
+    .then(() => ensureScript('/music/pianoroll.js?v=3', 'data-mu-roll', () => typeof window.MusicPianoRoll === 'function'))
+    .then(() => ensureScript('/music/instrument.js?v=4', 'data-mu-inst', () => typeof window.MusicInstrument === 'function'))
     .then(() => ensureScript('/music/analysis.js?v=2', 'data-mu-analysis', () => !!window.MusicAnalysis))
     .then(() => ensureScript('/music/engine.js?v=4', 'data-mu-js', () => typeof window.MusicEngine === 'function'));
 }
@@ -2481,7 +2481,7 @@ function ensureRunbookAssets() {
 
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
-  return ensureScript('/slides/core.js?v=5', 'data-sl-core', () => !!window.SlidesCore)
+  return ensureScript('/slides/core.js?v=6', 'data-sl-core', () => !!window.SlidesCore)
     .then(() => ensureScript('/slides/engine.js?v=13', 'data-sl-js', () => typeof window.SlidesEngine === 'function'));
 }
 

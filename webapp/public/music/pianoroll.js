@@ -50,10 +50,12 @@
           ${ro ? '' : `<button type="button" data-a="quant" title="Snap starts and lengths to the grid (Q); selected notes or all">Quantise</button>
           <button type="button" data-a="tr" data-v="-12" title="Octave down (⇧↓)">−8va</button><button type="button" data-a="tr" data-v="-1" title="Semitone down (↓)">−1</button><button type="button" data-a="tr" data-v="1" title="Semitone up (↑)">+1</button><button type="button" data-a="tr" data-v="12" title="Octave up (⇧↑)">+8va</button>
           <button type="button" data-a="merge" title="Join selected notes of the same pitch (J)">Merge</button>
-          <button type="button" data-a="del" title="Delete selected (⌫)">Delete</button>`}
+          <button type="button" data-a="del" title="Delete selected (⌫)">Delete</button>
+          <button type="button" data-a="smooth" title="Clean up a sung / played melody: drop blips, join fragments, one note at a time, close small gaps (undoable)">✨ Smooth line</button>`}
           <span class="mi-sep"></span>
           <label title="Hide notes the analysis is unsure about">Confidence ≥ <input type="range" min="0" max="0.9" step="0.05" data-conf value="${t.minConf || 0}"><span data-confv>${Math.round((t.minConf || 0) * 100)}%</span></label>
           <span class="mi-sp"></span>
+          <label>Sound <select data-sound>${[['instrument', 'Instrument'], ['voice', 'Smooth voice']].map(([v, l]) => `<option value="${v}"${t.noteSound === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
           <label>Hear <select data-mode>${[['original', 'Recording'], ['notes', 'Notes only'], ['both', 'Both']].map(([v, l]) => `<option value="${v}"${t.playMode === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
           <label><input type="checkbox" data-follow checked> Follow</label>
           <button type="button" data-a="zout" title="Zoom out">−</button><button type="button" data-a="zin" title="Zoom in">+</button>
@@ -67,6 +69,7 @@
       q('[data-conf]').addEventListener('input', (e) => { t.minConf = Number(e.target.value); q('[data-confv]').textContent = Math.round(t.minConf * 100) + '%'; this.panel.notesChanged(false); this.draw(); });
       q('[data-conf]').addEventListener('change', () => this.panel.changed());
       q('[data-mode]').addEventListener('change', (e) => this.player.setPlayMode(e.target.value));
+      q('[data-sound]').addEventListener('change', (e) => { t.noteSound = e.target.value; this.panel.changed(); });
       q('[data-follow]').addEventListener('change', (e) => { this.follow = e.target.checked; });
       this.bindCanvas();
       this._ro = new ResizeObserver(() => this.draw());
@@ -219,6 +222,19 @@
         this.commit();
         return;
       }
+      if (a === 'smooth') {
+        const before = this.notes.length;
+        const ns = this.targets().slice().sort((x, y) => x.t - y.t || (y.c == null ? 1 : y.c) - (x.c == null ? 1 : x.c));
+        if (!ns.length) return;
+        this.snapshot();
+        const r = smoothLine(ns);
+        const keep = new Set(ns);
+        this.t.noteEvents = this.notes.filter((n) => !keep.has(n)).concat(r);
+        this.sel = new Set(this.sel.size ? r : []);
+        this.commit();
+        if (global.setStatus) global.setStatus('Smoothed: ' + before + ' → ' + this.notes.length + ' notes (⌘Z to undo)', 'ok');
+        return;
+      }
       if (a === 'merge') {
         const ns = [...this.sel].sort((x, y) => x.p - y.p || x.t - y.t);
         if (ns.length < 2) return;
@@ -348,6 +364,51 @@
 
     destroy() { if (this._ro) this._ro.disconnect(); }
   }
+
+  // Melody clean-up: one note at a time (the more confident wins), drop
+  // blips under 70 ms, join same-pitch fragments across gaps < 120 ms,
+  // re-join notes split by a one-semitone wobble, and stretch notes over
+  // gaps < 150 ms so the line plays legato.
+  function smoothLine(input) {
+    const ns = input.map((n) => Object.assign({}, n)).sort((a, b) => a.t - b.t);
+    const conf = (n) => (n.c == null ? 1 : n.c);
+    // monophonic: at overlaps keep the stronger note, trim the other
+    const mono = [];
+    ns.forEach((n) => {
+      const prev = mono[mono.length - 1];
+      if (prev && n.t < prev.t + prev.d - 0.02) {
+        if (conf(n) > conf(prev) + 0.1 && n.d > 0.08) { prev.d = Math.max(0, n.t - prev.t); if (prev.d < 0.05) mono.pop(); mono.push(n); }
+        return;
+      }
+      mono.push(n);
+    });
+    let out = mono.filter((n) => n.d >= 0.07);
+    const joinPass = (maxGap, wobble) => {
+      const res = [];
+      out.forEach((n) => {
+        const prev = res[res.length - 1];
+        const gap = prev ? n.t - (prev.t + prev.d) : 1;
+        const close = prev && gap < maxGap && (prev.p === n.p || (wobble && Math.abs(prev.p - n.p) === 1 && Math.min(prev.d, n.d) < 0.12));
+        if (close) {
+          const keepP = prev.d >= n.d ? prev.p : n.p;
+          prev.d = Math.round((n.t + n.d - prev.t) * 1000) / 1000;
+          prev.p = keepP;
+          prev.c = Math.max(conf(prev), conf(n));
+          return;
+        }
+        res.push(n);
+      });
+      out = res;
+    };
+    joinPass(0.12, false);
+    joinPass(0.05, true);
+    out.forEach((n, i) => {
+      const next = out[i + 1];
+      if (next) { const gap = next.t - (n.t + n.d); if (gap > 0 && gap < 0.15) n.d = Math.round((next.t - n.t) * 1000) / 1000; }
+    });
+    return out;
+  }
+  PianoRoll.smoothLine = smoothLine;
 
   global.MusicPianoRoll = PianoRoll;
 })(typeof window !== 'undefined' ? window : this);
