@@ -20,12 +20,19 @@ Writes into DIR (the "<song>.analysis" folder):
 """
 import argparse
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import warnings
+
+# Basic Pitch / coremltools / resampy log optional-backend and deprecation notices
+# at import time; they are harmless and drown out the progress output.
+warnings.filterwarnings('ignore')
+logging.disable(logging.WARNING)
 
 STEM_NAMES = ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other']
 SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -81,15 +88,12 @@ def separate(wav, out_dir, model, p0, p1):
     progress(p0, 'Separating stems (' + model + ') — this is the slow part')
     tmp = tempfile.mkdtemp(prefix='acc-stems-')
     try:
-        cmd = [sys.executable, '-m', 'demucs', '-n', model, '--mp3', '--mp3-bitrate', '192', '-o', tmp, wav]
-        try:
-            import torch
-            if torch.backends.mps.is_available():
-                cmd[3:3] = ['-d', 'mps']
-        except Exception:  # noqa: BLE001
-            pass
+        # CPU, not MPS: torch 2.5 on MPS rejects htdemucs's large conv1d
+        # ("Output channels > 65536"), and PYTORCH_ENABLE_MPS_FALLBACK does not cover it.
+        cmd = [sys.executable, '-m', 'demucs', '-d', 'cpu', '-n', model, '--mp3', '--mp3-bitrate', '192', '-o', tmp, wav]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         buf = ''
+        tail = []
         while True:
             ch = proc.stdout.read(1)
             if not ch:
@@ -104,10 +108,13 @@ def separate(wav, out_dir, model, p0, p1):
                         progress(p0 + (p1 - p0) * pct, 'Separating stems ' + str(int(pct * 100)) + '%')
                     except ValueError:
                         pass
+                elif s:
+                    tail = (tail + [s])[-3:]
             else:
                 buf += ch
         if proc.wait() != 0:
-            raise RuntimeError('Demucs failed (exit ' + str(proc.returncode) + ')')
+            detail = (': ' + ' | '.join(tail)) if tail else ''
+            raise RuntimeError('Demucs failed (exit ' + str(proc.returncode) + ')' + detail)
         stem_dir = os.path.join(out_dir, 'stems')
         os.makedirs(stem_dir, exist_ok=True)
         found = []

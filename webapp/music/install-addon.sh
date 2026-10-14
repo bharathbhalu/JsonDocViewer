@@ -48,7 +48,7 @@ say 50 "Installing Demucs (stems)"
 uv pip install --quiet --python "$PY" "demucs==4.0.1" "soundfile>=0.12"
 
 say 62 "Installing Basic Pitch (notes) and librosa"
-uv pip install --quiet --python "$PY" "basic-pitch==0.4.0" "librosa==0.10.2.post1" "numpy<2"
+uv pip install --quiet --python "$PY" "basic-pitch==0.4.0" "librosa==0.10.2.post1" "numpy<2" "setuptools<81"
 
 say 78 "Downloading models"
 "$PY" "$HERE/worker.py" warmup | while IFS= read -r line; do
