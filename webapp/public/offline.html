@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accretion — not running</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  :root { --bg: #f3f5f8; --panel: #fff; --ink: #1c2330; --muted: #667085; --line: rgba(28,35,48,.14); --accent: #4f6ef7; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #10141c; --panel: #171c26; --ink: #e8ecf3; --muted: #9aa3b2; --line: rgba(255,255,255,.14); --accent: #8aa8d4; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--bg); color: var(--ink); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .card { width: min(460px, 100%); padding: 30px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,.1); }
+  img { width: 76px; height: 76px; border-radius: 18px; margin-bottom: 12px; }
+  h1 { margin: 0 0 6px; font-size: 21px; }
+  p { margin: 0 0 14px; color: var(--muted); }
+  button { padding: 10px 22px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+  .status { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; margin-right: 6px; animation: p 1s infinite alternate; }
+  @keyframes p { to { opacity: .3; } }
+  code { font-size: 12.5px; }
+  .hint { font-size: 12.5px; margin-top: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img src="/icon.svg" alt="">
+    <h1>Accretion isn't running</h1>
+    <p>The Accretion server on this computer is stopped. Start it and this window connects by itself.</p>
+    <button type="button" id="start">Start Accretion</button>
+    <div class="status"><span class="dot"></span><span id="msg">Waiting for the server…</span></div>
+    <p class="hint">Or double-click <b>Accretion.app</b>, or run <code>./run.sh</code> in the app folder.<br>Tip: ⚙ Settings → <b>Start at login</b> keeps it running in the background.</p>
+  </div>
+<script>
+  // accretion://start is handled by Accretion.app (built by setup.sh --app).
+  document.getElementById('start').addEventListener('click', function () {
+    document.getElementById('msg').textContent = 'Starting…';
+    location.href = 'accretion://start';
+  });
+  var tries = 0;
+  (function poll() {
+    fetch('/api/config', { cache: 'no-store' }).then(function (r) {
+      if (r.status < 500) { location.replace(location.pathname === '/offline.html' ? '/' : location.href); return; }
+      throw new Error('down');
+    }).catch(function () {
+      tries++;
+      if (tries === 15) document.getElementById('msg').textContent = 'Still waiting — is Accretion.app installed?';
+      setTimeout(poll, 2000);
+    });
+  })();
+</script>
+</body>
+</html>
