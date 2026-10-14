@@ -1689,6 +1689,22 @@
       this._onContext = this._onContext.bind(this);
       this._onDblClick = this._onDblClick.bind(this);
 
+      // The canvas clips but the browser can still scroll it (e.g. to show a
+      // cell's text box at the edge). Pointer maths assume it never scrolls,
+      // so the selection box drifted from the cursor: turn any scroll into a
+      // viewport pan instead and keep the canvas at 0,0.
+      this.els.canvas.addEventListener('scroll', () => {
+        const c = this.els.canvas;
+        const sx = c.scrollLeft;
+        const sy = c.scrollTop;
+        if (!sx && !sy) return;
+        c.scrollLeft = 0;
+        c.scrollTop = 0;
+        if (!this.data || !this.data.viewport) return;
+        this.data.viewport.x -= sx;
+        this.data.viewport.y -= sy;
+        this._applyTransform();
+      });
       this.els.canvas.addEventListener('pointerdown', this._onPointerDown);
       this.els.canvas.addEventListener('wheel', this._onWheel, { passive: false, capture: true });
       window.addEventListener('gesturestart', this._onGestureStart, { passive: false, capture: true });
@@ -1922,6 +1938,8 @@
       this._suppressChange = true;
       this.render();
       this._syncSizes();
+      // Maps saved before overlaps were cleared up: settle them on open.
+      if (!this.readOnly && this._settleOverlaps()) this.render();
       if (!this.data.viewport || (this.data.viewport.x === 0 && this.data.viewport.y === 0 && (this.data.viewport.zoom === 1 || this.data.viewport.zoom === 0.55))) {
         this.fitView(false);
       } else {
@@ -2819,8 +2837,9 @@
       style.linkColorManual = false;
       style.fillColorManual = false;
       delete style.own;
+      // Keep the "set by hand" marks: a new cell should look like the cell it
+      // copies (bold / font / size), not fall back to the tree style's default.
       const format = clone(source.format || defaultFormat());
-      delete format.own;
       return {
         type,
         style,
@@ -2925,9 +2944,12 @@
         b: this._subtreeBounds(k.id),
         skip: !!(skipPlaced && k.userPlaced),
       }));
+      // Keep the order the sibling cells themselves show (a branch's
+      // children can reach above or below it, so its bounds can mislead).
+      const at = (sp) => { const k = this.data.nodes[sp.id]; return horiz ? k.y + k.h / 2 : k.x + k.w / 2; };
       specs.sort((a, b) => {
-        const da = horiz ? a.b.y : a.b.x;
-        const db = horiz ? b.b.y : b.b.x;
+        const da = at(a);
+        const db = at(b);
         if (da !== db) return da - db;
         return a.id.localeCompare(b.id);
       });
@@ -2944,8 +2966,11 @@
       const refresh = (s) => { s.b = this._subtreeBounds(s.id); };
       const minP = (s) => horiz ? s.b.y : s.b.x;
       const maxP = (s) => horiz ? s.b.y + s.b.h : s.b.x + s.b.w;
+      // Branches spread away from the one that needs room: those above move
+      // up, those below move down — hand-placed ones too (they keep their
+      // place across the axis). Moves only happen where branches overlap.
       const shift = (s, delta) => {
-        if (!delta || s.skip) return false;
+        if (!delta) return false;
         if (horiz) this._moveSubtree(s.id, 0, delta);
         else this._moveSubtree(s.id, delta, 0);
         refresh(s);
@@ -2973,7 +2998,40 @@
         }
         if (!moved) break;
       }
+      if (specs.some((s) => s.skip)) this._clearPinnedOverlaps(specs, horiz, shift);
       this._clearParentGap(parent, dir, skipPlaced);
+    }
+
+    // With hand-placed (pinned) siblings the passes above can push an auto
+    // sibling down into the next pinned one and back up again, leaving it
+    // overlapping. Settle it: move each auto sibling along the axis, just far
+    // enough that none of its cells touch another sibling's cells.
+    _clearPinnedOverlaps(specs, horiz, shift) {
+      const pad = 8;
+      const cells = (s) => this.descendants(s.id, true).filter((n) => n && !this.hiddenByCollapse(n.id));
+      for (let round = 0; round < 6; round++) {
+        let movedAny = false;
+        specs.filter((s) => !s.skip).sort((a, b) => (horiz ? a.b.y - b.b.y : a.b.x - b.b.x)).forEach((s) => {
+          for (let guard = 0; guard < 60; guard++) {
+            const mine = cells(s);
+            let need = 0;
+            specs.forEach((o) => {
+              if (o === s) return;
+              cells(o).forEach((c) => {
+                mine.forEach((m) => {
+                  if (!this._rectsOverlap(m, c, pad)) return;
+                  const d = horiz ? (c.y + c.h + pad + 4) - m.y : (c.x + c.w + pad + 4) - m.x;
+                  if (d > need) need = d;
+                });
+              });
+            });
+            if (need <= 0) break;
+            shift(s, Math.ceil(need));
+            movedAny = true;
+          }
+        });
+        if (!movedAny) break;
+      }
     }
 
     _spreadAncestors(node) {
@@ -2994,6 +3052,10 @@
 
     _balanceSide(parent, dir) {
       if (!parent || !dir) return;
+      // With hand-placed cells on this side, re-centring only the others
+      // would shuffle them in between (a new last cell jumps to the middle);
+      // leave that side to _packSide, which only separates overlaps.
+      if (this.childrenOf(parent.id, dir).some((k) => k.userPlaced && !this.hiddenByCollapse(k.id))) return;
       const kids = this.childrenOf(parent.id, dir).filter((k) => !k.userPlaced);
       if (!kids.length) return;
       const horiz = dir === 'right' || dir === 'left';
@@ -3008,6 +3070,77 @@
         cursor += (horiz ? s.b.h : s.b.w) + S_GAP;
       });
       this._clearParentGap(parent, dir, true);
+    }
+
+    // A new cell goes at an end of its siblings (top or bottom; left or right
+    // for up/down sides), hand-placed ones included — whichever end keeps the
+    // branch more evenly balanced around the parent.
+    _keepLast(node) {
+      if (!node || !node.parentId || !node.dir) return;
+      const parent = this.data.nodes[node.parentId];
+      const sibs = this.childrenOf(node.parentId, node.dir).filter((k) => k.id !== node.id && !this.hiddenByCollapse(k.id));
+      if (!parent || !sibs.length) return;
+      const horiz = node.dir === 'right' || node.dir === 'left';
+      let lo = Infinity;
+      let hi = -Infinity;
+      sibs.forEach((k) => { const b = this._subtreeBounds(k.id); lo = Math.min(lo, horiz ? b.y : b.x); hi = Math.max(hi, horiz ? b.y + b.h : b.x + b.w); });
+      const mid = horiz ? parent.y + parent.h / 2 : parent.x + parent.w / 2;
+      const nb = this._subtreeBounds(node.id);
+      const size = horiz ? nb.h : nb.w;
+      const start = horiz ? nb.y : nb.x;
+      // Put it on the lighter side of the parent; ties go to the end.
+      const atEnd = (mid - lo) >= (hi - mid);
+      const want = atEnd ? hi + S_GAP : lo - S_GAP - size;
+      if (atEnd ? start >= want - 1 : start + size <= lo - S_GAP + 1) return;
+      const d = want - start;
+      if (horiz) this._moveSubtree(node.id, 0, d); else this._moveSubtree(node.id, d, 0);
+      this._spreadAncestors(node);
+      this._settleOverlaps();
+    }
+
+    // Re-lay out a branch compactly: every child lines up in its parent's
+    // column and siblings stack around their parent in on-screen order
+    // (deepest first). The cell itself stays put; hand-placed marks inside
+    // the branch are cleared. Then anything it now overlaps moves aside.
+    tidyBranch(id) {
+      const top = this.data.nodes[id];
+      if (!top || this.readOnly || this.isNodeLocked(top)) return;
+      const cells = this.descendants(id, true).filter((n) => n && !this.hiddenByCollapse(n.id));
+      const depthOf = (n) => { let d = 0; let c = n; while (c && c.id !== id && c.parentId) { d++; c = this.data.nodes[c.parentId]; } return d; };
+      // Columns, top-down.
+      cells.slice().sort((a, b) => depthOf(a) - depthOf(b)).forEach((n) => {
+        if (n.id === id || !n.parentId || this.isNodeLocked(n)) return;
+        const p = this.data.nodes[n.parentId];
+        const gap = this._packGap(p);
+        const dx = n.dir === 'right' ? p.x + p.w + gap - n.x : n.dir === 'left' ? p.x - gap - n.w - n.x : 0;
+        const dy = n.dir === 'down' ? p.y + p.h + gap - n.y : n.dir === 'up' ? p.y - gap - n.h - n.y : 0;
+        if (dx || dy) this._moveSubtree(n.id, dx, dy);
+        n.userPlaced = false;
+      });
+      // Stacks, deepest first so each branch is already compact.
+      cells.slice().sort((a, b) => depthOf(b) - depthOf(a)).forEach((n) => DIRS.forEach((d) => this._stackSide(n, d)));
+      this._settleOverlaps(new Set(cells.map((n) => n.id)));
+      this.render();
+      this._emit();
+      if (typeof global.setStatus === 'function') global.setStatus('Tidied ' + cells.length + ' cells', 'ok');
+    }
+
+    // Stack a cell's children compactly around it, in their on-screen order,
+    // hand-placed ones included (they keep their offset across the axis).
+    _stackSide(parent, dir) {
+      if (!parent || !dir) return;
+      const kids = this.childrenOf(parent.id, dir).filter((k) => !this.hiddenByCollapse(k.id) && !this.isNodeLocked(k));
+      if (!kids.length) return;
+      const horiz = dir === 'right' || dir === 'left';
+      const at = (k) => (horiz ? k.y + k.h / 2 : k.x + k.w / 2);
+      const specs = kids.slice().sort((a, b) => at(a) - at(b)).map((k) => ({ id: k.id, b: this._subtreeBounds(k.id) }));
+      const total = specs.reduce((sum, s) => sum + (horiz ? s.b.h : s.b.w), 0) + S_GAP * Math.max(0, specs.length - 1);
+      let cursor = (horiz ? parent.y + parent.h / 2 : parent.x + parent.w / 2) - total / 2;
+      specs.forEach((s) => {
+        if (horiz) this._moveSubtree(s.id, 0, cursor - s.b.y);
+        else this._moveSubtree(s.id, cursor - s.b.x, 0);
+        cursor += (horiz ? s.b.h : s.b.w) + S_GAP;
+      });
     }
 
     _slideNodeOnAxis(node, dir) {
@@ -3062,8 +3195,112 @@
         packedSide = n.dir;
         n = this.data.nodes[n.parentId];
       }
-      if (!tight || !root) return;
-      this._pushSideOut(root, packedSide, 32);
+      if (tight && root) this._pushSideOut(root, packedSide, 32);
+      this._settleOverlaps();
+    }
+
+    // Last safety net for overlaps the side packing cannot see (cousins in
+    // different branches, cells next to hand-placed ones): while two visible
+    // cells of the same map overlap, move the lower one's subtree down (or the
+    // other one up) just enough, never moving hand-placed cells. Returns the
+    // number of moves.
+    // fixed: ids that must not move (a branch the user just dragged).
+    // opts.forward: only push the later cell of a pair further along (down /
+    // right) and skip the branch re-spacing pass — for a branch that just grew
+    // at its end, so nothing above it moves.
+    _settleOverlaps(fixed, opts) {
+      const forward = !!(opts && opts.forward);
+      const all = this.nodesArr().filter((n) => n && !this.hiddenByCollapse(n.id));
+      if (all.length < 2 || all.length > 1500) return 0;
+      const pad = 6;
+      const up = (n) => { const chain = new Set(); let c = n; while (c && c.parentId) { chain.add(c.parentId); c = this.data.nodes[c.parentId]; } return chain; };
+      const rootOf = (n) => { let c = n; while (c && c.parentId && this.data.nodes[c.parentId]) c = this.data.nodes[c.parentId]; return c && c.id; };
+      const chains = new Map(all.map((n) => [n.id, up(n)]));
+      const roots = new Map(all.map((n) => [n.id, rootOf(n)]));
+      const stuck = new Set();
+      const pushed = new Map();
+      const weights = new Map();
+      const movedParents = new Set();
+      let moves = 0;
+      for (let guard = 0; guard < 400; guard++) {
+        let hit = null;
+        for (let i = 0; i < all.length && !hit; i++) {
+          const a = all[i];
+          for (let j = i + 1; j < all.length; j++) {
+            const b = all[j];
+            if (roots.get(a.id) !== roots.get(b.id)) continue;
+            if (chains.get(a.id).has(b.id) || chains.get(b.id).has(a.id)) continue;
+            if (!this._rectsOverlap(a, b, 0)) continue;
+            const key = a.id < b.id ? a.id + '|' + b.id : b.id + '|' + a.id;
+            if (stuck.has(key)) continue;
+            hit = [a, b, key];
+            break;
+          }
+        }
+        if (!hit) break;
+        const [a, b, key] = hit;
+        // Move the lighter one (fewer cells in its branch, then the smaller
+        // cell), away from the other along its own side's axis.
+        const axisLater = (x, o) => (x.dir === 'up' || x.dir === 'down' ? x.x + x.w / 2 >= o.x + o.w / 2 : x.y + x.h / 2 >= o.y + o.h / 2);
+        const weight = (x) => { if (!weights.has(x.id)) weights.set(x.id, this.descendants(x.id, true).filter((n) => n && !this.hiddenByCollapse(n.id)).length); return weights.get(x.id); };
+        const lighter = weight(a) !== weight(b) ? (weight(a) < weight(b) ? a : b) : (a.w * a.h <= b.w * b.h ? a : b);
+        const heavier = lighter === a ? b : a;
+        const later = axisLater(b, a) ? b : a;
+        const order = forward
+          ? [[later, later === a ? b : a, 1]]
+          : [[lighter, heavier, axisLater(lighter, heavier) ? 1 : -1], [heavier, lighter, axisLater(heavier, lighter) ? 1 : -1]];
+        const movable = (x) => x.parentId && x.dir && !x.userPlaced && !this.isNodeLocked(x) && !(fixed && fixed.has(x.id));
+        // Against a just-dragged branch, a hand-placed cell gives way too.
+        const yieldToDrag = (x) => fixed && x.parentId && x.dir && !this.isNodeLocked(x) && !fixed.has(x.id) && (fixed.has(a.id) || fixed.has(b.id));
+        // Forward mode: the later cell moves even if hand-placed (along the
+        // axis only), so a growing branch pushes what is below it.
+        const pushable = (x) => forward && x.parentId && x.dir && !this.isNodeLocked(x) && !(fixed && fixed.has(x.id));
+        const pick = order.find(([x]) => movable(x)) || order.find(([x]) => yieldToDrag(x)) || order.find(([x]) => pushable(x));
+        if (!pick) { stuck.add(key); continue; }
+        const [m, o] = pick;
+        // Keep pushing a cell the way it already went (past a hand-placed
+        // cell), instead of bouncing between two neighbours.
+        const sign = pushed.get(m.id) || pick[2];
+        pushed.set(m.id, sign);
+        const vertical = m.dir === 'up' || m.dir === 'down';
+        let d;
+        if (!vertical) d = sign > 0 ? (o.y + o.h + pad) - m.y : -((m.y + m.h + pad) - o.y);
+        else d = sign > 0 ? (o.x + o.w + pad) - m.x : -((m.x + m.w + pad) - o.x);
+        if (!d) { stuck.add(key); continue; }
+        const step = Math.ceil(Math.abs(d)) * Math.sign(d);
+        // Make room in the parent: the siblings beyond the cell move with it,
+        // so the branch keeps its spacing instead of piling up.
+        const axisPos = (x) => (vertical ? x.x + x.w / 2 : x.y + x.h / 2);
+        const group = [m].concat(this.childrenOf(m.parentId, m.dir).filter((k) => k.id !== m.id && !k.userPlaced && !this.isNodeLocked(k) && !(fixed && fixed.has(k.id)) && (sign > 0 ? axisPos(k) >= axisPos(m) : axisPos(k) <= axisPos(m))));
+        group.forEach((k) => {
+          if (vertical) this._moveSubtree(k.id, step, 0);
+          else this._moveSubtree(k.id, 0, step);
+          if (!pushed.has(k.id)) pushed.set(k.id, sign);
+        });
+        movedParents.add(m.id);
+        moves++;
+      }
+      // …and up the tree: every branch side is re-spaced (deepest first) so
+      // sibling branches never interleave; then check cells once more.
+      if (!this._settling && !forward) {
+        this._settling = true;
+        try {
+          const before = JSON.stringify(all.map((n) => [n.x, n.y]));
+          const depth = (n) => chains.get(n.id).size;
+          all.slice().sort((a, b) => depth(b) - depth(a)).forEach((n) => {
+            DIRS.forEach((d) => {
+              const kids = this.childrenOf(n.id, d).filter((k) => !this.hiddenByCollapse(k.id));
+              if (!kids.length) return;
+              // A just-dragged branch is left exactly as dropped.
+              if (fixed && (fixed.has(n.id) || kids.some((k) => fixed.has(k.id)))) return;
+              // Keep the existing structure: only spread branches that overlap.
+              this._packSide(n, d, true);
+            });
+          });
+          if (JSON.stringify(all.map((n) => [n.x, n.y])) !== before) moves += 1 + this._settleOverlaps(fixed);
+        } finally { this._settling = false; }
+      }
+      return moves;
     }
 
     _sideStillTight(parent, dir) {
@@ -3229,13 +3466,14 @@
       applyHopFill(this.data, node);
       this._placeNewChild(parent, dir, id);
       this._layoutSide(parent, dir);
+      this._keepLast(node);
       this.selectOnly(id);
       this.render();
       requestAnimationFrame(() => {
         if (this._destroyed || !this.data.nodes[id]) return;
         this._syncSizes({ preserveLayout: true });
         const p = this.data.nodes[parentId];
-        if (p && this.data.nodes[id]) this._layoutSide(p, dir);
+        if (p && this.data.nodes[id]) { this._layoutSide(p, dir); this._keepLast(this.data.nodes[id]); }
         this.render();
         this._emit();
       });
@@ -3472,7 +3710,8 @@
       });
     }
 
-    relinkNode(id, newParentId, dir, index) {
+    relinkNode(id, newParentId, dir, index, opts) {
+      const quiet = !!(opts && opts.quiet);
       if (this.readOnly) return false;
       const node = this.data.nodes[id];
       const parent = this.data.nodes[newParentId];
@@ -3501,8 +3740,11 @@
       siblings.forEach((s, idx) => { s.order = idx; });
       if (oldParent && oldDir && (oldParent.id !== newParentId || oldDir !== dir)) {
         this.childrenOf(oldParent.id, oldDir).forEach((s, idx) => { s.order = idx; });
-        this._layoutSide(oldParent, oldDir);
+        if (!quiet) this._layoutSide(oldParent, oldDir);
       }
+      // quiet: the caller places the cell itself (group reparent), so the
+      // rest of the map is not re-laid out.
+      if (quiet) return true;
       this._layoutSide(parent, dir);
       // Depth changed: refresh level colours (skips manual ones) and frame
       // membership for the moved branch at its new position.
@@ -5196,7 +5438,7 @@
     _groupToggleFormat(key) {
       const nodes = this._selectionNodes();
       if (!nodes.length) return;
-      const allOn = nodes.every((n) => n.format && n.format[key]);
+      const allOn = nodes.every((n) => (key === 'bold' ? this._effFormat(n).bold : n.format && n.format[key]));
       this._applyToSelected((id) => this.applyFormat(id, { [key]: !allOn }));
     }
 
@@ -6891,7 +7133,8 @@
       const links = LINK_PALETTE.map((c) => `<button type="button" class="mm-color${linkEq && n.style.linkColor === c ? ' active' : ''}" data-link="${c}" style="background:${c}" title="Line"></button>`).join('');
       const dashes = LINK_STYLES.map((s) => `<button type="button" data-insp="link-style" data-style="${s.id}" class="mm-link-style${styleEq && (n.style.linkStyle || 'solid') === s.id ? ' active' : ''}" title="${s.label}">${s.id === 'solid' ? '━' : s.id === 'dotted' ? '···' : s.id === 'dashed' ? '╍' : '┈'}</button>`).join('');
       const align = n.format.align || 'center';
-      const allBold = ids.every((id) => this.data.nodes[id].format.bold);
+      // What is on screen (the tree style can override the stored value).
+      const allBold = ids.every((id) => this._effFormat(this.data.nodes[id]).bold);
       const allItalic = ids.every((id) => this.data.nodes[id].format.italic);
       const allUnder = ids.every((id) => this.data.nodes[id].format.underline);
       box.innerHTML = `
@@ -7783,6 +8026,7 @@
         <button type="button" data-m="paste"${this.isNodeLocked(n) ? ' disabled' : ''}>Paste as child</button>
         <button type="button" data-m="tree-style">🎨 Style for this tree…</button>
         <button type="button" data-m="rotate"${this.isNodeLocked(n) ? ' disabled' : ''}>⟳ Rotate tree <span class="mm-kbd">⌥R</span></button>
+        <button type="button" data-m="tidy"${this.isNodeLocked(n) ? ' disabled' : ''} title="Re-stack this cell's branch compactly, keeping the order">✨ Tidy ${n.parentId ? 'branch' : 'whole map'}</button>
         <button type="button" data-m="copy-style">Copy style <span class="mm-kbd">⌥⌘C</span></button>
         <button type="button" data-m="paste-style"${this.isNodeLocked(n) || !this._getStyleClip() ? ' disabled' : ''}>Paste style <span class="mm-kbd">⌥⌘V</span></button>
         <button type="button" data-m="reset-look"${this.isNodeLocked(n) || !((n.style && n.style.own) || (n.format && n.format.own)) ? ' disabled' : ''}>Reset look to style</button>
@@ -8261,6 +8505,7 @@
       if (m === 'paste-style') this.pasteStyle();
       if (m === 'reset-look') { this._closeMenu(); this.resetNodeLook(); return; }
       if (m === 'rotate') { this._closeMenu(); this.rotateTree(id); return; }
+      if (m === 'tidy') { this._closeMenu(); this.tidyBranch(id); return; }
       if (m === 'tree-style') { this._closeMenu(); this.openStylePanel('tree', id); return; }
       if (m === 'notes') {
         this._toggleNote(n);
@@ -8738,7 +8983,14 @@
           this.els.root.classList.add('is-moving');
         }
         this._applySnapshotDelta(d.origins, w.x - d.x0, w.y - d.y0);
+        // Over another cell: dropping makes the whole selection its children.
+        const skip = new Set((d.origins || []).map((o) => o.id));
+        this.selectedList().forEach((sid) => this.descendants(sid, true).filter(Boolean).forEach((n) => skip.add(n.id)));
+        const over = this._nodeAtClient(e.clientX, e.clientY, skip);
+        d.groupDrop = over && !this.isNodeLocked(over) ? { id: over.id, dir: this.nearestSide(over, w.x, w.y) } : null;
+        this.els.root.classList.toggle('is-relink', !!d.groupDrop);
         this._paintMovingNodes();
+        this.els.world.querySelectorAll('.mm-node').forEach((el) => el.classList.toggle('drop-target', !!(d.groupDrop && el.dataset.id === d.groupDrop.id)));
         return;
       }
       if (d.kind === 'node-drag' || d.kind === 'move-subtree' || d.kind === 'move-tree') {
@@ -8883,12 +9135,63 @@
         return;
       }
       if (d.kind === 'group-drag') {
+        this.els.world.querySelectorAll('.mm-node.drop-target').forEach((el) => el.classList.remove('drop-target'));
+        if (d.moved && d.groupDrop && this.data.nodes[d.groupDrop.id]) {
+          // Group reparent: each selected branch (top-most selected cells,
+          // in their on-screen order) becomes a child of the drop target.
+          const target = this.data.nodes[d.groupDrop.id];
+          const roots = this._selectionRoots().map((id) => this.data.nodes[id])
+            .filter((n) => n && n.id !== target.id && !this.isNodeLocked(n) && !this.descendants(n.id, true).some((x) => x && x.id === target.id))
+            .sort((a, b) => a.y - b.y || a.x - b.x);
+          // Back to where they started, then attach without re-laying out
+          // the map: the moved cells go after the target's last child, and
+          // only cells they then overlap get nudged.
+          this._applySnapshotDelta(d.origins, 0, 0);
+          const dir = this._fitDir(target, d.groupDrop.dir);
+          let moved = 0;
+          this._runBatch(() => { roots.forEach((n) => { if (this.relinkNode(n.id, target.id, dir, null, { quiet: true })) moved++; }); });
+          const p = target;
+          const gap = this._packGap(p);
+          const horiz = dir === 'right' || dir === 'left';
+          const placed = roots.filter((n) => n.parentId === p.id);
+          const others = this.childrenOf(p.id, dir).filter((k) => !placed.includes(k) && !this.hiddenByCollapse(k.id));
+          let cursor;
+          if (others.length) {
+            cursor = -Infinity;
+            others.forEach((k) => { const bb = this._subtreeBounds(k.id); cursor = Math.max(cursor, horiz ? bb.y + bb.h : bb.x + bb.w); });
+            cursor += S_GAP;
+          } else {
+            const total = placed.reduce((sum, n) => { const bb = this._subtreeBounds(n.id); return sum + (horiz ? bb.h : bb.w); }, 0) + S_GAP * Math.max(0, placed.length - 1);
+            cursor = (horiz ? p.y + p.h / 2 : p.x + p.w / 2) - total / 2;
+          }
+          placed.forEach((n) => {
+            const bb = this._subtreeBounds(n.id);
+            const cx = dir === 'right' ? p.x + p.w + gap - n.x : dir === 'left' ? p.x - gap - n.w - n.x : cursor - bb.x;
+            const cy = dir === 'down' ? p.y + p.h + gap - n.y : dir === 'up' ? p.y - gap - n.h - n.y : cursor - bb.y;
+            this._moveSubtree(n.id, cx, cy);
+            cursor += (horiz ? bb.h : bb.w) + S_GAP;
+            n.userPlaced = false;
+          });
+          this._syncLevelLinkColors();
+          placed.forEach((n) => this.descendants(n.id, true).forEach((x) => this._assignNodeFrame(x)));
+          this._settleOverlaps(new Set([p.id]), { forward: true });
+          this.selectedIds = new Set(roots.map((n) => n.id));
+          this.render();
+          this._emit();
+          if (moved && typeof global.setStatus === 'function') global.setStatus('Moved ' + moved + ' cell' + (moved === 1 ? '' : 's') + ' under “' + stripTags(target.content || target.label || 'cell').slice(0, 40) + '”', 'ok');
+          return;
+        }
         if (d.moved) {
           this.selectedList().forEach((id) => {
             const n = this.data.nodes[id];
             if (n) n.userPlaced = true;
           });
           (d.origins || []).forEach((o) => this._assignNodeFrame(this.data.nodes[o.id]));
+          // Dropped cells stay put; cells they now cover move aside.
+          const fixedIds = new Set();
+          this.selectedList().forEach((sid) => this.descendants(sid, true).filter(Boolean).forEach((n) => fixedIds.add(n.id)));
+          this._settleOverlaps(fixedIds);
+          this.render();
           this._emit();
         } else this.render();
         return;
@@ -8898,6 +9201,8 @@
           const dragged = this.data.nodes[d.id];
           if (dragged) dragged.userPlaced = true;
           (d.origins || []).forEach((o) => this._assignNodeFrame(this.data.nodes[o.id]));
+          // The dragged branch keeps its shape; only overlaps it causes move.
+          if (!d.drop && dragged) this._settleOverlaps(new Set(this.descendants(dragged.id, true).filter(Boolean).map((n) => n.id)));
         }
         if (d.moved && d.drop) {
           const dragged = this.data.nodes[d.id];

@@ -2424,7 +2424,7 @@ function ensureStylesheet(href, flag) {
 
 function ensureMindmapAssets() {
   ensureStylesheet('/mindmap/engine.css?v=115', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=176', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  return ensureScript('/mindmap/engine.js?v=199', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
