@@ -18,6 +18,9 @@
 # Run the server in the background from login (macOS), so the Dock app always connects:
 #   ./setup.sh --autostart | --no-autostart
 #
+# Optional music analysis add-on (stems, notes, chords; ~2 GB in ~/.accretion/music):
+#   ./setup.sh --music | --remove-music
+#
 # Everything at once on a new Mac:   ./setup.sh --install --app
 # Works on macOS (Homebrew) and Linux (apt / dnf / yum / pacman); the launcher is macOS only.
 # Nothing is installed with sudo unless you run --install and confirm.
@@ -47,7 +50,9 @@ while [ $# -gt 0 ]; do
     --window|--browser) APP_MODE="$1" ;;
     --autostart) AUTOSTART=on; [ "$BUILD_APP" -eq 0 ] && [ "$INSTALL" -eq 0 ] && CHECK=0 ;;
     --no-autostart) AUTOSTART=off; [ "$BUILD_APP" -eq 0 ] && [ "$INSTALL" -eq 0 ] && CHECK=0 ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --music) exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/music/install-addon.sh" ;;
+    --remove-music) exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/music/install-addon.sh" --remove ;;
+    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift

@@ -7,6 +7,7 @@ const KanbanCore = require(path.join(__dirname, 'public', 'kanban', 'core.js'));
 const GanttCore = require(path.join(__dirname, 'public', 'gantt', 'core.js'));
 const SlidesCore = require(path.join(__dirname, 'public', 'slides', 'core.js'));
 const StocksCore = require(path.join(__dirname, 'public', 'stocks', 'core.js'));
+const MusicCore = require(path.join(__dirname, 'public', 'music', 'core.js'));
 const TerminalCore = require(path.join(__dirname, 'public', 'terminal', 'core.js'));
 const RunbookCore = require(path.join(__dirname, 'public', 'runbook', 'core.js'));
 const LinkRewrite = require(path.join(__dirname, 'link-rewrite.js'));
@@ -910,6 +911,7 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="gantt"')) return 'gantt';
     if (head.includes('data-docviewer="slides"')) return 'slides';
     if (head.includes('data-docviewer="stocks"')) return 'stocks';
+    if (head.includes('data-docviewer="music"')) return 'music';
     if (head.includes('data-docviewer="terminal"')) return 'terminal';
     if (head.includes('data-docviewer="runbook"')) return 'runbook';
   } catch (e) {
@@ -1463,6 +1465,7 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'gantt') return ganttTemplate();
   if (kind === 'slides') return SlidesCore.serializeToHtml(SlidesCore.createStarter());
   if (kind === 'stocks') return StocksCore.serializeToHtml(StocksCore.createStarter());
+  if (kind === 'music') return MusicCore.serializeToHtml(MusicCore.createStarter(template || 'songbook'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (kind === 'terminal') return TerminalCore.serializeToHtml(TerminalCore.createStarter(template || 'local'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (kind === 'runbook') return RunbookCore.serializeToHtml(RunbookCore.createStarter(template || 'blank'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (/\.json$/i.test(relPath)) return '{}\n';
@@ -1572,6 +1575,9 @@ const BUILTIN_TEMPLATES = [
   { id: 'gantt-plan', kind: 'gantt', ext: '.html', name: 'Project plan', description: 'Phases, tasks, milestones and dependencies.', build: () => ganttTemplate() },
   { id: 'mindmap-brainstorm', kind: 'mindmap', ext: '.html', name: 'Brainstorm', description: 'Central idea with branches.', build: () => mindmapTemplate() },
   { id: 'flow-process', kind: 'flow', ext: '.html', name: 'Process flow', description: 'Start, steps, decision, end.', build: () => flowTemplate() },
+  { id: 'music-songbook', kind: 'music', ext: '.html', name: 'Songbook', description: 'Songs to learn, learning, can play — audio and video.', build: (c) => MusicCore.serializeToHtml(MusicCore.createStarter('songbook'), c.title) },
+  { id: 'music-practice', kind: 'music', ext: '.html', name: 'Practice set', description: 'Warm-ups, lessons and songs.', build: (c) => MusicCore.serializeToHtml(MusicCore.createStarter('practice'), c.title) },
+  { id: 'music-setlist', kind: 'music', ext: '.html', name: 'Setlist', description: 'Songs in sets for a performance.', build: (c) => MusicCore.serializeToHtml(MusicCore.createStarter('setlist'), c.title) },
   { id: 'stocks-watchlist', kind: 'stocks', ext: '.html', name: 'Stock watchlist', description: 'NSE / BSE / US tickers with live prices and alerts.', build: () => StocksCore.serializeToHtml(StocksCore.createStarter()) },
   { id: 'terminal-local', kind: 'terminal', ext: '.html', name: 'Terminal: Local', description: 'tmux session on this computer.', build: (c) => TerminalCore.serializeToHtml(TerminalCore.createStarter('local'), c.title) },
   { id: 'terminal-ssh', kind: 'terminal', ext: '.html', name: 'Terminal: SSH', description: 'tmux session on a remote host over SSH.', build: (c) => TerminalCore.serializeToHtml(TerminalCore.createStarter('ssh'), c.title) },
@@ -2027,6 +2033,9 @@ app.post('/api/raw-sign', (req, res) => {
   res.json({ sigs });
 });
 
+// Music analysis add-on (optional): install, analysis jobs, results.
+const MusicAddon = require(path.join(__dirname, 'music-addon.js')).register(app, { resolveSafe, commitFile, dataRoot: () => DATA_ROOT });
+
 app.get('/api/raw', (req, res) => {
   try {
     const full = resolveSafe(req.query.path);
@@ -2377,8 +2386,12 @@ app.post('/api/move', (req, res) => {
     rewriteBookmarkPaths(relOf(fromFull), relOf(toFull));
     // Fix references to the moved file/folder everywhere in the data folder.
     let updated = [];
+    // A media file's "<name>.analysis/" folder moves with it.
+    let analysisMove = null;
+    try { analysisMove = MusicAddon.moveAnalysisWith(relOf(fromFull), relOf(toFull)); } catch (e) { console.error('Moving music analysis failed:', e.message); }
     try {
       updated = LinkRewrite.rewriteAfterMove(DATA_ROOT, relOf(fromFull), relOf(toFull));
+      if (analysisMove) updated = [...new Set(updated.concat(LinkRewrite.rewriteAfterMove(DATA_ROOT, analysisMove.from, analysisMove.to)))];
       if (updated.length) commitFile(updated, `Update links: ${relOf(fromFull)} → ${relOf(toFull)}`);
     } catch (e) {
       console.error('Link update after move failed:', e.message);
@@ -2522,6 +2535,7 @@ function kindLabel(kind) {
   if (kind === 'gantt') return 'Gantt';
   if (kind === 'slides') return 'Slides';
   if (kind === 'stocks') return 'Stocks';
+  if (kind === 'music') return 'Music';
   if (kind === 'terminal') return 'Terminal';
   if (kind === 'runbook') return 'Runbook';
   if (kind === 'json') return 'JSON';

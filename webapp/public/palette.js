@@ -172,7 +172,7 @@
     draw(raw);
   }
 
-  const KIND_LABEL = { terminal: 'Terminal', runbook: 'Runbook', mindmap: 'Mindmap', flow: 'Flow', kanban: 'Kanban', gantt: 'Gantt', slides: 'Slides', stocks: 'Stocks', markdown: 'Markdown', json: 'JSON', yaml: 'YAML', pdf: 'PDF' };
+  const KIND_LABEL = { terminal: 'Terminal', runbook: 'Runbook', mindmap: 'Mindmap', flow: 'Flow', kanban: 'Kanban', gantt: 'Gantt', slides: 'Slides', stocks: 'Stocks', music: 'Music', markdown: 'Markdown', json: 'JSON', yaml: 'YAML', pdf: 'PDF' };
   function draw(raw) {
     const list = ov.querySelector('.pl-list');
     if (!items.length) {
