@@ -640,7 +640,11 @@ window.addEventListener('message', (e) => {
     try { localStorage.setItem('docviewer-md-zoom', String(mdPreviewZoom)); } catch (err) { /* per session only */ }
     return;
   }
-  if (!d || d.type !== 'docviewer-open' || typeof d.path !== 'string' || !d.path) return;
+  if (d && d.type === 'docviewer-preview-scroll' && typeof d.path === 'string' && typeof d.y === 'number') {
+    previewScrolls.set(d.path, d.y);
+    return;
+  }
+  if (!d || d.type !== 'docviewer-open'|| typeof d.path !== 'string' || !d.path) return;
   const [path, ref] = d.path.split('#');
   if (!path || path.split('/').includes('..')) return;
   openFileAt(path, ref);
@@ -2423,8 +2427,8 @@ function ensureStylesheet(href, flag) {
 }
 
 function ensureMindmapAssets() {
-  ensureStylesheet('/mindmap/engine.css?v=115', 'data-mm-css');
-  return ensureScript('/mindmap/engine.js?v=199', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
+  ensureStylesheet('/mindmap/engine.css?v=117', 'data-mm-css');
+  return ensureScript('/mindmap/engine.js?v=200', 'data-mm-js', () => typeof window.MindmapEngine === 'function');
 }
 
 function ensureFlowAssets() {
@@ -2464,13 +2468,13 @@ function ensureStocksAssets() {
 
 function ensureTerminalAssets() {
   ensureStylesheet('/vendor/xterm/xterm.css?v=6', 'data-xterm-css');
-  ensureStylesheet('/terminal/engine.css?v=6', 'data-tm-css');
+  ensureStylesheet('/terminal/engine.css?v=7', 'data-tm-css');
   // xterm's bundles are UMD; load them past Monaco's AMD define().
   return loadGlobalScript('/vendor/xterm/xterm.js?v=6', () => typeof window.Terminal === 'function', ['Terminal'])
     .then(() => loadGlobalScript('/vendor/xterm/addon-fit.js?v=6', () => !!window.FitAddon, ['FitAddon']))
     .then(() => loadGlobalScript('/vendor/xterm/addon-web-links.js?v=6', () => !!window.WebLinksAddon, ['WebLinksAddon']))
     .then(() => ensureScript('/terminal/core.js?v=2', 'data-tm-core', () => !!window.TerminalCore))
-    .then(() => ensureScript('/terminal/engine.js?v=9', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
+    .then(() => ensureScript('/terminal/engine.js?v=13', 'data-tm-js', () => typeof window.TerminalEngine === 'function'));
 }
 
 function ensureRunbookAssets() {
@@ -2897,6 +2901,12 @@ async function openPdf(relPath) {
   setViewMode('pdf');
 }
 
+// Per-file positions for this session: Monaco view state (path of the model
+// in the editor is editorPath) and the rendered preview's scrollY.
+const editorViewStates = new Map();
+const previewScrolls = new Map();
+let editorPath = null;
+
 async function openFile(relPath, lineToReveal, opts) {
   if (isPdfPath(relPath)) return openPdf(relPath);
   if (viewerKindFor(relPath)) return openViewer(relPath, viewerKindFor(relPath));
@@ -2952,11 +2962,15 @@ async function openFile(relPath, lineToReveal, opts) {
   }
   editor.updateOptions({ readOnly: false });
 
+  // Keep the outgoing file's scroll/cursor so coming back lands in the same place.
+  if (editorPath) editorViewStates.set(editorPath, editor.saveViewState());
   const model = monaco.editor.createModel(data.content, currentLang);
   editor.setModel(model);
+  editorPath = relPath;
   highlightActiveRow(relPath);
   runValidation();
 
+  if (!lineToReveal && editorViewStates.has(relPath)) editor.restoreViewState(editorViewStates.get(relPath));
   if (lineToReveal) {
     editor.revealLineInCenter(lineToReveal);
     editor.setPosition({ lineNumber: lineToReveal, column: 1 });
@@ -3096,7 +3110,13 @@ async function openFile(relPath, lineToReveal, opts) {
 // hidden (View Source -> View Rendered) can otherwise leave it blank white.
 let previewLoads = 0;
 function setPreviewDoc(html) {
-  htmlPreviewFrame.srcdoc = html + '\n<!-- docviewer preview ' + (++previewLoads) + ' -->';
+  // Report scrolling (tagged with the file) and start where this file was left.
+  const p = JSON.stringify(currentPath).replace(/</g, '\\u003c');
+  const y = previewScrolls.get(currentPath) || 0;
+  const scrollJs = `<script>(function(){var p=${p},y=${y},raf=0;`
+    + `if(y){scrollTo(0,y);addEventListener('DOMContentLoaded',function(){scrollTo(0,y);});addEventListener('load',function(){scrollTo(0,y);});}`
+    + `addEventListener('scroll',function(){if(raf)return;raf=requestAnimationFrame(function(){raf=0;parent.postMessage({type:'docviewer-preview-scroll',path:p,y:scrollY},'*');});});})();<\/script>`;
+  htmlPreviewFrame.srcdoc = html + scrollJs + '\n<!-- docviewer preview ' + (++previewLoads) + ' -->';
 }
 
 function setViewMode(mode) {

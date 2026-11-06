@@ -151,8 +151,9 @@ html[data-theme="dark"] .gt-zoom { background: rgba(255, 255, 255, 0.06); }
 .gt-main { flex: 1 1 auto; min-height: 0; display: flex; }
 
 .gt-list {
-  flex: 0 0 340px;
-  width: 340px;
+  flex: 0 0 var(--gt-list-w, 340px);
+  width: var(--gt-list-w, 340px);
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--gt-panel);
@@ -294,7 +295,7 @@ html[data-theme="dark"] .gt-zoom { background: rgba(255, 255, 255, 0.06); }
 .gt-root.is-sheet .gt-list-head,
 .gt-root.is-sheet .gt-row.is-sheet {
   display: grid;
-  grid-template-columns: minmax(240px, 1.7fr) 96px 148px 118px minmax(140px, 1fr) 88px 128px 128px 56px minmax(110px, 1fr) minmax(160px, 1.2fr);
+  grid-template-columns: var(--gt-task-col, minmax(240px, 1.7fr)) 96px 148px 118px minmax(140px, 1fr) 88px 128px 128px 56px minmax(110px, 1fr) minmax(160px, 1.2fr);
   gap: 8px;
   align-items: center;
   padding: 0 12px;
@@ -627,6 +628,14 @@ html[data-theme="dark"] .gt-flag { background: rgba(239, 68, 68, 0.22); color: #
 .gt-deps path.gt-dep { fill: none; stroke: #98a2b3; stroke-width: 1.4; pointer-events: none; }
 .gt-deps path.gt-dep.is-selected { stroke: var(--gt-accent); stroke-width: 2.4; }
 .gt-dep-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+.gt-dep-handle { display: none; fill: var(--gt-panel); stroke: var(--gt-accent); stroke-width: 2; pointer-events: all; }
+.gt-dep-handle.is-on { display: inline; }
+.gt-dep-handle.is-x { cursor: ew-resize; }
+.gt-dep-handle.is-y { cursor: ns-resize; }
+.gt-dep-handle.is-on:hover { fill: var(--gt-accent); }
+.gt-root.is-readonly .gt-dep-handle { display: none; }
+.gt-root.is-steering { user-select: none; }
+.gt-root.is-steering .gt-time-body { cursor: grabbing; }
 
 .gt-link-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; }
 .gt-link-line path { fill: none; stroke: var(--gt-accent); stroke-width: 1.6; }
@@ -1062,3 +1071,33 @@ html[data-theme="dark"] .gt-an-item.is-pink { background: rgba(236, 72, 153, 0.1
   .gt-top, .gt-filterbar, .gt-drawer, .gt-scrim, .gt-menu, .gt-toast, .gt-help, .gt-dialog { display: none !important; }
   .gt-root, .gt-list, .gt-time { position: static; overflow: visible; }
 }
+
+/* Task column resize grip: right edge of the timeline list, or of the sheet's Task header. */
+.gt-colgrip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.gt-colgrip::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.gt-colgrip:hover::after,
+.gt-root.is-col-resizing .gt-colgrip::after { background: var(--gt-accent); }
+.gt-root.is-col-resizing { cursor: col-resize; user-select: none; }
+.gt-root.is-sheet .gt-list > .gt-colgrip,
+.gt-root.is-readonly .gt-colgrip,
+.gt-root.is-analytics .gt-colgrip { display: none; }
+.gt-root.is-sheet .gt-col-h.gt-col-0 { position: relative; overflow: visible; }
+.gt-root.is-sheet .gt-col-h.gt-col-0 > .gt-colgrip { right: -8px; }

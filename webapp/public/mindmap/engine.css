@@ -826,6 +826,20 @@
   min-width: 240px;
   border-radius: 24px;
 }
+/* A code block resized by hand follows the dragged size: no width cap, and
+   the code area fills the height (scrolling inside if the code is longer). */
+.mm-node[data-type="code"].user-sized {
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+}
+.mm-node[data-type="code"].user-sized .mm-code,
+.mm-node[data-type="code"].user-sized .mm-code-edit {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+.mm-node[data-type="code"].user-sized .mm-code-edit { resize: none; }
 .mm-node[data-type="youtube"] {
   min-width: 360px;
   width: 360px;
@@ -2360,3 +2374,50 @@ html[data-theme="light"] .mm-color-custom-well {
 .mm-yt-loop .mm-yt-saved-acts [data-loop-cancel] { background: #ffffff; color: #1a2130; border: 1px solid rgba(26, 33, 48, 0.3); }
 .mm-yt-loop .mm-yt-saved-item.editing { border: 2px solid #b7791f; background: #fff3d6; }
 .mm-yt-loop.is-editing .mm-yt-loop-range input[type="text"] { border-color: #b7791f; box-shadow: 0 0 0 2px rgba(183, 121, 31, 0.18); }
+
+/* Per-cell shapes (right-click → Shape). Three classes + listed last, so they beat
+   the style looks, including .mm-sh-hand.mm-sh-pill (also three classes, !important). */
+.mm-node.mm-shaped.mm-shape-rect { border-radius: 0 !important; }
+.mm-node.mm-shaped.mm-shape-rounded { border-radius: 12px !important; }
+.mm-node.mm-shaped.mm-shape-pill { border-radius: 999px !important; }
+.mm-node.mm-shaped.mm-shape-ellipse { border-radius: 50% !important; padding-left: 14%; padding-right: 14%; }
+.mm-node.mm-shaped.mm-sh-underline { border-width: 1.5px; }
+/* Diamond / hexagon: the box stays unclipped (so ports, dots and the resize handle
+   still work); two clipped layers draw the outline (::before) and the fill (::after). */
+.mm-node.mm-shaped.mm-shape-diamond,
+.mm-node.mm-shaped.mm-shape-hexagon {
+  isolation: isolate;
+  transform: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+.mm-node.mm-shaped.mm-shape-diamond { padding-left: 22%; padding-right: 22%; }
+.mm-node.mm-shaped.mm-shape-hexagon { padding-left: 14%; padding-right: 14%; }
+.mm-node.mm-shaped.mm-shape-diamond::before, .mm-node.mm-shaped.mm-shape-diamond::after,
+.mm-node.mm-shaped.mm-shape-hexagon::before, .mm-node.mm-shaped.mm-shape-hexagon::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+.mm-node.mm-shaped.mm-shape-diamond::before, .mm-node.mm-shaped.mm-shape-hexagon::before {
+  inset: -1.5px;
+  background: var(--mm-shape-border, transparent);
+  z-index: -2;
+}
+.mm-node.mm-shaped.mm-shape-diamond::after, .mm-node.mm-shaped.mm-shape-hexagon::after {
+  inset: 0.5px;
+  background: var(--mm-shape-fill, transparent);
+  z-index: -1;
+}
+.mm-node.mm-shaped.mm-shape-diamond::before, .mm-node.mm-shaped.mm-shape-diamond::after {
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.mm-node.mm-shaped.mm-shape-hexagon::before, .mm-node.mm-shaped.mm-shape-hexagon::after {
+  clip-path: polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%);
+}
+.mm-node.mm-shaped.mm-shape-diamond.selected::before,
+.mm-node.mm-shaped.mm-shape-hexagon.selected::before { background: var(--mm-accent, #4f6ef7); }
+.mm-node.mm-shaped.mm-shape-diamond.selected,
+.mm-node.mm-shaped.mm-shape-hexagon.selected { outline: none; }
+.mm-node.mm-shaped.mm-shape-diamond.selected::before,
+.mm-node.mm-shaped.mm-shape-hexagon.selected::before { inset: -3px; }

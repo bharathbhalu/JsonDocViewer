@@ -430,7 +430,17 @@
   }
 
   function defaultView() {
-    return { zoom: 'day', mode: 'chart', showWeekends: true, filters: defaultFilters() };
+    // listWidth / sheetTaskWidth: dragged Task column width in px; 0 = default layout.
+    return { zoom: 'day', mode: 'chart', listWidth: 0, sheetTaskWidth: 0, showWeekends: true, filters: defaultFilters() };
+  }
+
+  const TASK_WIDTH_MIN = 160;
+  const TASK_WIDTH_MAX = 1600;
+
+  function taskWidth(v) {
+    const n = Math.round(Number(v));
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return clamp(n, TASK_WIDTH_MIN, TASK_WIDTH_MAX);
   }
 
   function normPriority(v) {
@@ -458,6 +468,7 @@
       priority: '',
       notes: '',
       deps: [],
+      depBends: {},
       labelIds: [],
       createdAt: ts,
       updatedAt: ts,
@@ -641,7 +652,54 @@
     }
   }
 
+  // Manual arrow routes, keyed by predecessor id: x = days the arrow's first
+  // vertical segment is moved from its default, y = px the middle segment of
+  // a looping arrow is moved. Zero/missing means the default route.
+  function cleanBend(b) {
+    if (!b || typeof b !== 'object') return null;
+    const x = Math.round(clamp(Number(b.x) || 0, -3650, 3650) * 4) / 4;
+    const y = Math.round(clamp(Number(b.y) || 0, -5000, 5000));
+    return x || y ? { x, y } : null;
+  }
+
+  function normalizeBends(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    Object.keys(raw).slice(0, 40).forEach((k) => {
+      const b = cleanBend(raw[k]);
+      if (b) out[k] = b;
+    });
+    return out;
+  }
+
+  function pruneBends(data) {
+    taskValues(data).forEach((t) => {
+      const bends = t.depBends || {};
+      const kept = {};
+      (t.deps || []).forEach((d) => {
+        if (bends[d]) kept[d] = bends[d];
+      });
+      t.depBends = kept;
+    });
+  }
+
+  function depBend(task, predId) {
+    return (task && task.depBends && task.depBends[predId]) || null;
+  }
+
+  function setDepBend(data, taskId, predId, bend) {
+    const task = data.tasks[taskId];
+    if (!task || (task.deps || []).indexOf(predId) < 0) return false;
+    const b = cleanBend(bend);
+    task.depBends = Object.assign({}, task.depBends);
+    if (b) task.depBends[predId] = b;
+    else delete task.depBends[predId];
+    touch(task);
+    return true;
+  }
+
   function settle(data) {
+    pruneBends(data);
     rollup(data);
     let guard = 0;
     let changed = true;
@@ -675,6 +733,8 @@
     if (!raw || typeof raw !== 'object') return view;
     if (ZOOMS.includes(raw.zoom)) view.zoom = raw.zoom;
     if (MODES.includes(raw.mode)) view.mode = raw.mode;
+    view.listWidth = taskWidth(raw.listWidth);
+    view.sheetTaskWidth = taskWidth(raw.sheetTaskWidth);
     view.showWeekends = raw.showWeekends !== false;
     view.filters = normalizeFilters(raw.filters);
     return view;
@@ -712,6 +772,7 @@
       task.priority = normPriority(t.priority);
       task.notes = str(t.notes, NOTES_MAX);
       task.deps = Array.isArray(t.deps) ? t.deps.filter((d) => typeof d === 'string').slice(0, 40) : [];
+      task.depBends = normalizeBends(t.depBends);
       task.labelIds = normalizeLabelIds(t.labelIds, data.labels);
       task.createdAt = typeof t.createdAt === 'string' ? t.createdAt : data.createdAt;
       task.updatedAt = typeof t.updatedAt === 'string' ? t.updatedAt : task.createdAt;
@@ -797,6 +858,10 @@
       if (oldId === id) copy.parentId = t.parentId;
       else copy.parentId = map[t.parentId] || t.parentId;
       copy.deps = (t.deps || []).map((d) => map[d]).filter(Boolean);
+      copy.depBends = {};
+      Object.keys(t.depBends || {}).forEach((d) => {
+        if (map[d]) copy.depBends[map[d]] = t.depBends[d];
+      });
       if (oldId === id) copy.order = t.order + 0.5;
       data.tasks[copy.id] = copy;
     });
@@ -871,6 +936,10 @@
     const task = data.tasks[taskId];
     if (!task) return false;
     task.deps = (task.deps || []).filter((d) => d !== predId);
+    if (task.depBends && task.depBends[predId]) {
+      task.depBends = Object.assign({}, task.depBends);
+      delete task.depBends[predId];
+    }
     touch(task);
     return true;
   }
@@ -1233,6 +1302,11 @@
     durationDays,
     pxPerDay,
     defaultView,
+    depBend,
+    setDepBend,
+    taskWidth,
+    TASK_WIDTH_MIN,
+    TASK_WIDTH_MAX,
     defaultFilters,
     defaultTask,
     createEmpty,

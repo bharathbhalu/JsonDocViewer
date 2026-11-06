@@ -219,6 +219,36 @@ test('filters match text and keep ancestors', () => {
   assert.ok(high.indexOf('Build') >= 0);
 });
 
+test('task column widths survive normalize and are clamped', () => {
+  const data = GanttCore.createEmpty();
+  assert.equal(data.view.listWidth, 0);
+  assert.equal(data.view.sheetTaskWidth, 0);
+  data.view.listWidth = 420.6;
+  data.view.sheetTaskWidth = 9999;
+  const parsed = GanttCore.parseHtml(GanttCore.serializeToHtml(data, 'Widths'));
+  assert.equal(parsed.view.listWidth, 421);
+  assert.equal(parsed.view.sheetTaskWidth, GanttCore.TASK_WIDTH_MAX);
+  assert.equal(GanttCore.taskWidth(10), GanttCore.TASK_WIDTH_MIN);
+  assert.equal(GanttCore.taskWidth('x'), 0);
+  assert.equal(GanttCore.taskWidth(-5), 0);
+});
+
+test('arrow routes survive normalize and are dropped with their link', () => {
+  const data = GanttCore.createEmpty();
+  const a = GanttCore.addTask(data, { title: 'A', start: '2026-10-01', end: '2026-10-02' });
+  const b = GanttCore.addTask(data, { title: 'B', start: '2026-10-05', end: '2026-10-06' });
+  assert.ok(GanttCore.linkDep(data, b.id, a.id));
+  assert.ok(GanttCore.setDepBend(data, b.id, a.id, { x: 1.3, y: 12.4 }));
+  const parsed = GanttCore.parseHtml(GanttCore.serializeToHtml(data, 'Routes'));
+  assert.deepEqual(GanttCore.depBend(parsed.tasks[b.id], a.id), { x: 1.25, y: 12 });
+  assert.ok(GanttCore.setDepBend(data, b.id, a.id, { x: 0, y: 0 }));
+  assert.equal(GanttCore.depBend(data.tasks[b.id], a.id), null);
+  assert.equal(GanttCore.setDepBend(data, a.id, b.id, { x: 1 }), false);
+  GanttCore.setDepBend(data, b.id, a.id, { x: 2 });
+  GanttCore.unlinkDep(data, b.id, a.id);
+  assert.equal(GanttCore.depBend(data.tasks[b.id], a.id), null);
+});
+
 test('analytics mode survives normalize', () => {
   const data = GanttCore.createEmpty();
   data.view.mode = 'analytics';

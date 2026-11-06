@@ -259,6 +259,17 @@
     return minX < rect.x + rect.w && maxX > rect.x && minY < rect.y + rect.h && maxY > rect.y;
   }
 
+  // A cell's outline, following its per-cell shape (right-click → Shape).
+  function shapeOutline(node, x, y, w, h, attrs) {
+    const shape = node && node.type === 'text' && node.style ? node.style.shape : '';
+    const pts = (list) => list.map(([px, py]) => `${q(x + px * w)},${q(y + py * h)}`).join(' ');
+    if (shape === 'diamond') return `<polygon points="${pts([[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]])}" ${attrs}/>`;
+    if (shape === 'hexagon') return `<polygon points="${pts([[0.12, 0], [0.88, 0], [1, 0.5], [0.88, 1], [0.12, 1], [0, 0.5]])}" ${attrs}/>`;
+    if (shape === 'ellipse') return `<ellipse cx="${q(x + w / 2)}" cy="${q(y + h / 2)}" rx="${q(w / 2)}" ry="${q(h / 2)}" ${attrs}/>`;
+    const rx = shape === 'rect' ? 0 : shape === 'rounded' ? 12 : shape === 'pill' ? Math.min(w, h) / 2 : 18;
+    return `<rect x="${q(x)}" y="${q(y)}" width="${q(w)}" height="${q(h)}" rx="${q(rx)}" ${attrs}/>`;
+  }
+
   function linksGroup(scene, rect, ox, oy) {
     const parts = [];
     (scene.links || []).forEach((l) => {
@@ -393,8 +404,9 @@
       let color = node && node.style ? node.style.textColor : '#1a2130';
       if (el) {
         const cs = getComputedStyle(el);
-        fill = el.style.background || cs.backgroundColor || fill;
-        border = el.style.borderColor || cs.borderColor || border;
+        // Diamond/hexagon cells keep their colours in CSS variables (the box itself is transparent).
+        fill = el.style.getPropertyValue('--mm-shape-fill') || el.style.background || cs.backgroundColor || fill;
+        border = el.style.getPropertyValue('--mm-shape-border') || el.style.borderColor || cs.borderColor || border;
         color = el.style.color || cs.color || color;
       }
       fill = isTransparent(fill) ? 'none' : cssColor(fill, '#D7E3FC');
@@ -408,7 +420,7 @@
       const fam = fontFamilyOf(fmt);
       const align = fmt.align || (el && el.style.textAlign) || 'center';
       const pad = 16;
-      parts.push(`<rect x="${q(x - ox)}" y="${q(y - oy)}" width="${q(nw)}" height="${q(nh)}" rx="18" fill="${escapeXml(fill)}" stroke="${escapeXml(border)}" stroke-width="1.5"/>`);
+      parts.push(shapeOutline(node, x - ox, y - oy, nw, nh, `fill="${escapeXml(fill)}" stroke="${escapeXml(border)}" stroke-width="1.5"`));
       if (node && node.type === 'image' && node.content) {
         const href = imageData[String(node.content)] || String(node.content);
         if (/^(https?:|data:image\/)/i.test(href)) {
@@ -472,7 +484,7 @@
   }
 
   global.MindmapExport = {
-    _v: 19,
+    _v: 20,
     // Used by slides to render a live window of a frame.
     buildSvg,
     inlineImages,

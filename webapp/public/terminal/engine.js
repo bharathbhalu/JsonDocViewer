@@ -223,6 +223,7 @@
         <button type="button" data-c="paste">Paste <kbd>⌘V</kbd></button>
         <button type="button" data-c="all">Select all <kbd>⌘A</kbd></button>
         <hr><button type="button" data-c="screen">Copy visible screen</button>
+        <button type="button" data-c="view">👁 View pane output</button>
         <button type="button" data-c="save">Save pane output…</button>
         <hr><span class="tm-ctx-hint">⇧ right-click: tmux menu · ⌥ drag: select inside tmux</span>
         <label class="tm-ctx-check"><input type="checkbox" data-c="cos"${this.data.copyOnSelect ? ' checked' : ''}> Copy on select</label>`;
@@ -243,6 +244,7 @@
         else if (a === 'all') t.selectAll();
         else if (a === 'screen') this._copy(this._visibleText());
         else if (a === 'save') this.saveOutput();
+        else if (a === 'view') this.viewOutput();
         else if (a === 'paste') {
           try { const txt = await navigator.clipboard.readText(); if (txt) t.paste(txt); } catch (err) { this._flash('Use ⌘V to paste'); }
           t.focus();
@@ -501,11 +503,25 @@
       } catch (err) { global.uiAlert(err.message); }
     }
 
-    async saveOutput() {
+    async _capture() {
+      const r = await fetch('/api/term/capture?lines=5000&path=' + encodeURIComponent(this._path()), { cache: 'no-store' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not capture output');
+      return d.text;
+    }
+
+    // Look at the pane's output now without saving it (copy / download /
+    // refresh, or save it after all).
+    async viewOutput() {
       try {
-        const r = await fetch('/api/term/capture?lines=5000&path=' + encodeURIComponent(this._path()), { cache: 'no-store' });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || 'Could not capture output');
+        const text = await this._capture();
+        this._viewOutput({ id: '', name: 'Pane output (live)', at: new Date().toISOString(), session: this.sessionName || this.data.session || '', text }, { live: true });
+      } catch (err) { global.uiAlert(err.message); }
+    }
+
+    async saveOutput(text) {
+      try {
+        const d = { text: typeof text === 'string' ? text : await this._capture() };
         const list = this.data.outputs;
         list.push({ id: C.uid('o_'), name: '', at: new Date().toISOString(), session: this.sessionName || this.data.session || '', text: d.text });
         let dropped = [];
@@ -556,13 +572,14 @@
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } });
       input.addEventListener('blur', () => finish(true));
     }
-    _viewOutput(o) {
+    _viewOutput(o, opts) {
+      const live = !!(opts && opts.live);
       const ov = document.createElement('div');
       ov.className = 'topo-overlay';
       ov.innerHTML = `<div class="md-dialog-box tm-out" role="dialog" aria-modal="true">
         <div class="md-dialog-head"><span>${esc(o.name || 'Pane output')} <span class="tm-out-when">· ${esc(stampOf(o.at))}${o.session ? ' · tmux “' + esc(o.session) + '”' : ''}</span></span><button type="button" data-x>×</button></div>
         <pre>${esc(o.text)}</pre>
-        <div class="md-dialog-actions"><span class="md-note">${o.text.split('\n').length} lines</span><span class="md-spacer"></span><button type="button" data-copy>⧉ Copy</button><button type="button" data-dl>⤓ Download</button><button type="button" data-x2>Close</button></div></div>`;
+        <div class="md-dialog-actions"><span class="md-note">${o.text.split('\n').length} lines</span><span class="md-spacer"></span>${live ? `<button type="button" data-refresh title="Capture again">↻ Refresh</button>${this.readOnly ? '' : '<button type="button" data-save>＋ Save</button>'}` : ''}<button type="button" data-copy>⧉ Copy</button><button type="button" data-dl>⤓ Download</button><button type="button" data-x2>Close</button></div></div>`;
       document.body.appendChild(ov);
       const close = () => ov.remove();
       ov.querySelector('[data-x]').addEventListener('click', close);
@@ -571,6 +588,25 @@
       ov.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
       ov.querySelector('[data-copy]').addEventListener('click', async () => { const ok = await copyText(o.text); this._toast(ok ? 'Output copied' : 'Copy failed'); });
       ov.querySelector('[data-dl]').addEventListener('click', () => this._downloadOutputs([o]));
+      if (live) {
+        const pre = ov.querySelector('pre');
+        const note = ov.querySelector('.md-note');
+        const scrollEnd = () => { pre.scrollTop = pre.scrollHeight; };
+        requestAnimationFrame(scrollEnd);
+        ov.querySelector('[data-refresh]').addEventListener('click', async () => {
+          try {
+            o.text = await this._capture();
+            o.at = new Date().toISOString();
+            pre.textContent = o.text;
+            note.textContent = o.text.split('\n').length + ' lines';
+            const when = ov.querySelector('.tm-out-when');
+            if (when) when.textContent = '· ' + stampOf(o.at) + (o.session ? ' · tmux “' + o.session + '”' : '');
+            scrollEnd();
+          } catch (err) { global.uiAlert(err.message); }
+        });
+        const sv = ov.querySelector('[data-save]');
+        if (sv) sv.addEventListener('click', () => { close(); this.saveOutput(o.text); });
+      }
     }
 
     async sendSnippet(sn) {
@@ -624,6 +660,7 @@
         </section>
         <section>
           <h4>Pane outputs <span class="tm-hint">${d.outputs.length}/${C.MAX_OUTPUTS} · oldest deleted automatically</span></h4>
+          <div class="tm-btns"><button type="button" data-act="viewoutput" title="See the pane's output now, without saving">👁 View</button><button type="button" data-act="saveoutput"${ro}>＋ Save pane output</button>${d.outputs.length > 1 ? '<button type="button" data-act="dlall">⤓ Download all</button>' : ''}${d.outputs.length && !this.readOnly ? '<button type="button" data-act="clearouts" class="tm-danger">✕ Clear all</button>' : ''}</div>
           <div class="tm-outs">${d.outputs.slice().reverse().map((o) => `
             <div class="tm-out-item" data-id="${esc(o.id)}">
               <div class="tm-out-main">
@@ -637,7 +674,6 @@
                 ${this.readOnly ? '' : '<button type="button" data-o="rename" title="Rename">✎</button><button type="button" data-o="del" title="Delete">✕</button>'}
               </div>
             </div>`).join('') || '<p class="tm-small">None yet — save what\'s on screen (and its scrollback) to keep it with this file.</p>'}</div>
-          <div class="tm-btns"><button type="button" data-act="saveoutput"${ro}>＋ Save pane output</button>${d.outputs.length > 1 ? '<button type="button" data-act="dlall">⤓ Download all</button>' : ''}</div>
         </section>`;
       this._bindSide();
     }
@@ -672,7 +708,16 @@
       on('savelayout', () => this.saveLayout());
       on('clearlayout', () => { d.layout = null; this._changed(); this._renderSide(); });
       on('saveoutput', () => this.saveOutput());
+      on('viewoutput', () => this.viewOutput());
       on('dlall', () => this._downloadOutputs(d.outputs));
+      on('clearouts', async () => {
+        const n = d.outputs.length;
+        if (!n || !(await ask('Delete all ' + n + ' saved pane output' + (n === 1 ? '' : 's') + '? (Undo with History if needed.)', { title: 'Clear pane outputs', okLabel: 'Delete all', danger: true }))) return;
+        d.outputs.splice(0);
+        this._changed();
+        this._renderSide();
+        this._toast('Deleted ' + n + ' pane output' + (n === 1 ? '' : 's'));
+      });
       S.querySelectorAll('.tm-out-item').forEach((row) => {
         const o = d.outputs.find((x) => x.id === row.dataset.id);
         row.querySelectorAll('[data-o]').forEach((b) => b.addEventListener('click', async () => {

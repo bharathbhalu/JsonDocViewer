@@ -16,6 +16,9 @@
   const CELL_H = 42;
   const CELL_MIN_W = 88;
   const CELL_MAX_H = 520;
+  // Limits for dragging a cell's resize handle (auto-sizing uses the ones above).
+  const CELL_MAX_RESIZE_W = 2400;
+  const CELL_MAX_RESIZE_H = 2400;
   const CELL_MIN_CHARS = 13;
   const CELL_CHARS = 50;
   const ROOT_W = 232;
@@ -27,7 +30,7 @@
   const LINK_MAX_H = 108;
   // Below this zoom the world is not kept on a fixed-scale GPU layer (see .is-gpu-world).
   const GPU_WORLD_MIN_ZOOM = 0.35;
-  const EXPORT_V = 19; // must match MindmapExport._v in export.js
+  const EXPORT_V = 20; // must match MindmapExport._v in export.js
   // Vibrant palettes: light tints (readable with dark text), bright
   // mid-tones and deep colours (text turns white automatically on dark fills).
   const NODE_PALETTE = [
@@ -49,6 +52,25 @@
     { id: 'dashed', label: 'Dashed', dash: '9 7' },
     { id: 'dash-dot', label: 'Dash-dot', dash: '12 6 2.5 6' },
   ];
+  // Per-cell outline, set from the right-click menu ('' = whatever the style gives).
+  // Diamond and hexagon are drawn by clipped ::before/::after layers (see engine.css).
+  const CELL_SHAPES = [
+    { id: '', label: 'Default' },
+    { id: 'rect', label: 'Rectangle' },
+    { id: 'rounded', label: 'Rounded' },
+    { id: 'pill', label: 'Pill' },
+    { id: 'ellipse', label: 'Ellipse' },
+    { id: 'diamond', label: 'Diamond' },
+    { id: 'hexagon', label: 'Hexagon' },
+  ];
+  const CLIPPED_SHAPES = ['diamond', 'hexagon'];
+  function cellShape(n) {
+    const v = n && n.type === 'text' && n.style ? n.style.shape : '';
+    return CELL_SHAPES.some((s) => s.id && s.id === v) ? v : '';
+  }
+  function shapeMenuHtml(cur) {
+    return `<div class="mm-swatches">${CELL_SHAPES.map((s) => `<button type="button" data-m="shape" data-shape="${s.id}" class="mm-link-style${(cur || '') === s.id ? ' active' : ''}">${s.label}</button>`).join('')}</div>`;
+  }
   const CODE_LANGS = ['auto', 'plaintext', 'javascript', 'typescript', 'python', 'go', 'rust', 'java', 'html', 'css', 'json', 'yaml', 'bash', 'sql', 'markdown', 'c', 'cpp'];
   const CLIP_PREFIX = 'DOCVIEWER_MINDMAP:';
 
@@ -1100,6 +1122,7 @@
       n.label = n.label || '';
       n.language = n.language || 'auto';
       n.style = Object.assign(defaultStyle(), n.style || {});
+      if (n.style.shape && !CELL_SHAPES.some((sh) => sh.id && sh.id === n.style.shape)) delete n.style.shape;
       n.format = Object.assign(defaultFormat(), n.format || {});
       if (!n.format.align) n.format.align = 'center';
       if (!n.format.fontFamily) n.format.fontFamily = 'sans';
@@ -4433,6 +4456,12 @@
       this.applyStyle(id, { linkStyle });
     }
 
+    applyCellShape(id, shape) {
+      const n = this.data.nodes[id];
+      if (!n || n.type !== 'text') return;
+      this.applyStyle(id, { shape: CELL_SHAPES.some((s) => s.id === shape) ? shape : '' });
+    }
+
     applyStyle(id, patch) {
       const n = this.data.nodes[id];
       if (!n || this.readOnly || this.isNodeLocked(n)) return;
@@ -4710,7 +4739,7 @@
       const f = this._effFormat(n);
       const pick = (o, keys) => keys.reduce((a, k) => { if (o[k] !== undefined) a[k] = o[k]; return a; }, {});
       return {
-        style: pick(st, ['fill', 'fillAlpha', 'border', 'textColor', 'textColorManual', 'fillColorManual', 'linkColor', 'linkColorManual', 'linkWidth', 'linkStyle', 'linkCurve']),
+        style: pick(st, ['fill', 'fillAlpha', 'border', 'textColor', 'textColorManual', 'fillColorManual', 'linkColor', 'linkColorManual', 'linkWidth', 'linkStyle', 'linkCurve', 'shape']),
         format: pick(f, ['bold', 'italic', 'underline', 'fontFamily', 'fontSize', 'align']),
       };
     }
@@ -5633,8 +5662,8 @@
         n.y = c.indexOf('n') !== -1 ? d.fy + d.h0 - n.h : d.fy;
         return;
       }
-      n.w = clamp(d.w0 + (w.x - d.x0), 120, 720);
-      n.h = clamp(d.h0 + (w.y - d.y0), 40, 720);
+      n.w = clamp(d.w0 + (w.x - d.x0), 120, CELL_MAX_RESIZE_W);
+      n.h = clamp(d.h0 + (w.y - d.y0), 40, CELL_MAX_RESIZE_H);
       n.userSized = true;
     }
 
@@ -6554,6 +6583,20 @@
       el.style.borderBottom = '';
       el.style.background = isTransparent(e.fill) ? 'transparent' : e.fill;
       el.style.borderColor = isTransparent(e.border) ? 'transparent' : (e.border || e.fill);
+      const shape = cellShape(n);
+      CELL_SHAPES.forEach((sh) => { if (sh.id) el.classList.toggle('mm-shape-' + sh.id, shape === sh.id); });
+      el.classList.toggle('mm-shaped', !!shape);
+      if (CLIPPED_SHAPES.includes(shape)) {
+        // The box itself stays transparent so ports and handles aren't clipped;
+        // the clipped pseudo-layers paint the outline and fill from these.
+        el.style.setProperty('--mm-shape-border', el.style.borderColor || 'transparent');
+        el.style.setProperty('--mm-shape-fill', el.style.background || 'transparent');
+        el.style.background = 'transparent';
+        el.style.borderColor = 'transparent';
+      } else {
+        el.style.removeProperty('--mm-shape-border');
+        el.style.removeProperty('--mm-shape-fill');
+      }
       if (!e.t.plain && e.shape === 'underline') el.style.borderBottom = `${Math.max(1.5, e.w)}px solid ${e.link}`;
       el.style.color = e.text || '#1a2130';
       const fmt = this._effFormat(n);
@@ -7550,7 +7593,7 @@
     async _doExport(format, rect) {
       // A standalone file has export.js inlined and no server to fetch from.
       const stale = !isStandaloneDoc() && global.MindmapExport && global.MindmapExport._v !== EXPORT_V;
-      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=27');
+      if (!global.MindmapExport || stale) await loadScript('/mindmap/export.js?v=28');
       if (!global.MindmapExport) throw new Error('Export module failed to load');
       const scene = this._exportScene();
       return global.MindmapExport.run(format, rect, scene, this.els);
@@ -8016,6 +8059,7 @@
         ${subMenuHtml('Type', typeInner)}
         ${subMenuHtml('Fill', menuColorRow('fill', NODE_PALETTE, n.style.fill, true))}
         ${subMenuHtml('Border', menuColorRow('border', NODE_PALETTE, n.style.border, true))}
+        ${n.type === 'text' ? subMenuHtml('Shape', shapeMenuHtml(cellShape(n))) : ''}
         ${subMenuHtml('Text', textInner)}
         ${subMenuHtml('Line', lineInner)}
         <div class="mm-menu-sep"></div>
@@ -8088,6 +8132,7 @@
         <div class="mm-menu-label">Group · ${ids.length} cells</div>
         ${subMenuHtml('Fill', menuColorRow('fill', NODE_PALETTE, n.style.fill, true))}
         ${subMenuHtml('Border', menuColorRow('border', NODE_PALETTE, n.style.border, true))}
+        ${ids.some((gid) => this.data.nodes[gid] && this.data.nodes[gid].type === 'text') ? subMenuHtml('Shape', shapeMenuHtml(ids.every((gid) => this.data.nodes[gid] && cellShape(this.data.nodes[gid]) === cellShape(n)) ? cellShape(n) : null)) : ''}
         ${subMenuHtml('Text', textInner)}
         ${subMenuHtml('Line', lineInner)}
         ${subMenuHtml('Type', typeInner)}
@@ -8489,6 +8534,7 @@
       if (m === 'text') this.applyTextColor(id, btn.getAttribute('data-color'));
       if (m === 'link') this.applyLinkColor(id, btn.getAttribute('data-color'));
       if (m === 'link-style') this.applyLinkStyle(id, btn.getAttribute('data-style'));
+      if (m === 'shape') this.applyCellShape(id, btn.getAttribute('data-shape'));
       if (m === 'align-left') this.applyFormat(id, { align: 'left' });
       if (m === 'align-center') this.applyFormat(id, { align: 'center' });
       if (m === 'align-right') this.applyFormat(id, { align: 'right' });
@@ -8552,6 +8598,7 @@
       if (m === 'text') each((id) => this.applyTextColor(id, btn.getAttribute('data-color')));
       if (m === 'link') each((id) => this.applyLinkColor(id, btn.getAttribute('data-color')));
       if (m === 'link-style') each((id) => this.applyLinkStyle(id, btn.getAttribute('data-style')));
+      if (m === 'shape') each((id) => this.applyCellShape(id, btn.getAttribute('data-shape')));
       if (m === 'align-left') each((id) => this.applyFormat(id, { align: 'left' }));
       if (m === 'align-center') each((id) => this.applyFormat(id, { align: 'center' }));
       if (m === 'align-right') each((id) => this.applyFormat(id, { align: 'right' }));

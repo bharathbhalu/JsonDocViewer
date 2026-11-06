@@ -92,15 +92,27 @@
     return MONTHS[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
   }
 
-  function depPath(x1, y1, x2, y2) {
+  // Arrow route from (x1,y1) to (x2,y2). dx moves the first vertical segment
+  // and dy the middle segment of a looping arrow (both 0 = default route).
+  // Returns the path and where its steering handles sit.
+  function depGeom(x1, y1, x2, y2, dx, dy) {
+    dx = dx || 0;
+    dy = dy || 0;
     if (x2 >= x1 + 14) {
-      const mid = Math.round((x1 + x2) / 2);
-      return 'M ' + x1 + ' ' + y1 + ' H ' + mid + ' V ' + y2 + ' H ' + x2;
+      const mid = Math.round((x1 + x2) / 2 + dx);
+      return { d: 'M ' + x1 + ' ' + y1 + ' H ' + mid + ' V ' + y2 + ' H ' + x2, hx: mid, hy: (y1 + y2) / 2, loop: false };
     }
-    const out = x1 + 14;
+    const out = Math.round(x1 + 14 + dx);
     const back = x2 - 14;
-    const midY = y1 + (y2 >= y1 ? 18 : -18);
-    return 'M ' + x1 + ' ' + y1 + ' H ' + out + ' V ' + midY + ' H ' + back + ' V ' + y2 + ' H ' + x2;
+    const midY = Math.round(y1 + (y2 >= y1 ? 18 : -18) + dy);
+    return {
+      d: 'M ' + x1 + ' ' + y1 + ' H ' + out + ' V ' + midY + ' H ' + back + ' V ' + y2 + ' H ' + x2,
+      hx: out,
+      hy: (y1 + midY) / 2,
+      lx: (out + back) / 2,
+      ly: midY,
+      loop: true,
+    };
   }
 
   class GanttEngine {
@@ -395,7 +407,9 @@
       const listHead = el('div', 'gt-list-head', 'Task');
       const listRows = el('div', 'gt-list-rows');
       listPane.append(listHead, listRows);
-      list.appendChild(listPane);
+      const listGrip = el('div', 'gt-colgrip');
+      listGrip.title = 'Drag to resize · double-click to reset';
+      list.append(listPane, listGrip);
       const time = el('div', 'gt-time');
       const headClip = el('div', 'gt-time-head-clip');
       const timeHead = el('div', 'gt-time-head');
@@ -429,7 +443,7 @@
       this.els = {
         root, title, stats, mode, zoom, todayBtn, addBtn, subBtn, mileBtn, undoBtn, redoBtn, exportBtn, helpBtn,
         filterbar, search, kindSel, priSel, progSel, whoSel, labelSel, clearBtn,
-        list, listPane, listHead, listRows, time, headClip, timeHead, timeClip, timeBody, analytics, scrim, menu, toast, help,
+        list, listPane, listHead, listRows, listGrip, time, headClip, timeHead, timeClip, timeBody, analytics, scrim, menu, toast, help,
       };
       this.drawer = drawer;
     }
@@ -605,6 +619,20 @@
       e.timeClip.addEventListener('dblclick', (ev) => this._onOpenClick(ev));
       e.timeBody.addEventListener('pointerdown', (ev) => this._onPointerDown(ev));
       e.root.addEventListener('contextmenu', (ev) => this._onContextMenu(ev));
+      e.root.addEventListener('pointerdown', (ev) => {
+        const grip = ev.target.closest && ev.target.closest('.gt-colgrip');
+        if (grip) this._startColResize(ev, grip);
+      });
+      e.root.addEventListener('dblclick', (ev) => {
+        if (ev.target.closest && ev.target.closest('.gt-dep-handle.is-on') && !this.readOnly) {
+          this._resetDepRoute();
+          return;
+        }
+        if (!ev.target.closest || !ev.target.closest('.gt-colgrip') || this.readOnly) return;
+        this._mutate(() => {
+          this.data.view[this._viewMode() === 'sheet' ? 'sheetTaskWidth' : 'listWidth'] = 0;
+        });
+      });
       e.listRows.addEventListener('scroll', () => this._syncScroll('list'));
       e.timeClip.addEventListener('scroll', () => this._syncScroll('time'));
       e.listRows.addEventListener('mouseover', (ev) => this._hover(ev));
@@ -813,6 +841,7 @@
       const mode = this._viewMode();
       e.root.classList.toggle('is-sheet', mode === 'sheet');
       e.root.classList.toggle('is-analytics', mode === 'analytics');
+      this._applyTaskWidths();
       e.mode.querySelectorAll('[data-mode]').forEach((b) => {
         b.classList.toggle('is-on', b.dataset.mode === mode);
       });
@@ -1094,7 +1123,10 @@
           if (!from) return;
           const y1 = from.index * ROW + ROW / 2;
           const y2 = to.index * ROW + ROW / 2;
-          const d = depPath(from.box.x2, y1, to.box.x1, y2);
+          const bend = C.depBend(task, predId);
+          const dayPx = this._px || C.pxPerDay(this.data.view.zoom);
+          const geo = depGeom(from.box.x2, y1, to.box.x1, y2, bend ? bend.x * dayPx : 0, bend ? bend.y : 0);
+          const d = geo.d;
           const selected = this.selectedLink && this.selectedLink.succ === task.id && this.selectedLink.pred === predId;
           const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           hit.setAttribute('class', 'gt-dep-hit');
@@ -1108,6 +1140,20 @@
           path.dataset.pred = predId;
           path.setAttribute('marker-end', 'url(#' + (selected ? markerOn : markerId) + ')');
           svg.append(hit, path);
+          // Steering handles, shown only while the arrow is selected.
+          const handle = (axis, cx, cy) => {
+            const h = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            h.setAttribute('class', 'gt-dep-handle is-' + axis + (selected ? ' is-on' : ''));
+            h.setAttribute('cx', String(cx));
+            h.setAttribute('cy', String(cy));
+            h.setAttribute('r', '5');
+            h.dataset.succ = task.id;
+            h.dataset.pred = predId;
+            h.dataset.axis = axis;
+            svg.appendChild(h);
+          };
+          handle('x', geo.hx, geo.hy);
+          if (geo.loop) handle('y', geo.lx, geo.ly);
         });
       });
       this.els.timeBody.appendChild(svg);
@@ -1371,6 +1417,50 @@
       pane.appendChild(grid);
     }
 
+    // Task column width: timeline list pane (view.listWidth) and the sheet's
+    // first column (view.sheetTaskWidth); 0 falls back to the CSS default.
+    _applyTaskWidths() {
+      const v = this.data.view || {};
+      const set = (name, w) => {
+        if (w) this.els.root.style.setProperty(name, w + 'px');
+        else this.els.root.style.removeProperty(name);
+      };
+      set('--gt-list-w', C.taskWidth(v.listWidth));
+      set('--gt-task-col', C.taskWidth(v.sheetTaskWidth));
+    }
+
+    _startColResize(ev, grip) {
+      if (ev.button !== 0 || this.readOnly) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const sheet = this._viewMode() === 'sheet';
+      const key = sheet ? 'sheetTaskWidth' : 'listWidth';
+      const prop = sheet ? '--gt-task-col' : '--gt-list-w';
+      const box = sheet ? grip.parentNode : this.els.list;
+      const startX = ev.clientX;
+      const startW = box.getBoundingClientRect().width;
+      let width = startW;
+      this.els.root.classList.add('is-col-resizing');
+      grip.setPointerCapture(ev.pointerId);
+      const move = (e) => {
+        width = C.taskWidth(startW + e.clientX - startX) || C.TASK_WIDTH_MIN;
+        this.els.root.style.setProperty(prop, width + 'px');
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        this.els.root.classList.remove('is-col-resizing');
+        if (Math.round(width) === Math.round(startW)) return;
+        this._mutate(() => {
+          this.data.view[key] = C.taskWidth(width);
+        });
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    }
+
     _paintListHead(sheet) {
       const head = this.els.listHead;
       head.innerHTML = '';
@@ -1380,7 +1470,13 @@
         return;
       }
       SHEET_HEADS.forEach((label, i) => {
-        head.appendChild(el('span', 'gt-col gt-col-h gt-col-' + i, label));
+        const cell = el('span', 'gt-col gt-col-h gt-col-' + i, label);
+        if (i === 0) {
+          const grip = el('div', 'gt-colgrip');
+          grip.title = 'Drag to resize · double-click to reset';
+          cell.appendChild(grip);
+        }
+        head.appendChild(cell);
       });
     }
 
@@ -1656,6 +1752,7 @@
     _onTimeClick(ev) {
       const target = eventEl(ev.target);
       if (!target) return;
+      if (target.closest('.gt-dep-handle')) return;
       const dep = target.closest('.gt-dep-hit');
       if (dep) {
         this.selectedLink = { succ: dep.dataset.succ, pred: dep.dataset.pred };
@@ -1689,6 +1786,10 @@
       this.els.root.querySelectorAll('.gt-row, .gt-time-row').forEach((n) => {
         n.classList.toggle('is-selected', n.dataset.id === this.selectedId);
       });
+      this.els.root.querySelectorAll('.gt-dep-handle').forEach((h) => {
+        const on = this.selectedLink && h.dataset.succ === this.selectedLink.succ && h.dataset.pred === this.selectedLink.pred;
+        h.classList.toggle('is-on', !!on);
+      });
       this.els.root.querySelectorAll('.gt-dep').forEach((path) => {
         const on = this.selectedLink && path.dataset.succ === this.selectedLink.succ && path.dataset.pred === this.selectedLink.pred;
         path.classList.toggle('is-selected', !!on);
@@ -1697,6 +1798,56 @@
         if (base) path.setAttribute('marker-end', on ? base.replace(')', '-on)') : base);
       });
       if (this.els.subBtn) this.els.subBtn.disabled = this.readOnly || !this.selectedId || !this.data.tasks[this.selectedId];
+    }
+
+    // Drag a selected arrow's handle to reroute it. The route is previewed by
+    // re-rendering with a temporary bend, then committed as one undo step.
+    _steerDep(ev, handle) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const succ = handle.dataset.succ;
+      const pred = handle.dataset.pred;
+      const axis = handle.dataset.axis;
+      const task = this.data.tasks[succ];
+      if (!task) return;
+      const dayPx = this._px || C.pxPerDay(this.data.view.zoom);
+      const start = Object.assign({ x: 0, y: 0 }, C.depBend(task, pred));
+      const before = JSON.stringify(this.data);
+      const x0 = ev.clientX;
+      const y0 = ev.clientY;
+      let next = start;
+      this.els.root.classList.add('is-steering');
+      const move = (e) => {
+        next = axis === 'x'
+          ? { x: start.x + (e.clientX - x0) / dayPx, y: start.y }
+          : { x: start.x, y: start.y + (e.clientY - y0) };
+        C.setDepBend(this.data, succ, pred, next);
+        this.selectedLink = { succ, pred };
+        this.render();
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+        this.els.root.classList.remove('is-steering');
+        if (JSON.stringify(this.data) === before) return;
+        this.data.updatedAt = C.nowIso();
+        this._pushHistory(before);
+        this.selectedLink = { succ, pred };
+        this.render();
+        this._emit();
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+    }
+
+    _resetDepRoute() {
+      const link = this.selectedLink;
+      if (!link) return;
+      this._mutate(() => C.setDepBend(this.data, link.succ, link.pred, null));
+      this.selectedLink = link;
+      this._syncSelection();
     }
 
     _onListPointerDown(ev) {
@@ -1712,6 +1863,11 @@
       if (this.readOnly || ev.button !== 0 || this._drag) return;
       const target = eventEl(ev.target);
       if (!target || target.closest('input, textarea, select, button, a')) return;
+      const steer = target.closest('.gt-dep-handle.is-on');
+      if (steer) {
+        this._steerDep(ev, steer);
+        return;
+      }
       const link = target.closest('.gt-link');
       const bar = target.closest('.gt-bar, .gt-diamond');
       if (!bar) {
@@ -1789,7 +1945,7 @@
       const tasks = this._shownTasks();
       const index = tasks.findIndex((t) => t.id === this._drag.id);
       const y1 = index * ROW + ROW / 2;
-      svg.innerHTML = '<path d="' + depPath(from.x2, y1, x2, y2) + '"></path>';
+      svg.innerHTML = '<path d="' + depGeom(from.x2, y1, x2, y2).d + '"></path>';
     }
 
     _paintReparent(ev) {
@@ -2302,6 +2458,8 @@
       const succ = this.data.tasks[link.succ];
       const menu = this._menu(null);
       menu.appendChild(el('div', 'gt-menu-label', (pred && pred.title ? pred.title : 'Task') + ' → ' + (succ && succ.title ? succ.title : 'Task')));
+      const succTask = this.data.tasks[link.succ];
+      if (C.depBend(succTask, link.pred)) this._menuItem(menu, 'Reset route', () => this._resetDepRoute());
       const del = this._menuItem(menu, 'Remove dependency', () => this._deleteSelectedLink());
       del.classList.add('is-danger');
       this._showMenu(null, point);
