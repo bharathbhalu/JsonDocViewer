@@ -1,0 +1,15 @@
+{
+  "name": "accretion-cad-build",
+  "private": true,
+  "description": "Builds the vendored CAD bundles in public/cad/vendor (replicad + OpenCascade worker, Three.js viewer). Run ./build.sh after changing versions.",
+  "dependencies": {
+    "fflate": "0.8.2",
+    "manifold-3d": "3.5.4",
+    "replicad": "1.2.1",
+    "replicad-opencascadejs": "1.2.1",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

@@ -687,7 +687,7 @@ function viewerKindFor(p) {
 let currentIsViewer = false;
 
 function applyFileIcon(el, p, kind) {
-  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-stocks', 'icon-music', 'icon-terminal', 'icon-runbook', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
+  el.classList.remove('icon-mindmap', 'icon-flow', 'icon-kanban', 'icon-gantt', 'icon-slides', 'icon-stocks', 'icon-music', 'icon-terminal', 'icon-runbook', 'icon-cad', 'icon-json', 'icon-yaml', 'icon-md', 'icon-pdf');
   if (kind === 'pdf' || isPdfPath(p)) {
     el.classList.add('icon-pdf');
     el.textContent = 'PDF';
@@ -746,6 +746,12 @@ function applyFileIcon(el, p, kind) {
     el.classList.add('icon-runbook');
     el.textContent = 'RB';
     el.title = 'Runbook';
+    return;
+  }
+  if (kind === 'cad') {
+    el.classList.add('icon-cad');
+    el.textContent = '3D';
+    el.title = '3D design';
     return;
   }
   const fmt = langForPath(p);
@@ -1609,7 +1615,7 @@ async function createBoardFile(parentPath, name, kind) {
   await openFile(fullPath);
 }
 
-const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides', stocks: 'stock watchlist', music: 'music collection', terminal: 'terminal', runbook: 'runbook' };
+const BOARD_LABELS = { mindmap: 'mindmap', flow: 'flow', kanban: 'kanban', gantt: 'gantt', slides: 'slides', stocks: 'stock watchlist', music: 'music collection', terminal: 'terminal', runbook: 'runbook', cad: '3D design' };
 
 const CREATE_KINDS = [
   { id: 'file', label: 'File', hint: 'Any file. Include an extension, e.g. notes.json', placeholder: 'notes.json' },
@@ -1624,6 +1630,7 @@ const CREATE_KINDS = [
   { id: 'stocks', label: 'Stocks', hint: 'Watchlist of NSE / BSE / US tickers with live prices and price alerts. .html is added if you omit it', placeholder: 'watchlist' },
   { id: 'terminal', label: 'Terminal', hint: 'A tmux session, local or over SSH (switch in its ⚙ settings). For Claude, use From template… → Claude: Local / Remote', placeholder: 'dev' },
   { id: 'runbook', label: 'Runbook', hint: 'Runnable steps with variables, status and output, sent to a terminal. More starters in From template…', placeholder: 'change-plan' },
+  { id: 'cad', label: '3D design', hint: 'Model parts for 3D printing — boxes, cylinders, imported STL / 3MF / STEP; export STL. Starters in From template…', placeholder: 'holder' },
   { id: 'folder', label: 'Folder', hint: 'New directory under data/', placeholder: 'folder-name' },
   { id: 'template', label: 'From template…', hint: 'Pick a starter: meeting notes, standup, design review, sprint board, project plan, decks… Press Create to browse.', needsName: false },
 ];
@@ -1808,6 +1815,7 @@ async function openCreateDialog(parentPath) {
   if (result.kind === 'music') return createBoardFile(parentPath, result.name, 'music');
   if (result.kind === 'terminal') return createBoardFile(parentPath, result.name, 'terminal');
   if (result.kind === 'runbook') return createBoardFile(parentPath, result.name, 'runbook');
+  if (result.kind === 'cad') return createBoardFile(parentPath, result.name, 'cad');
   return createFile(parentPath, result.name);
 }
 
@@ -2366,6 +2374,7 @@ function boardKindFromHtml(content) {
   if (/data-docviewer\s*=\s*["']music["']/.test(content)) return 'music';
   if (/data-docviewer\s*=\s*["']terminal["']/.test(content)) return 'terminal';
   if (/data-docviewer\s*=\s*["']runbook["']/.test(content)) return 'runbook';
+  if (/data-docviewer\s*=\s*["']cad["']/.test(content)) return 'cad';
   return null;
 }
 
@@ -2483,6 +2492,14 @@ function ensureRunbookAssets() {
     .then(() => ensureScript('/runbook/engine.js?v=1', 'data-rb-js', () => typeof window.RunbookEngine === 'function'));
 }
 
+// 3D designs: the heavy libraries (three, OpenCascade, manifold) are loaded by
+// the engine itself from /cad/vendor once the add-on is installed.
+function ensureCadAssets() {
+  ensureStylesheet('/cad/engine.css?v=1', 'data-cad-css');
+  return ensureScript('/cad/core.js?v=1', 'data-cad-core', () => !!window.CadCore)
+    .then(() => ensureScript('/cad/engine.js?v=1', 'data-cad-js', () => typeof window.CadEngine === 'function'));
+}
+
 function ensureSlidesAssets() {
   ensureStylesheet('/slides/engine.css?v=6', 'data-sl-css');
   return ensureScript('/slides/core.js?v=6', 'data-sl-core', () => !!window.SlidesCore)
@@ -2503,6 +2520,7 @@ const BOARD_TYPES = {
   music: { engine: 'MusicEngine', ensure: ensureMusicAssets, opts: { getPath: () => currentPath } },
   terminal: { engine: 'TerminalEngine', ensure: ensureTerminalAssets, opts: { getPath: () => currentPath } },
   runbook: { engine: 'RunbookEngine', ensure: ensureRunbookAssets, opts: { getPath: () => currentPath } },
+  cad: { engine: 'CadEngine', ensure: ensureCadAssets, opts: { getPath: () => currentPath } },
 };
 
 function getSaveContent() {
@@ -3049,7 +3067,7 @@ async function openFile(relPath, lineToReveal, opts) {
       alert('Slides failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
-  } else if (boardKind === 'terminal' || boardKind === 'runbook') {
+  } else if (boardKind === 'terminal' || boardKind === 'runbook' || boardKind === 'cad') {
     viewToggleBtn.classList.remove('hidden');
     const bt = BOARD_TYPES[boardKind];
     try {
@@ -3061,7 +3079,7 @@ async function openFile(relPath, lineToReveal, opts) {
     } catch (err) {
       if (token !== openToken) return;
       console.error(err);
-      alert((boardKind === 'terminal' ? 'Terminal' : 'Runbook') + ' failed to load: ' + ((err && err.message) || err));
+      uiAlert(({ terminal: 'Terminal', runbook: 'Runbook', cad: '3D design' }[boardKind]) + ' failed to load: ' + ((err && err.message) || err));
       setViewMode('code');
     }
   } else if (boardKind === 'music') {
@@ -3100,7 +3118,7 @@ async function openFile(relPath, lineToReveal, opts) {
     viewToggleBtn.classList.add('hidden');
     setViewMode('code');
   }
-  setStandaloneVisible(!!boardKind && !['stocks', 'music', 'terminal', 'runbook'].includes(boardKind));
+  setStandaloneVisible(!!boardKind && !['stocks', 'music', 'terminal', 'runbook', 'cad'].includes(boardKind));
   if (token !== openToken) return;
   markClean();
 }
@@ -3193,7 +3211,7 @@ function setViewMode(mode) {
   } else {
     if (boardEngine) syncBoardIntoEditor();
     document.getElementById('editor').classList.remove('hidden');
-    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : boardKind === 'stocks' ? 'View Stocks' : boardKind === 'music' ? 'View Music' : boardKind === 'terminal' ? 'View Terminal' : boardKind === 'runbook' ? 'View Runbook' : 'View Rendered';
+    viewToggleBtn.textContent = boardKind === 'mindmap' ? 'View Mindmap' : boardKind === 'flow' ? 'View Flow' : boardKind === 'kanban' ? 'View Kanban' : boardKind === 'gantt' ? 'View Gantt' : boardKind === 'slides' ? 'View Slides' : boardKind === 'stocks' ? 'View Stocks' : boardKind === 'music' ? 'View Music' : boardKind === 'terminal' ? 'View Terminal' : boardKind === 'runbook' ? 'View Runbook' : boardKind === 'cad' ? 'View 3D' : 'View Rendered';
     findInFileBtn.disabled = !currentPath;
     if (boardEngine && editor) {
       editor.layout();
@@ -3442,6 +3460,7 @@ async function runSearch(q, type) {
       else if (r.kind === 'music') bits.push('Music');
       else if (r.kind === 'terminal') bits.push('Terminal');
       else if (r.kind === 'runbook') bits.push('Runbook');
+      else if (r.kind === 'cad') bits.push('3D design');
       else if (r.kind === 'json') bits.push('JSON');
       else if (r.kind === 'yaml') bits.push('YAML');
       else if (r.kind === 'markdown') bits.push('Markdown');

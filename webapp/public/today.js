@@ -140,6 +140,7 @@
     { kind: 'stocks', label: 'Watchlists', sub: 'Stocks', create: 'board', icon: 'a.html' },
     { kind: 'terminal', label: 'Terminals', create: 'board', icon: 'a.html' },
     { kind: 'runbook', label: 'Runbooks', create: 'board', icon: 'a.html' },
+    { kind: 'cad', label: '3D designs', create: 'board', icon: 'a.html' },
     { kind: 'json', label: 'JSON', ext: '.json', create: 'file', icon: 'a.json' },
     { kind: 'yaml', label: 'YAML', ext: '.yaml', create: 'file', icon: 'a.yaml' },
     { kind: 'pdf', label: 'PDFs', create: 'import', icon: 'a.pdf' },

@@ -1789,6 +1789,8 @@ html[data-theme="dark"] .tree-row .icon.icon-stocks, html[data-theme="dark"] .fi
 .tree-row .icon.icon-terminal, .fi-host .icon.icon-terminal { width: auto; min-width: 22px; padding: 2px 5px; border-radius: 5px; font-size: 9px; font-weight: 800; font-family: ui-monospace, Menlo, monospace; background: #1f2937; color: #4ade80; opacity: 1; }
 .tree-row .icon.icon-runbook, .fi-host .icon.icon-runbook { width: auto; min-width: 22px; padding: 2px 5px; border-radius: 5px; font-size: 9px; font-weight: 800; letter-spacing: .06em; background: #c2410c; color: #fff; opacity: 1; }
 html[data-theme="dark"] .tree-row .icon.icon-runbook { color: #10141c; }
+.tree-row .icon.icon-cad, .fi-host .icon.icon-cad { width: auto; min-width: 22px; padding: 2px 5px; border-radius: 5px; font-size: 9px; font-weight: 800; letter-spacing: .04em; background: #0e7490; color: #fff; opacity: 1; }
+html[data-theme="dark"] .tree-row .icon.icon-cad { color: #10141c; background: #67c6dd; }
 .topo-overlay .tt-pick { width: min(560px, 100%); }
 .tt-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; margin-bottom: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .tt-item:hover, .tt-item:focus { border-color: var(--accent); background: var(--accent-soft); outline: none; }
@@ -1891,6 +1893,9 @@ html[data-theme="dark"] .ws-terminal { --tint: #4ade80; }
 .df-ca { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 12.5px; }
 .df-fp { font-size: 10.5px; word-break: break-all; }
 .df-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.df-cad .df-row { align-items: center; gap: 8px; margin: 6px 0; }
+.df-cad .df-pill { margin-left: 0; }
+.df-cad-log { max-height: 140px; overflow: auto; margin: 6px 0; padding: 8px; border-radius: 8px; background: var(--bg); color: var(--muted); font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
 .df-mini-btn { display: inline-block; padding: 5px 11px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; font-weight: 600; text-decoration: none; cursor: pointer; }
 .df-mini-btn:hover { border-color: var(--accent); }
 .df-howto summary { cursor: pointer; font-weight: 600; font-size: 12px; color: var(--accent); }

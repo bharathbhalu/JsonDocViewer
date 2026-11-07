@@ -10,6 +10,7 @@ const StocksCore = require(path.join(__dirname, 'public', 'stocks', 'core.js'));
 const MusicCore = require(path.join(__dirname, 'public', 'music', 'core.js'));
 const TerminalCore = require(path.join(__dirname, 'public', 'terminal', 'core.js'));
 const RunbookCore = require(path.join(__dirname, 'public', 'runbook', 'core.js'));
+const CadCore = require(path.join(__dirname, 'public', 'cad', 'core.js'));
 const LinkRewrite = require(path.join(__dirname, 'link-rewrite.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
@@ -914,6 +915,7 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="music"')) return 'music';
     if (head.includes('data-docviewer="terminal"')) return 'terminal';
     if (head.includes('data-docviewer="runbook"')) return 'runbook';
+    if (head.includes('data-docviewer="cad"')) return 'cad';
   } catch (e) {
     return undefined;
   }
@@ -1468,6 +1470,7 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'music') return MusicCore.serializeToHtml(MusicCore.createStarter(template || 'songbook'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (kind === 'terminal') return TerminalCore.serializeToHtml(TerminalCore.createStarter(template || 'local'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (kind === 'runbook') return RunbookCore.serializeToHtml(RunbookCore.createStarter(template || 'blank'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
+  if (kind === 'cad') return CadCore.serializeToHtml(CadCore.createStarter(template || 'blank'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
   // New Mermaid files start with a small example diagram.
@@ -1586,6 +1589,9 @@ const BUILTIN_TEMPLATES = [
   { id: 'runbook-change', kind: 'runbook', ext: '.html', name: 'Runbook: Network change', description: 'Pre-checks, change, verify, rollback — runnable.', build: (c) => RunbookCore.serializeToHtml(RunbookCore.createStarter('change'), c.title) },
   { id: 'runbook-incident', kind: 'runbook', ext: '.html', name: 'Runbook: Incident triage', description: 'Gather facts, mitigate, verify.', build: (c) => RunbookCore.serializeToHtml(RunbookCore.createStarter('incident'), c.title) },
   { id: 'runbook-deploy', kind: 'runbook', ext: '.html', name: 'Runbook: Deploy', description: 'Build, release, smoke test, rollback.', build: (c) => RunbookCore.serializeToHtml(RunbookCore.createStarter('deploy'), c.title) },
+  { id: 'cad-holder', kind: 'cad', ext: '.html', name: '3D: Device holder', description: 'Body, pocket, front window and cable slot — import your device and set it to Hole.', build: (c) => CadCore.serializeToHtml(CadCore.createStarter('holder'), c.title) },
+  { id: 'cad-box', kind: 'cad', ext: '.html', name: '3D: Hollow box', description: 'Rounded box with 2 mm walls, open on top.', build: (c) => CadCore.serializeToHtml(CadCore.createStarter('box'), c.title) },
+  { id: 'cad-vase', kind: 'cad', ext: '.html', name: '3D: Vase', description: 'Hollow rounded cylinder — print in vase mode.', build: (c) => CadCore.serializeToHtml(CadCore.createStarter('vase'), c.title) },
   { id: 'mermaid-sequence', kind: 'mermaid', ext: '.mmd', name: 'Sequence diagram', description: 'Client / API / database exchange.',
     build: () => MD(['sequenceDiagram', '  participant C as Client', '  participant A as API', '  participant D as Database', '  C->>A: Request', '  A->>D: Query', '  D-->>A: Rows', '  A-->>C: Response']) },
   { id: 'mermaid-fabric', kind: 'mermaid', ext: '.mmd', name: 'Leaf-spine fabric', description: 'Two spines, four leaves.',
@@ -1894,6 +1900,8 @@ const terminals = require('./terminal-server.js')(app, {
     return commitFile(rel, message);
   },
 });
+
+require('./cad-server.js')(app, { resolveSafe, commitFile, isLocalRequest });
 
 require('./stocks-server.js')(app, {
   dataRoot: () => DATA_ROOT,
@@ -2538,6 +2546,7 @@ function kindLabel(kind) {
   if (kind === 'music') return 'Music';
   if (kind === 'terminal') return 'Terminal';
   if (kind === 'runbook') return 'Runbook';
+  if (kind === 'cad') return '3D design';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
   if (kind === 'markdown') return 'Markdown';

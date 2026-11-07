@@ -93,6 +93,8 @@
               <label class="df-check"><input type="checkbox" data-term-http> Also over plain http (not encrypted — only on a network you fully trust)</label>
               <p class="md-note">Signed-in devices (Network access above) can then open terminals and runbooks here. Without plain http they need an <b>HTTPS</b> address — easiest with <a href="https://tailscale.com/kb/1312/serve" target="_blank" rel="noopener">Tailscale Serve</a>: run <code>tailscale serve --bg 4321</code> on this computer and open the <code>https://…ts.net</code> address it prints. You'll get a notification here every time another device opens a terminal.</p>
             </div></div>
+          <p class="df-label">3D modeling</p>
+          <div class="df-net df-cad"><p class="md-note">Checking…</p></div>
           <p class="df-label">Application</p>
           <label class="df-switch df-autostart hidden"><input type="checkbox" data-autostart> Start Accretion at login <span class="md-note">— runs in the background so the Dock app and reminders always work</span></label>
           <div class="df-quit"><button type="button" data-hardreload>↻ Hard reload</button><span class="md-note">Saves, then reloads the whole app fresh from the server (clears cached files).</span></div>
@@ -265,6 +267,55 @@
         setStatus(d.enabled ? 'Accretion will start at login' : 'Start at login turned off', 'ok');
         if (d.stopping) uiAlert('Start at login is off. This server was started by it, so it stops now — open Accretion.app to start it again.', { title: 'Start at login' });
       });
+    })();
+    // 3D modeling add-on: builds OpenCascade, manifold and Three.js locally (cad-build/build.sh).
+    (function cadAddon() {
+      const box = ov.querySelector('.df-cad');
+      if (!box) return;
+      let timer = null;
+      const stop = () => { clearInterval(timer); timer = null; };
+      const call = async (url, body) => {
+        const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Request failed');
+        return d;
+      };
+      const render = (s) => {
+        if (!document.body.contains(box)) { stop(); return; }
+        const v = s.versions || {};
+        const log = (s.log || []).slice(-8).map(esc).join('\n');
+        box.innerHTML = `
+          <p class="md-note">Model parts for 3D printing in <b>3D design</b> files — boxes, cylinders, rounded edges, imported STL / 3MF / OBJ / STEP — and export STL or STEP. Runs on this computer and on iPad. About 30 MB.</p>
+          <div class="df-row">
+            <span class="df-pill ${s.installed ? 'on' : s.busy ? '' : 'err'}">${s.busy ? 'installing…' : s.installed ? 'installed' : 'not installed'}</span>
+            ${s.installed && v.replicad ? `<span class="md-note">OpenCascade ${esc(v.opencascade)} · manifold ${esc(v.manifold)} · three ${esc(v.three)}</span>` : ''}
+          </div>
+          ${s.npm === false ? '<p class="df-err">npm was not found — install Node.js (for example <code>brew install node</code>), then try again.</p>' : ''}
+          ${s.error ? `<p class="df-err">${esc(s.error)}</p>` : ''}
+          ${log && (s.busy || s.error) ? `<pre class="df-cad-log">${log}</pre>` : ''}
+          <div class="df-btns">
+            <button type="button" class="${s.installed ? '' : 'md-primary'}" data-cad-install ${s.busy || s.npm === false ? 'disabled' : ''}>${s.installed ? 'Reinstall / update' : 'Install 3D modeling'}</button>
+            ${s.installed ? `<button type="button" data-cad-remove ${s.busy ? 'disabled' : ''}>Remove</button>` : ''}
+          </div>`;
+        const ib = box.querySelector('[data-cad-install]');
+        if (ib) ib.addEventListener('click', async () => {
+          try { await call('/api/cad/addon/install', {}); poll(); } catch (e) { uiAlert(e.message); }
+        });
+        const rb = box.querySelector('[data-cad-remove]');
+        if (rb) rb.addEventListener('click', async () => {
+          if (!(await uiConfirm('Remove the 3D modeling libraries? Your 3D design files are kept — you can install again any time.', { title: '3D modeling', okLabel: 'Remove', danger: true }))) return;
+          try { render(await call('/api/cad/addon/remove', {})); setStatus('3D modeling removed', 'ok'); } catch (e) { uiAlert(e.message); }
+        });
+      };
+      const refresh = async () => {
+        let s;
+        try { s = await call('/api/cad/addon'); } catch (e) { box.innerHTML = `<p class="df-err">${esc(e.message)}</p>`; stop(); return; }
+        render(s);
+        if (!s.busy && timer) { stop(); if (s.installed && !s.error) setStatus('3D modeling is installed', 'ok'); }
+        return s;
+      };
+      const poll = () => { stop(); timer = setInterval(refresh, 1000); refresh(); };
+      refresh().then((s) => { if (s && s.busy) poll(); });
     })();
     const qb = ov.querySelector('[data-quitapp]');
     if (qb) qb.addEventListener('click', () => { close(); if (window.quitApp) quitApp(); });
