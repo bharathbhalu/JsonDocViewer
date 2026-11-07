@@ -278,7 +278,26 @@ function profileDrawing(p) {
   }
   if (p.k === 'ngon') return replicad.drawPolysides(Math.max(0.05, num(p.r, 10)), Math.max(3, Math.round(num(p.n, 6)))).rotate(num(p.a, 0), [0, 0]).translate(X, Y);
   if (p.k === 'poly') {
-    const P = p.pts; const at = (q) => [num(q[0], 0), num(q[1], 0)];
+    const at = (q) => [num(q[0], 0), num(q[1], 0)];
+    // drop repeated points (a zero-length edge breaks the shape kernel), incl. the closing one
+    const P = [];
+    for (const q of p.pts) { const prev = P[P.length - 1]; if (prev && Math.hypot(num(q[0], 0) - num(prev[0], 0), num(q[1], 0) - num(prev[1], 0)) < 1e-3 && !(q.length >= 4)) continue; P.push(q); }
+    while (P.length > 3 && !(P[0].length >= 4) && Math.hypot(num(P[0][0], 0) - num(P[P.length - 1][0], 0), num(P[0][1], 0) - num(P[P.length - 1][1], 0)) < 1e-3) P.pop();
+    // drop points on the line through their neighbours: straight-through points and
+    // zero-width spikes that double back (they make the solid invalid)
+    if (!P.some((q) => q.length >= 4)) {
+      let changed = true;
+      while (changed && P.length > 3) {
+        changed = false;
+        for (let i = 0; i < P.length && P.length > 3; i++) {
+          const a0 = at(P[(i + P.length - 1) % P.length]), b0 = at(P[i]), c0 = at(P[(i + 1) % P.length]);
+          const cr = (b0[0] - a0[0]) * (c0[1] - a0[1]) - (b0[1] - a0[1]) * (c0[0] - a0[0]);
+          const L = Math.hypot(c0[0] - a0[0], c0[1] - a0[1]) + Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+          if (Math.abs(cr) <= 1e-6 * Math.max(1, L * L) || Math.hypot(b0[0] - a0[0], b0[1] - a0[1]) < 1e-3) { P.splice(i, 1); changed = true; i--; }
+        }
+      }
+    }
+    if (P.length < (P.some((q) => q.length >= 4) ? 2 : 3)) throw new Error('This outline has too few distinct points.');
     let pen = replicad.draw(at(P[0]));
     for (const q of P.slice(1)) pen = q.length >= 4 ? pen.threePointsArcTo(at(q), [num(q[2], 0), num(q[3], 0)]) : pen.lineTo(at(q));
     if (P[0].length >= 4) return pen.threePointsArcTo(at(P[0]), [num(P[0][2], 0), num(P[0][3], 0)]).close();
@@ -510,6 +529,14 @@ function featureLines(mesh, deg) {
 const sentSig = new Map(); // id -> signature of the item mesh last sent to the page
 const placedCache = new Map(); // placement key -> placed manifold (kept between builds)
 
+function resetCaches() {
+  freeArena(); freeCombo();
+  for (const c of itemCache.values()) { try { c.shape && c.shape.delete(); } catch (e) { /* freed */ } del(c.manifold); }
+  itemCache.clear();
+  for (const m of placedCache.values()) del(m); placedCache.clear();
+  for (const m of cutterCache.values()) del(m); cutterCache.clear();
+  sentSig.clear();
+}
 async function build(msg) {
   await ready;
   const t0 = performance.now();
@@ -541,8 +568,14 @@ async function build(msg) {
     const s = sig(it); used.add(s);
     try {
       let c = itemCache.get(s);
-      if (!c) { c = applyScale(applyPieces(await applyCuts(applyClip(await buildItem(it), it), it), it), it); itemCache.set(s, c); }
-      if (c.pieces > 1) pieces[it.id] = c.pieces;
+      if (!c) {
+        const b0 = await buildItem(it);
+        // how many loose pieces it had before any cut (imported meshes often have several shells)
+        const cutLike = (Array.isArray(it.cuts) && it.cuts.length) || (Array.isArray(it.clip) && it.clip.length);
+        let n0 = 1; if (cutLike && !it.piece) { const man = b0.manifold || toManifold(b0.mesh); const raw = man.decompose(); n0 = raw.filter((m) => m.volume() >= 0).length || 1; raw.forEach(del); if (!b0.manifold) del(man); }
+        c = applyScale(applyPieces(await applyCuts(applyClip(b0, it), it), it), it); c.pieces0 = n0; itemCache.set(s, c);
+      }
+      if (c.pieces > Math.max(1, c.pieces0 || 1)) pieces[it.id] = c.pieces;
       if (sentSig.get(it.id) !== s || msg.all) {
         const m = { vertices: c.mesh.vertices.slice(), triangles: c.mesh.triangles.slice() };
         transfer.push(m.vertices.buffer, m.triangles.buffer);
@@ -554,7 +587,7 @@ async function build(msg) {
       const pkey = s + '|' + JSON.stringify([it.pos, it.rot, it.flip || null]);
       // placed shapes are kept between builds: only objects that moved / changed are placed again
       const placed = () => { if (!c.manifold) return null; let pm = placedCache.get(pkey); if (!pm) { pm = placeManifold(c.manifold, it); placedCache.set(pkey, pm); } usedPlaced.add(pkey); return pm; };
-      if (c.manifold && it.role === 'solid') { const pm = placed(); solids.push(pm); solidInfo.push({ id: it.id, name: it.name || it.type, man: pm, group: it.group || '', key: pkey }); }
+      if (c.manifold && it.role === 'solid') { const pm = placed(); solids.push(pm); solidInfo.push({ id: it.id, name: it.name || it.type, man: pm, group: it.group || '', key: pkey, fill: !!it.fill }); }
       if (c.manifold && it.role === 'hole') { holes.push(placed()); holeInfo.push({ id: it.id, key: pkey }); }
     } catch (e) { if (isFatal(e)) throw e; errors[it.id] = errText(e); }
   }
@@ -567,7 +600,10 @@ async function build(msg) {
   try {
     const holesKey = holeInfo.map((h) => h.id + '=' + h.key).join('\n');
     if (holes.length) holeUnion = holes.length === 1 ? holes[0] : own(MF.Manifold.union(holes));
-    if (solids.length) design = combineIncremental(solidInfo, holeInfo, holes, holeUnion, holesKey);
+    // fills (Fill to opposite face) are added after holes are cut, so a cut can't remove them
+    const sMain = solidInfo.filter((x) => !x.fill), sFill = solidInfo.filter((x) => x.fill);
+    if (sMain.length) design = combineIncremental(sMain, holeInfo, holes, holeUnion, holesKey);
+    if (sFill.length) { const fu = sFill.length === 1 ? sFill[0].man : own(MF.Manifold.union(sFill.map((x) => x.man))); design = design ? own(design.add(fu)) : fu; }
     if (design && design.isEmpty()) design = null;
   } catch (e) { if (isFatal(e)) throw e; postMessage({ type: 'error', id: msg.id, message: 'Combining shapes failed: ' + errText(e) }); return; }
   lap('combine');
@@ -615,9 +651,39 @@ async function build(msg) {
   lap('resultMesh');
   const stepOk = items.every((it) => it.role === 'ref' || it.type !== 'model' || (fileMeshes.get(it.file.key) || {}).shape);
   for (const id of [...sentSig.keys()]) if (!items.some((i) => i.id === id)) sentSig.delete(id);
+  // A cached shape was freed while still in use ("…has been deleted"): drop every
+  // cache and build everything again from scratch, once.
+  if (!msg._fresh && Object.values(errors).some((e) => /has been deleted/i.test(String(e)))) {
+    resetCaches();
+    return build(Object.assign({}, msg, { _fresh: true, all: true }));
+  }
   postMessage({ type: 'result', id: msg.id, timing: tm, pieces, result, items: itemMeshes, keep, errors, notes, stepOk, groupPieces, info, floating, edges: edgeInfo, ms: Math.round(performance.now() - t0) }, transfer);
 }
 
+// Fix body: the chosen solids of the latest build, as they look (holes cut), made
+// into one clean solid. Loose slivers smaller than minVol mm³ are dropped.
+function bakeBody(msg) {
+  const ids = new Set(msg.ids || []);
+  const sel = lastSolids.filter((s) => ids.has(s.id)); const mans = sel.map((s) => s.man);
+  if (!mans.length) throw new Error('Nothing to fix — those objects did not build.');
+  const tmp = [];
+  try {
+    const u = withFills(sel); tmp.push(u);
+    const vol0 = u.volume();
+    const raw = u.decompose(); raw.forEach((m) => tmp.push(m));
+    const minVol = Math.max(0, num(msg.minVol, 1));
+    // cavities (negative volume) stay with the solid around them
+    const solidsP = raw.filter((m) => m.volume() >= 0); const voids = raw.filter((m) => m.volume() < 0);
+    const keep = solidsP.filter((m) => m.volume() >= minVol); const dropped = solidsP.filter((m) => m.volume() < minVol);
+    if (!keep.length) throw new Error('Nothing is left after removing slivers.');
+    const inside = (a, b) => { const A = a.boundingBox(), B = b.boundingBox(); return [0, 1, 2].every((k) => A.min[k] >= B.min[k] - 1e-6 && A.max[k] <= B.max[k] + 1e-6); };
+    const parts = keep.concat(voids.filter((v) => keep.some((k) => inside(v, k))));
+    const body = parts.length === 1 ? parts[0] : (tmp.push(MF.Manifold.compose(parts)), tmp[tmp.length - 1]);
+    const bb = body.boundingBox();
+    const stl = stlFromManifold(body);
+    return { stl, pieces: keep.length, dropped: dropped.length, droppedVol: Math.round(dropped.reduce((a, m) => a + m.volume(), 0) * 100) / 100, volume0: Math.round(vol0 * 100) / 100, volume: Math.round(body.volume() * 100) / 100, min: bb.min, max: bb.max };
+  } finally { tmp.forEach((m) => { if (!mans.includes(m)) del(m); }); }
+}
 function stlFromManifold(man) {
   const { vertices: v, triangles: t } = fromManifold(man);
   const n = t.length / 3;
@@ -671,7 +737,16 @@ function findOverlaps() {
   return out;
 }
 // Overlapping solids form one printed part; parts that don't share volume stay separate.
+// solids (minus all holes) plus their fills, as one new manifold
+function withFills(list) {
+  const main = list.filter((s) => !s.fill), fills = list.filter((s) => s.fill);
+  let man = null;
+  if (main.length) { man = main.length === 1 ? main[0].man.translate([0, 0, 0]) : MF.Manifold.union(main.map((s) => s.man)); if (lastHoles) { const sub = man.subtract(lastHoles); del(man); man = sub; } }
+  if (fills.length) { const fu = fills.length === 1 ? fills[0].man : MF.Manifold.union(fills.map((s) => s.man)); const r = man ? man.add(fu) : fu.translate([0, 0, 0]); if (man) del(man); if (fills.length > 1) del(fu); man = r; }
+  return man;
+}
 function partsForExport(overlaps) {
+  let man;
   const idx = new Map(lastSolids.map((s, i) => [s.id, i]));
   const parent = lastSolids.map((_, i) => i);
   const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
@@ -682,10 +757,7 @@ function partsForExport(overlaps) {
   lastSolids.forEach((s, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(s); });
   const parts = [];
   for (const g of groups.values()) {
-    let man = g.length === 1 ? g[0].man : MF.Manifold.union(g.map((s) => s.man));
-    const made = man !== g[0].man || g.length > 1;
-    if (lastHoles) { const sub = man.subtract(lastHoles); if (made) del(man); man = sub; }
-    else if (!made) man = man.translate([0, 0, 0]); // a copy we can free after export
+    man = withFills(g); // solids − holes + fills (a fresh manifold we free after export)
     if (man.isEmpty()) { del(man); continue; }
     const names = []; const seen = new Set();
     for (const s of g) { const n = s.group ? ((lastGroups[s.group] && lastGroups[s.group].name) || 'Combined') : s.name; if (!seen.has(n)) { seen.add(n); names.push(n); } }
@@ -772,6 +844,7 @@ self.onmessage = (ev) => {
     try {
       if (msg.type === 'build') await build(msg);
       else if (msg.type === 'export') await exportFile(msg);
+      else if (msg.type === 'bake') { await ready; const r = bakeBody(msg); postMessage(Object.assign({ type: 'baked', id: msg.id }, r), [r.stl]); }
       else if (msg.type === 'regions') { await ready; postMessage({ type: 'regions', id: msg.id, regions: sketchRegions(msg.outlines || []) }); }
       else if (msg.type === 'check') { await ready; postMessage({ type: 'check', id: msg.id, overlaps: findOverlaps() }); }
     } catch (e) {

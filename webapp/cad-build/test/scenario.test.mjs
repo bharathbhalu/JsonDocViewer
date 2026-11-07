@@ -91,6 +91,15 @@ const idle = async () => { for (let i = 0; i < 400; i++) { if (await ev(`!boardE
 const setField = async (f, v) => { await ev(`(() => { const i = document.querySelector('.cad-inspector [data-f="${f}"]'); i.focus(); i.value = ${JSON.stringify(String(v))}; i.dispatchEvent(new Event('change')); })()`); await sleep(150); await idle(); };
 const items = () => ev(`JSON.stringify(boardEngine.data.items)`).then(JSON.parse);
 const it = (name) => items().then((a) => a.find((x) => x.name === name));
+
+// Extrude areas of the selected 2D sketch through the real UI: floating-bar icon,
+// (all areas), distance, Extrude. op: new | cut | split
+const extrude = async (dist, op = 'new', all = true) => {
+  await press(`.cad-actbar [data-ab="ext-${op}"]`); await sleep(400);
+  if (all && !(await ev(`document.querySelector('[data-exall]').textContent === 'none'`))) await press('[data-exall]');
+  await ev(`(() => { const i = document.querySelector('[data-exdist]'); i.focus(); i.value = ${JSON.stringify(String(dist))}; i.dispatchEvent(new Event('change')); })()`);
+  await press('[data-exgo]'); await sleep(200); await idle();
+};
 const selNames = () => ev(`boardEngine._selIds().map((id) => boardEngine._item(id).name).join(',')`);
 const dims = () => ev(`(document.querySelector('.cad-dims') || {}).innerText`).then((t) => (t || '').replace(/\s+/g, ' ').trim());
 const reset = async (list) => { await ev(`(() => { const E = boardEngine; if (E.faceOn) E._faceMode(false); if (E.sk) E._sketchEnd(false); if (E.measureOn) E._measureMode(false); E.data.items = []; E.data.groups = {}; ${(list || []).map((o) => `E._add(${JSON.stringify(o.type)}, ${JSON.stringify(o)});`).join('')} E._select(null); E.undoStack = []; E.redoStack = []; E._renderChrome(); })()`); await idle(); };
@@ -191,7 +200,7 @@ async function run() {
   const s1 = await loc(-8, -8, 75), s2 = await loc(8, -8, 75);
   await click(await sp(...s1)); await click(await sp(...s2));
   await press('[data-skdone]'); await idle();
-  await field('height', -1.5); await press('.cad-inspector [data-role="hole"]'); await idle();
+  await extrude('-1.5', 'cut');
   const vSlot = await total();
   check('slot pocket 22 × 6 × 1.5 cut into the front', near(vGr - vSlot, (16 * 6 + Math.PI * 9) * 1.5, 12), vGr - vSlot);
   // Mirror Y on the slot (a feature on the body) → the same slot on the back
@@ -223,8 +232,8 @@ async function run() {
   await press('[data-cutstart]'); await sleep(200);
   await ev(`(() => { const i = document.querySelector('.cad-inspector [data-cutat]'); i.value = '80'; i.dispatchEvent(new Event('change')); })()`);
   await press('[data-cutdo="split"]'); await idle();
-  check('two body parts now', (await items()).filter((x) => x.role === 'solid').length === 2);
-  check('the holes (window, grooves, slots, lanyard, pocket) are baked into the parts', (await items()).filter((x) => x.role === 'hole').length === 0 && (await items()).every((x) => (x.cuts || []).length >= 5), JSON.stringify((await items()).map((x) => [x.name, x.role, (x.cuts || []).length])));
+  check('two body parts now', (await items()).filter((x) => x.role === 'solid' && !x.draft).length === 2);
+  check('the holes (window, grooves, slots, lanyard, pocket) are baked into the parts', (await items()).filter((x) => x.role === 'hole').length === 0 && (await items()).filter((x) => !x.draft).every((x) => (x.cuts || []).length >= 5), JSON.stringify((await items()).map((x) => [x.name, x.role, (x.cuts || []).length])));
   check('the two parts together = the uncut part (no gap)', near(await total(), vPk, 0.5), (await total()) + ' vs ' + vPk);
   // tap the top cap on its front face and raise it 20 mm with Page Up
   await press('[data-view="front"]'); await sleep(200); await key('Escape', 'Escape', 27);
@@ -278,7 +287,7 @@ async function run() {
   for (let i = 0; i < 10; i++) await key('z', 'KeyZ', 90, MOD.meta);
   for (let i = 0; i < 10; i++) await key('z', 'KeyZ', 90, MOD.meta | MOD.shift);
   await idle();
-  check('undo / redo keeps every part, its role and its baked holes', (await items()).length === ur && (await items()).filter((x) => x.role === 'solid').length === 2 && (await items()).every((x) => (x.cuts || []).length >= 5) && near(await total(), vPk, 1), JSON.stringify((await items()).map((x) => [x.name, x.role, (x.cuts || []).length])) + ' ' + (await total()));
+  check('undo / redo keeps every part, its role and its baked holes', (await items()).length === ur && (await items()).filter((x) => x.role === 'solid' && !x.draft).length === 2 && (await items()).filter((x) => !x.draft).every((x) => (x.cuts || []).length >= 5) && near(await total(), vPk, 1), JSON.stringify((await items()).map((x) => [x.name, x.role, (x.cuts || []).length])) + ' ' + (await total()));
   await healthy('after undo / redo');
 
   // =====================================================================

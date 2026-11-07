@@ -30,6 +30,15 @@
     try { const v = Function('"use strict";return (' + t + ')')(); return Number.isFinite(v) ? v : fallback; } catch (e) { return fallback; } // eslint-disable-line no-new-func
   }
   const ICON = {
+    fixbody: '<svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.1-.4-.4-2.1 2.5-2.5z"/></svg>',
+    knife: '<svg viewBox="0 0 24 24"><path d="M3 21 21 3" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2.5" fill="none"/><path d="M4 12h6v8H4zM14 4h6v6h-6z" opacity=".55"/></svg>',
+    splitshape: '<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" opacity=".6"/><path d="M12 6v-4M12 22v-4" stroke="currentColor" stroke-width="1.6"/></svg>',
+    holeic: '<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="2 2"/></svg>',
+    separate: '<svg viewBox="0 0 24 24"><path d="M3 7h7v10H3zM14 7h7v10h-7z"/><path d="M12 4v16" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2 2"/></svg>',
+    extrude: '<svg viewBox="0 0 24 24"><path d="M4 16h12l4-3H8z" opacity=".5"/><path d="M12 13V3m-3.5 3.5L12 3l3.5 3.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+    extcut: '<svg viewBox="0 0 24 24"><path d="M3 9h18v10H3z" opacity=".45"/><path d="M12 3v11m-3.5-3.5L12 14l3.5-3.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+    extsplit: '<svg viewBox="0 0 24 24"><path d="M3 10h8v9H3zM13 10h8v9h-8z" opacity=".5"/><path d="M12 3v18" stroke="currentColor" stroke-width="2"/></svg>',
+    backsk: '<svg viewBox="0 0 24 24"><path d="M3 21l3.5-1 11-11-2.5-2.5-11 11zM16.5 4.5 19 7l1.5-1.5L18 3z"/></svg>',
     box: '<svg viewBox="0 0 24 24"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Zm0 2.2L17.6 8 12 10.8 6.4 8 12 5.2ZM6 9.6l5 2.5v6.6l-5-2.5V9.6Zm7 9.1v-6.6l5-2.5v6.6l-5 2.5Z"/></svg>',
     cylinder: '<svg viewBox="0 0 24 24"><path d="M12 3C7.6 3 5 4.6 5 6.5v11C5 19.4 7.6 21 12 21s7-1.6 7-3.5v-11C19 4.6 16.4 3 12 3Zm0 2c3.4 0 5 1.1 5 1.5S15.4 8 12 8 7 6.9 7 6.5 8.6 5 12 5Zm0 14c-3.4 0-5-1.1-5-1.5V9.2C8.3 9.8 10 10 12 10s3.7-.2 5-.8v8.3c0 .4-1.6 1.5-5 1.5Z"/></svg>',
     sphere: '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2a7 7 0 0 1 6.9 6c-1.5.9-4 1.5-6.9 1.5S6.6 11.9 5.1 11A7 7 0 0 1 12 5Zm0 14a7 7 0 0 1-6.8-5.6c1.8.7 4.2 1.1 6.8 1.1s5-.4 6.8-1.1A7 7 0 0 1 12 19Z"/></svg>',
@@ -238,12 +247,20 @@
           <span class="cad-skhint"></span>
           <button type="button" data-skundo title="Undo last point or shape (⌫)">${ICON.undo}</button>
           <button type="button" data-skcancel>Cancel</button>
+          <button type="button" data-skext title="Extrude parts of this sketch now — you come back to drawing after">${ICON.extrude}</button>
           <button type="button" class="cad-primary" data-skdone>Done</button>
         </div>
         <div class="cad-inspector hidden"></div>
         <div class="cad-list collapsed">
           <button type="button" class="cad-list-head" data-listtoggle>${ICON.list}<span>Shapes</span><b class="cad-count"></b></button>
           <div class="cad-list-body"></div>
+        </div>
+        <div class="cad-actbar hidden"></div>
+        <div class="cad-xfbar hidden">
+          <span class="cad-sb-t" data-xft>Position</span>
+          ${['x', 'y', 'z'].map((a, i) => `<label class="cad-sb-f ax${i}"><b>${a.toUpperCase()}</b><input type="text" inputmode="decimal" data-xf="${i}" value="0"><em data-xfu>mm</em></label>`).join('')}
+          <button type="button" data-xfreset title="Undo what you typed (show the current numbers)">Reset</button>
+          <button type="button" class="cad-primary cad-small" data-xfapply>Apply</button>
         </div>
         <div class="cad-scalebar hidden">
           <span class="cad-sb-t">Scale</span>
@@ -314,6 +331,7 @@
       this._on(q('[data-skundo]'), 'click', () => this._sketchUndo());
       this._on(q('[data-skcancel]'), 'click', () => this._sketchEnd(false));
       this._on(q('[data-skdone]'), 'click', () => this._sketchEnd(true));
+      this._on(q('[data-skext]'), 'click', () => { const id = this.sk && this.sk.id; this._sketchEnd(true); if (id && this._item(id)) { this._backToSketch = true; this._extrudeStart(id); } });
       this.root.querySelectorAll('[data-axis]').forEach((b) => this._on(b, 'click', () => {
         const a = b.dataset.axis;
         this._axisFlip = this._lastAxis === a ? !this._axisFlip : false;
@@ -336,6 +354,17 @@
       this._on(q('[data-sball]'), 'keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') q('[data-sbapply]').click(); });
       this._on(q('[data-sball]'), 'input', (e) => { sbIn().forEach((x) => { x.value = e.target.value; }); this._scalePreview(); });
       this._on(q('[data-sbreset]'), 'click', () => { sbIn().forEach((x) => { x.value = '1'; }); q('[data-sball]').value = '1'; this._scalePreview(); });
+      const xfIn = () => [0, 1, 2].map((i) => this.root.querySelector(`[data-xf="${i}"]`));
+      xfIn().forEach((inp) => this._on(inp, 'keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') q('[data-xfapply]').click(); }));
+      this._on(q('[data-xfreset]'), 'click', () => { xfIn().forEach((x) => x.blur()); this._xfSync(); });
+      this._on(q('[data-xfapply]'), 'click', () => {
+        const xv = this._xfVals(); const typed = xfIn().map((x, i) => evalNum(x.value, xv ? xv.v[i] : 0));
+        if (xv && xv.abs && this.mode === 'rotate' && this._selIds().length === 1) { const id = this._selIds()[0]; this._rotKeepCentre(id, typed.map(r3)); this._xfSync(); return; }
+        const v = xv && xv.abs ? typed.map((t, i) => r3(t - xv.v[i])) : typed;
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        this.root.focus({ preventScroll: true }); this._active = true;
+        this._transformSel(this.mode === 'rotate' ? 'rotate' : 'move', v);
+      });
       this._on(q('[data-sbapply]'), 'click', () => {
         const S = sbIn().map((x) => evalNum(x.value, 1)).map((v) => (v > 0 ? v : 1));
         sbIn().forEach((x) => { x.value = '1'; }); q('[data-sball]').value = '1'; this._scalePreview(true);
@@ -441,13 +470,18 @@
       tc.addEventListener('dragging-changed', (e) => {
         controls.enabled = !e.value;
         this.dragging = e.value;
-        if (e.value) { this._snapshot(); if (this.multi.length) this._multiDragStart(); }
-        else if (this.multi.length) this._multiDragApply(true);
+        if (e.value) { this._snapshot(); if (this._px()) this._multiDragStart(); }
+        else if (this._px()) this._multiDragApply(true);
         else { this._readGizmo(true); }
       });
       tc.addEventListener('objectChange', () => {
-        if (this.tc.mode === 'scale' && !this.multi.length) { this._dimUpdate(true); return; }
-        if (this.multi.length) this._multiDragApply(false); else this._readGizmo(false);
+        if (this.tc.mode === 'scale') {
+          // the Scale bar follows the drag: ×X ×Y ×Z
+          const g = this.multi.length ? this.proxy : (this.objs[this.sel] || {}).group;
+          if (g) [g.scale.x, g.scale.y, g.scale.z].forEach((v, i) => { const inp = this.root.querySelector(`[data-sbf="${i}"]`); if (inp && document.activeElement !== inp) inp.value = String(Math.round(Math.abs(v) * 1000) / 1000); });
+          if (!this.multi.length) { this._dimUpdate(true); return; }
+        }
+        if (this._px()) this._multiDragApply(false); else { this._readGizmo(false); this._xfSync(); }
       });
       this._applySnap();
 
@@ -586,6 +620,8 @@
         part: new T.Color(dark ? 0xc9d1de : 0xdfe4ec),
         edge: new T.Color(dark ? 0x0d1117 : 0x3a4352),
         accent: new T.Color(this._css('--accent', '#4f6ef7')),
+        // selection: high contrast against the light-grey part (deep blue) / dark scene (amber)
+        sel: new T.Color(dark ? 0xffa21a : 0x0b2a8f),
         hole: new T.Color(this._css('--danger', '#f04438')),
         ref: new T.Color(dark ? 0x6ea8ff : 0x2f6fde),
         grid: new T.Color(dark ? 0x2a3140 : 0xd5dae3),
@@ -753,7 +789,7 @@
         this._styleObj(o, it);
       }
       if (this.readOnly || this.edgeMode || this.faceOn || this.cutMode || this.exMode) { if (this.tc.object) this.tc.detach(); }
-      else if (this.multi.length) { if (!this.dragging) this._placeProxy(); if (this.tc.object !== this.proxy) this.tc.attach(this.proxy); }
+      else if (this._px()) { if (!this.dragging) this._placeProxy(); if (this.tc.object !== this.proxy) this.tc.attach(this.proxy); }
       else if (this.sel && this.objs[this.sel]) { if (this.tc.object !== this.objs[this.sel].group) this.tc.attach(this.objs[this.sel].group); }
       else if (this.tc.object) this.tc.detach();
     }
@@ -788,6 +824,7 @@
       const key = JSON.stringify(it.profiles);
       this._regionCache = this._regionCache || new Map();
       if (this._regionCache.has(key)) return this._regionCache.get(key);
+      if (!this.worker || !this.pending) return null; // still starting: drawn again once the worker is up
       const outlines = it.profiles.map((p) => this._outline(p));
       const id = 'r' + (++this.buildSeq);
       const regions = await new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ type: 'regions', id, outlines }); });
@@ -818,10 +855,11 @@
       const segs = [];
       for (const p of it.profiles) { const ol = this._outline(p); for (let i = 0; i < ol.length; i++) { const a = ol[i], b = ol[(i + 1) % ol.length]; segs.push(a[0], a[1], 0.03, b[0], b[1], 0.03); } }
       o.edges.geometry.dispose(); o.edges.geometry = new T.BufferGeometry(); o.edges.geometry.setAttribute('position', new T.Float32BufferAttribute(segs, 3));
-      o.edges.material.color.copy(sel || hov ? this.colors.accent : this.colors.edge); o.edges.material.opacity = sel || hov ? 1 : 0.8; o.edges.material.needsUpdate = true;
+      o.edges.material.color.copy(sel ? this.colors.sel : hov ? this.colors.accent : this.colors.edge); o.edges.material.opacity = sel || hov ? 1 : 0.8; o.edges.material.needsUpdate = true;
       // areas (async): light fills; in Extrude mode, picked areas are strong
       this._sketchRegions(it).then((regions) => {
         if (!this.objs[it.id] || this.objs[it.id] !== o) return;
+        if (!regions) { o.key = null; return; } // worker not ready yet
         o.fills.forEach((f) => { o.group.remove(f); f.geometry.dispose(); }); o.fills = [];
         o.regions = regions;
         const geoms = [];
@@ -833,7 +871,7 @@
             holes.forEach((h) => sh.holes.push(new T.Path(h.map((q) => new T.Vector2(q[0], q[1])))));
             const g = new T.ShapeGeometry(sh); geoms.push(g);
             const picked = this.exMode && this.exMode.id === it.id && this.exMode.sel.has(ri);
-            const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: picked ? this.colors.accent : this.colors.ref, transparent: true, opacity: picked ? 0.55 : sel ? 0.22 : 0.12, side: T.DoubleSide, depthWrite: false }));
+            const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: picked ? this.colors.sel : this.colors.ref, transparent: true, opacity: picked ? 0.7 : sel ? 0.22 : 0.12, side: T.DoubleSide, depthWrite: false }));
             m.position.z = 0.02; m.renderOrder = 9; m.userData.id = it.id; m.userData.region = ri;
             o.group.add(m); o.fills.push(m);
           }
@@ -854,19 +892,21 @@
       let color = this.colors.accent, op = 0, eop = 0;
       if (it.type === 'image') {
         mm.opacity = it.opacity; mm.colorWrite = true; mm.needsUpdate = true;
-        em.color.copy(this.colors.accent); em.opacity = sel || hov ? 1 : 0; em.visible = sel || hov;
+        em.color.copy(sel ? this.colors.sel : this.colors.accent); em.opacity = sel || hov ? 1 : 0; em.visible = sel || hov;
         o.group.visible = !it.hidden;
         return;
       }
       // Unselected: references blue, holes red (when shown), solids invisible (the part shows them).
+      const featHole = it.role === 'hole' && (it.feature || /^Push( \d+)?$/.test(it.name || '')); // face pushes (also older ones)
       if (it.role === 'ref') { color = this.colors.ref; op = 0.18; eop = 0.35; }
-      else if (it.role === 'hole') { color = this.colors.hole; op = this.showHoles ? 0.12 : 0; eop = this.showHoles ? 0.45 : 0; }
+      else if (it.role === 'hole') { const q = featHole && !(this.sel === it.id && !this.multi.length); color = this.colors.hole; op = this.showHoles && !q ? 0.12 : 0; eop = this.showHoles && !q ? 0.45 : 0; }
       // Selected: a clear accent tint plus a full-strength outline drawn through other parts.
-      if (sel) { color = this.colors.accent; op = 0.38; eop = 1; }
-      else if (hov) { color = this.colors.accent; op = Math.max(op, 0.16); eop = 0.8; }
+      const quietSel = featHole && this.multi.length > 0; // part of a selected combined object
+      if (sel && !quietSel) { color = this.colors.sel; op = 0.72; eop = 1; }
+      else if (hov && !quietSel && !featHole) { color = this.colors.accent; op = Math.max(op, 0.16); eop = 0.8; }
       if (this.errors[it.id] && !sel) { color = this.colors.hole; eop = Math.max(eop, 0.6); }
       mm.color.copy(color); mm.opacity = op; mm.colorWrite = op > 0; mm.needsUpdate = true;
-      em.color.copy(sel || hov ? this.colors.accent : color); em.opacity = eop; em.visible = eop > 0;
+      em.color.copy(sel ? this.colors.sel : hov ? this.colors.accent : color); em.opacity = eop; em.visible = eop > 0;
       em.depthTest = !sel; // a selected outline stays visible even behind other geometry
       o.edges.renderOrder = sel ? 5 : 0;
       em.needsUpdate = true;
@@ -890,6 +930,8 @@
     }
     _select(id, part) {
       setTimeout(() => this._dimUpdate(), 0);
+      this.chooseCut = null;
+      if (id && id !== this.sel && this.mode !== 'translate' && this.tc) { this.mode = 'translate'; this.tc.setMode('translate'); }
       Object.values(this.objs).forEach((o) => { if (o.draft) o.key = null; });
       if (this.edgeMode && id !== this.edgeMode.id) { const em = this.edgeMode; this.edgeMode = null; this.root.classList.remove('cad-edging'); if (this._edgeObj) { this._edgeObj.parent && this._edgeObj.parent.remove(this._edgeObj); this._edgeObj = null; } void em; }
       if (id && !part && this._gid(id)) { this._setSel(this._members(this._gid(id))); return; }
@@ -909,6 +951,7 @@
     }
     _setSel(ids, exact) {
       setTimeout(() => this._dimUpdate(), 0);
+      this.chooseCut = null;
       Object.values(this.objs).forEach((o) => { if (o.draft) o.key = null; });
       ids = (exact ? ids : this._expand(ids)).filter((id) => this._item(id));
       this.sel = ids.length === 1 ? ids[0] : null;
@@ -929,10 +972,13 @@
       return b;
     }
     // The gizmo for a multi-selection drives this pivot at the selection's centre.
+    // The gizmo works on a pivot at the selection's centre for several objects,
+    // and for one object while rotating (so it turns about its own middle).
+    _px() { return !!(this.multi.length || (this.sel && this.mode === 'rotate' && this.objs[this.sel] && (this._item(this.sel) || {}).type !== 'image')); }
     _placeProxy() {
       const T = this.T;
       if (!this.proxy) { this.proxy = new T.Object3D(); this.proxy.rotation.order = 'ZYX'; this.scene.add(this.proxy); }
-      const b = this._boundsOf(this.multi);
+      const b = this._boundsOf(this._selIds());
       const c = b.isEmpty() ? new T.Vector3() : b.getCenter(new T.Vector3());
       this.proxy.position.copy(c); this.proxy.rotation.set(0, 0, 0); this.proxy.scale.set(1, 1, 1);
       this.proxy.updateMatrixWorld(true);
@@ -940,7 +986,7 @@
     _multiDragStart() {
       const T = this.T;
       this.proxy.updateMatrixWorld(true);
-      this._mStart = { inv: this.proxy.matrixWorld.clone().invert(), items: this.multi.map((id) => {
+      this._mStart = { inv: this.proxy.matrixWorld.clone().invert(), items: this._selIds().map((id) => {
         const it = this._item(id); const tmp = new T.Object3D(); tmp.rotation.order = 'ZYX'; this._placeObj(tmp, it); tmp.updateMatrixWorld(true);
         return { id, m: tmp.matrixWorld.clone() };
       }) };
@@ -961,8 +1007,8 @@
         it.rot = [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)].map((v) => (Math.abs(v) < 1e-6 ? 0 : v));
         const o = this.objs[s0.id]; if (o) this._placeObj(o.group, it);
       }
-      this._renderDims(); this._dimUpdate(!final);
-      if (final) { this._mStart = null; this._changed(); this._requestBuild(); this._placeProxy(); } else this._requestBuild(true);
+      this._renderDims(); this._dimUpdate(!final); this._xfSync();
+      if (final) { this._mStart = null; this._changed(); this._requestBuild(); this._placeProxy(); this._xfSync(); } else this._requestBuild(true);
     }
     // Mirror the selection across a plane through its centre (axis 0/1/2 = X/Y/Z):
     // makes mirror-image copies. World mirror M of T·R·F is T'·(M R M)·(M F):
@@ -996,7 +1042,7 @@
       const ids = this._selIds(); if (!ids.length || this.readOnly) return;
       const T = this.T;
       const vol = (b) => { const s3 = b.getSize(new T.Vector3()); return s3.x * s3.y * s3.z; };
-      const solids = this.data.items.filter((x) => x.role === 'solid' && !x.hidden && x.type !== 'image');
+      const solids = this.data.items.filter((x) => x.role === 'solid' && !x.hidden && x.type !== 'image' && !x.draft);
       const hostOf = (id) => { const b = this._boundsOf([id]); let best = null, bv = vol(b) * 1.0001; for (const h of solids) { if (ids.includes(h.id)) continue; const hb = this._boundsOf([h.id]); if (hb.isEmpty() || !hb.intersectsBox(b)) continue; const v = vol(hb); if (v > bv) { best = h; bv = v; } } return best; };
       const sign = [[1, -1, -1], [-1, 1, -1], [-1, -1, 1]][axis];
       const mirrorItem = (src, c) => C.normalizeItem(Object.assign(JSON.parse(JSON.stringify(src)), {
@@ -1089,7 +1135,7 @@
     // object), so a piece keeps its holes when it is moved after a split. Holes
     // that cut nothing else are then removed.
     _bakeHoles(targetIds) {
-      const holes = this.data.items.filter((h) => h.role === 'hole' && !h.hidden && h.type !== 'image');
+      const holes = this.data.items.filter((h) => h.role === 'hole' && !h.hidden && h.type !== 'image' && !h.draft);
       const used = new Set();
       for (const id of targetIds) {
         const it = this._item(id); if (!it) continue;
@@ -1099,13 +1145,13 @@
           const hb = this._boundsOf([h.id]); if (hb.isEmpty() || !hb.intersectsBox(tb)) continue;
           const shape = JSON.parse(JSON.stringify(h)); ['id', 'name', 'pos', 'rot', 'hidden', 'group', 'flip', 'cuts'].forEach((k) => delete shape[k]);
           shape.role = 'hole';
-          const m = Array.from(Mt.clone().multiply(this._placeMatrix(h)).elements).map((v) => Math.round(v * 1e9) / 1e9);
+          const m = this._cutRel(it, this._placeMatrix(h)); void Mt;
           it.cuts = (it.cuts || []).concat([{ keep: 'outside', m, shape }]);
           used.add(h.id);
         }
       }
       // a baked hole that still overlaps some other solid stays as a hole
-      const others = this.data.items.filter((x) => x.role === 'solid' && !x.hidden && !targetIds.includes(x.id));
+      const others = this.data.items.filter((x) => x.role === 'solid' && !x.hidden && !x.draft && !targetIds.includes(x.id));
       const drop = [...used].filter((hid) => { const hb = this._boundsOf([hid]); return !others.some((o) => { const ob = this._boundsOf([o.id]); return !ob.isEmpty() && ob.intersectsBox(hb); }); });
       this.data.items = this.data.items.filter((x) => !drop.includes(x.id));
       return drop.length;
@@ -1129,10 +1175,10 @@
     }
     // After a split: objects that came out in several chunks become one object per chunk
     // (part of the same undo step as the split).
-    _autoSeparate(ids) {
+    _autoSeparate(ids, base) {
       this._afterBuild(() => {
         let all = [];
-        ids.forEach((id) => { if (this.pieces && this.pieces[id] > 1) all = all.concat(this._separate(id, true)); });
+        ids.forEach((id) => { if (this.pieces && this.pieces[id] > ((base && base[id]) || 1)) all = all.concat(this._separate(id, true)); });
         if (all.length) { this._commit(); this._refreshItems(); this._toast('Some parts came apart — each separate piece is now its own object', 'ok'); }
       });
     }
@@ -1141,15 +1187,165 @@
     async _extrudeStart(id) {
       const it = this._item(id); if (!it || !it.draft || this.readOnly) return;
       const regions = await this._sketchRegions(it);
+      if (!regions) { this._toast('Still starting up — try again in a moment', 'err'); return; }
       if (!regions.length) { this._toast('This sketch has no closed areas to extrude', 'err'); return; }
-      this.exMode = { id, sel: new Set(regions.length === 1 ? [0] : []), dist: this._exDist || 5, op: this._exOp || 'new', regions };
+      this.exMode = { id, sel: new Set(regions.length === 1 ? [0] : []), dist: this._exDist || 5, op: this._exOpOnce || 'new', regions };
+      this._exOpOnce = null; // Split / Cut are never remembered: each extrude starts as New object unless a Cut / Split button opened it
       if (this.tc.object) this.tc.detach();
       const o = this.objs[id]; if (o) o.key = null; this._refreshItems();
       this._renderExtrudePanel();
     }
     _extrudeEnd() {
+      this._backToSketch = false;
       if (!this.exMode) return; const id = this.exMode.id; this.exMode = null;
       const o = this.objs[id]; if (o) o.key = null; this._inspFor = null; this._select(id);
+    }
+    // Floating bar of icon actions for the selected object (hidden in other modes).
+    _renderActBar() {
+      const bar = this.root.querySelector('.cad-actbar'); if (!bar) return;
+      const it = this.sel && !this.multi.length && this._item(this.sel);
+      const busy = this.sk || this.faceOn || this.edgeMode || this.cutMode || this.exMode || this.measureOn || this.mode === 'scale' || this.chooseCut;
+      const mids = this.multi.length > 1 ? this._selIds().filter((x) => { const t = this._item(x); return t && t.type !== 'image' && !t.draft; }) : [];
+      if (!it && mids.length >= 2 && !this.readOnly && !busy) {
+        bar.classList.remove('hidden'); const k = 'm|' + mids.join(','); if (bar.dataset.k === k) return; bar.dataset.k = k;
+        bar.innerHTML = `<button type="button" data-ab="mcut" title="Choose which object cuts the others">${ICON.extcut}<span>Cut by object</span></button><button type="button" data-ab="msplit" title="Choose which object splits the others into inside / outside parts">${ICON.splitshape}<span>Split by object</span></button><button type="button" data-ab="plane" title="Cut all of them with a flat plane">${ICON.knife}<span>Cut by plane</span></button><button type="button" data-ab="fix" title="Make one clean solid from these, as they look now">${ICON.fixbody}<span>Fix body</span></button><button type="button" data-ab="joinall" title="Join every solid into one piece and merge all cuts back">${ICON.separate}<span>Join all</span></button>`;
+        bar.querySelector('[data-ab="mcut"]').onclick = () => this._chooseCutter('cut', mids);
+        bar.querySelector('[data-ab="msplit"]').onclick = () => this._chooseCutter('split', mids);
+        bar.querySelector('[data-ab="plane"]').onclick = () => this._cutStart();
+        bar.querySelector('[data-ab="fix"]').onclick = () => this._fixBody();
+        bar.querySelector('[data-ab="joinall"]').onclick = () => this._joinAll();
+        return;
+      }
+      if (!it || this.readOnly || busy || it.type === 'image') { bar.classList.add('hidden'); bar.dataset.k = ''; return; }
+      const sep = this.pieces && this.pieces[it.id] > 1;
+      const k = [it.id, it.draft ? 'd' : it.role, sep].join('|');
+      bar.classList.remove('hidden');
+      if (bar.dataset.k === k) return; bar.dataset.k = k;
+      const b = (attr, icon, label, title) => `<button type="button" ${attr} title="${title}">${icon}<span>${label}</span></button>`;
+      bar.innerHTML = it.draft
+        ? b('data-ab="ext-new"', ICON.extrude, 'Extrude', 'Make a new object from areas of this sketch')
+          + b('data-ab="ext-cut"', ICON.extcut, 'Cut', 'Cut areas of this sketch out of what they pass through')
+          + b('data-ab="ext-split"', ICON.extsplit, 'Split', 'Split what the areas pass through into inside / outside parts')
+          + b('data-ab="sketch"', ICON.backsk, 'Edit', 'Back to sketch mode')
+        : b('data-ab="plane"', ICON.knife, 'Cut by plane', 'Cut with a flat plane: 2 objects, or keep one side')
+          + b('data-ab="cutobj"', ICON.extcut, 'Cut by object', 'Cut this object\'s shape out of every Solid it overlaps (this object is used up)')
+          + b('data-ab="split"', ICON.splitshape, 'Split by shape', 'Split every object this shape overlaps into inside / outside parts — no gap')
+          + b('data-ab="hole"', ICON.holeic, it.role === 'hole' ? 'Make solid' : 'Use as cut', it.role === 'hole' ? 'Turn back into a solid' : 'Turn this shape into a cut (hole)')
+          + (sep ? b('data-ab="sep"', ICON.separate, 'Separate', 'Make each loose piece its own object') : '')
+          + b('data-ab="fix"', ICON.fixbody, 'Fix body', 'Make one clean solid from this object as it looks now (cuts, pieces and pushes baked in)')
+          + b('data-ab="joinall"', ICON.separate, 'Join all', 'Join every solid into one piece and merge all cuts back');
+      bar.querySelectorAll('[data-ab]').forEach((x) => { x.onclick = () => {
+        const id = this.sel; const a = x.dataset.ab;
+        if (a.startsWith('ext-')) { this._exOpOnce = a.slice(4); this._extrudeStart(id); }
+        else if (a === 'sketch') this._sketchStart(id);
+        else if (a === 'plane') this._cutStart();
+        else if (a === 'split') this._splitWith(id);
+        else if (a === 'cutobj') this._splitWith(id, true);
+        else if (a === 'hole') { this._edit(id, (t) => { t.role = t.role === 'hole' ? 'solid' : 'hole'; }); this._inspFor = null; this._renderInspector(); }
+        else if (a === 'sep') this._separate(id);
+        else if (a === 'fix') this._fixBody();
+        else if (a === 'joinall') this._joinAll();
+      }; });
+    }
+    // Several objects picked: tap which one is the cutter; only the other picked ones change.
+    _chooseCutter(op, ids) {
+      // the smaller one is usually the cutter: list it first, marked default
+      const vol = (id) => { const b = this._boundsOf([id]); if (b.isEmpty()) return Infinity; const z = b.getSize(new this.T.Vector3()); return z.x * z.y * z.z; };
+      ids = ids.slice().sort((a, b) => vol(a) - vol(b));
+      this.chooseCut = { op, ids };
+      const el = this.inspEl; this._inspFor = 'choosecut'; el.classList.remove('hidden');
+      el.innerHTML = `<div class="cad-insp-head"><div class="cad-name">${op === 'cut' ? 'Cut by object' : 'Split by object'}</div><button type="button" class="cad-icon-btn" data-ccx title="Cancel (Esc)">✕</button></div>
+        <p class="cad-hint">Which one is the cutter? ${op === 'cut' ? 'Its shape is cut out of the others, and it is used up.' : 'The others are split into the part inside it and the part outside it.'}</p>
+        <div class="cad-cutlist">${ids.map((id, i) => { const t = this._item(id); return `<button type="button" class="cad-wide-btn ${i ? '' : 'cad-combine'}" data-ccid="${id}">${ICON.extcut} ${esc(t.name)}${i ? '' : ' <em>(smaller · default)</em>'}</button>`; }).join('')}</div>`;
+      el.querySelector('[data-ccx]').onclick = () => { this.chooseCut = null; this._inspFor = null; this._renderInspector(); this._renderChrome(); };
+      el.querySelectorAll('[data-ccid]').forEach((b) => {
+        b.onmouseenter = () => this._hover(b.dataset.ccid);
+        b.onclick = () => { const cid = b.dataset.ccid; this.chooseCut = null; this._inspFor = null; this._splitWith(cid, op === 'cut', ids.filter((x) => x !== cid)); };
+      });
+      this._renderChrome();
+    }
+    // Fix body: the selected objects (or combined object), exactly as they look now,
+    // become one clean solid saved as an STL next to the design. Tiny loose slivers
+    // are dropped; empty pieces and cut shapes used only by these go too. One undo.
+    // Join all: every visible solid becomes one piece with every cut merged back
+    // (plane cuts, shape cuts, piece splits and cut shapes removed first).
+    async _joinAll() {
+      if (this.readOnly) return;
+      const before = JSON.stringify(this.data); const undoLen = this.undoStack.length;
+      const solids = this.data.items.filter((x) => x.role === 'solid' && !x.hidden && !x.draft && x.type !== 'image');
+      if (!solids.length) { this._toast('Nothing to join', 'err'); return; }
+      let nCuts = 0;
+      solids.forEach((x) => { nCuts += (x.cuts || []).length + (x.clip || []).length + (x.piece ? 1 : 0); });
+      const holes = this.data.items.filter((x) => x.role === 'hole' && x.type !== 'image');
+      this._snapshot();
+      solids.forEach((x) => { delete x.cuts; delete x.clip; delete x.piece; delete x.group; });
+      this.data.items = this.data.items.filter((x) => !(x.role === 'hole' && x.type !== 'image'));
+      this._tidyGroups(); this._refreshItems();
+      const ok = await this._fixBody({ ids: solids.map((x) => x.id), joinInfo: { objects: solids.length, cuts: nCuts + holes.length }, noSnap: true });
+      if (!ok) { // cancelled / failed: put everything back exactly
+        this.data = JSON.parse(before); this.undoStack.length = undoLen;
+        this._refreshItems(); this._renderChrome(); this._requestBuild();
+      }
+    }
+    async _fixBody(opt) {
+      opt = opt || {};
+      if (this.readOnly) return false;
+      const ids = (opt.ids || this._expand(this._selIds())).filter((id) => { const it = this._item(id); return it && it.role === 'solid' && !it.hidden && !it.draft && it.type !== 'image'; });
+      if (!ids.length) { this._toast('Select the object(s) to fix', 'err'); return false; }
+      { // already one clean solid (e.g. a fixed body): nothing to do
+        const one = ids.length === 1 && this._item(ids[0]); const ob = one && this._boundsOf([one.id]);
+        const touchedByHole = one && this.data.items.some((x) => x.role === 'hole' && !x.hidden && (() => { const hb = this._boundsOf([x.id]); return !hb.isEmpty() && ob && hb.intersectsBox(ob); })());
+        if (one && !(one.cuts || []).length && !(one.clip || []).length && !one.piece && !touchedByHole && !(this.pieces && this.pieces[one.id] > 1)) { this._toast('Already one clean solid — nothing to fix', 'ok'); return false; }
+      }
+      this._toast('Checking the body…');
+      await new Promise((r) => { this._afterBuild(r); this._requestBuild(); });
+      const empty = this.data.items.filter((x) => /Nothing is left/.test(this.errors[x.id] || ''));
+      const ok = ids.filter((id) => !this.errors[id]);
+      if (!ok.length) { this._toast('These objects do not build — nothing to fix', 'err'); return false; }
+      let r;
+      try {
+        const id = 'b' + (++this.buildSeq);
+        r = await new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ type: 'bake', id, ids: ok, minVol: 1 }); });
+      } catch (e) { this._toast('Fix body: ' + e.message, 'err'); return false; }
+      const T = this.T; const body = new T.Box3(new T.Vector3(...r.min), new T.Vector3(...r.max));
+      const others = this.data.items.filter((x) => x.role === 'solid' && !ids.includes(x.id) && !x.hidden && !x.draft);
+      const touchesOther = (hid) => { const hb = this._boundsOf([hid]); return others.some((o) => { const ob = this._boundsOf([o.id]); return !ob.isEmpty() && ob.intersectsBox(hb); }); };
+      const holes = this.data.items.filter((x) => x.role === 'hole' && !x.hidden && (() => { const hb = this._boundsOf([x.id]); return !hb.isEmpty() && hb.intersectsBox(body); })() && !touchesOther(x.id));
+      const broken = ids.filter((id) => this.errors[id]);
+      const fmt = (v) => (Math.round(v * 10) / 10).toLocaleString();
+      const lines = [
+        '•  ' + ok.length + ' object' + (ok.length > 1 ? 's' : '') + ' → 1 solid' + (r.pieces > 1 ? ' (' + r.pieces + ' separate chunks kept together)' : ''),
+        ...(opt.joinInfo ? ['•  ' + opt.joinInfo.cuts + ' cut' + (opt.joinInfo.cuts === 1 ? '' : 's') + ' merged back (plane cuts, shape cuts, splits, cut shapes)'] : []),
+        '•  volume ' + fmt(r.volume0) + ' → ' + fmt(r.volume) + ' mm³',
+      ];
+      if (r.dropped) lines.push('•  ' + r.dropped + ' tiny sliver' + (r.dropped > 1 ? 's' : '') + ' dropped (' + fmt(r.droppedVol) + ' mm³ in all)');
+      if (holes.length) lines.push('•  ' + holes.length + ' cut shape' + (holes.length > 1 ? 's' : '') + ' baked in (no longer separate)');
+      if (empty.length) lines.push('•  ' + empty.length + ' empty piece' + (empty.length > 1 ? 's' : '') + ' removed: ' + empty.map((x) => x.name).join(', '));
+      if (broken.length) lines.push('•  ' + broken.length + ' broken object' + (broken.length > 1 ? 's' : '') + ' removed: ' + broken.map((id) => this._item(id).name).join(', '));
+      const go = await global.uiConfirm((opt.joinInfo ? 'Join everything into one piece:' : 'Make one clean solid from what you see:') + '\n\n' + lines.join('\n') + '\n\nThe old objects can\'t be edited separately afterwards — one Undo brings them back.', { title: opt.joinInfo ? 'Join all' : 'Fix body', okLabel: opt.joinInfo ? 'Join all' : 'Fix body', cancelLabel: 'Cancel' });
+      if (!go) return false;
+      // save the solid next to the design
+      const gname = (() => { const g = this._gid(ids[0]); return g && ids.every((x) => this._gid(x) === g) ? ((this.data.groups || {})[g] || {}).name : ''; })();
+      const clean = (n) => String(n || 'body').replace(/\(fixed\)/gi, '').replace(/\b(fixed|joined)\b/gi, '').replace(/\b\d+ more\b/gi, '').replace(/\s+/g, ' ').trim() || 'body';
+      const base = clean(gname || (this._item(ids[0]) || {}).name).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'body';
+      const dir = (this._docDir() ? this._docDir() + '/' : '') + this._docBase() + '-models';
+      const rel = dir + '/' + base + '-fixed-' + Date.now().toString(36) + '.stl';
+      try {
+        const bytes = new Uint8Array(r.stl); let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        await api('/api/cad/export', { path: rel, content: btoa(bin), message: 'Fix body: ' + rel });
+      } catch (e) { this._toast('Could not save the fixed body: ' + e.message, 'err'); return false; }
+      if (!opt.noSnap) this._snapshot();
+      const drop = new Set(ids.concat(holes.map((x) => x.id), empty.map((x) => x.id)));
+      this.data.items = this.data.items.filter((x) => !drop.has(x.id));
+      const it = C.newItem('model', { name: this._uniqueName(clean(gname || base.replace(/-/g, ' ')) + ' (fixed)'), role: 'solid', units: 'mm', scale: 1, fit: 'exact',
+        file: { path: rel, ext: 'stl', key: rel + '#' + r.stl.byteLength + '#' + Date.now() },
+        pos: [r3((r.min[0] + r.max[0]) / 2), r3((r.min[1] + r.max[1]) / 2), r3(r.min[2])], rot: [0, 0, 0] });
+      this.data.items.push(it);
+      this._tidyGroups();
+      this._commit(); this._refreshItems(); this._select(it.id); this._requestBuild();
+      this._toast((opt.joinInfo ? 'Joined: ' : 'Fixed: ') + ok.length + ' objects → 1 solid · saved ' + rel.split('/').pop(), 'ok');
+      return true;
     }
     _extrudeToggle(ri) { const ex = this.exMode; if (!ex) return; if (ex.sel.has(ri)) ex.sel.delete(ri); else ex.sel.add(ri); const o = this.objs[ex.id]; if (o) o.key = null; this._refreshItems(); this._renderExtrudePanel(); }
     _renderExtrudePanel() {
@@ -1163,7 +1359,9 @@
         <div class="cad-grid"><label class="cad-field wide"><span class="cad-scrub">Distance</span><input type="text" inputmode="decimal" data-exdist value="${ex.dist}"><em>mm</em></label></div>
         <p class="cad-hint">− goes the other way (into the face it was drawn on).</p>
         <div class="cad-seg2 cad-seg3">${[['new', 'New object'], ['cut', 'Cut'], ['split', 'Split']].map(([v, t]) => `<button type="button" data-exop="${v}" class="${ex.op === v ? 'on' : ''}" title="${v === 'new' ? 'A new solid object' : v === 'cut' ? 'Cut it out of whatever it passes through' : 'Divide what it passes through into the part inside and outside (no gap)'}">${t}</button>`).join('')}</div>
-        <button type="button" class="cad-wide-btn cad-combine" data-exgo ${k ? '' : 'disabled'}>Extrude ${k ? k + ' area' + (k > 1 ? 's' : '') : ''}</button>`;
+        <button type="button" class="cad-wide-btn cad-combine" data-exgo ${k ? '' : 'disabled'}>Extrude ${k ? k + ' area' + (k > 1 ? 's' : '') : ''}</button>
+        <button type="button" class="cad-wide-btn" data-exback>${ICON.backsk} Back to sketch</button>`;
+      el.querySelector('[data-exback]').onclick = () => { const id = ex.id; this._backToSketch = false; this._extrudeEnd(); this._sketchStart(id); };
       el.querySelector('[data-exx]').onclick = () => this._extrudeEnd();
       el.querySelector('[data-exall]').onclick = (e) => { e.preventDefault(); ex.sel = k === n ? new Set() : new Set(ex.regions.map((_, i) => i)); const o = this.objs[ex.id]; if (o) o.key = null; this._refreshItems(); this._renderExtrudePanel(); };
       const inp = el.querySelector('[data-exdist]');
@@ -1178,6 +1376,8 @@
       const area = (poly) => { let a = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; };
       const profiles = [];
       [...ex.sel].sort((a, b) => a - b).forEach((ri) => { (ex.regions[ri] || { polys: [] }).polys.forEach((poly) => profiles.push(area(poly) >= 0 ? { k: 'poly', pts: poly } : { k: 'poly', pts: poly, cut: true })); });
+      // all of it: keep the sketch's own shapes (rectangles, circles, cut-outs stay editable)
+      if (ex.sel.size === ex.regions.length) { profiles.length = 0; sk.profiles.forEach((q) => profiles.push(JSON.parse(JSON.stringify(q)))); }
       this._snapshot();
       const shape = C.newItem('sketch', { name: this._uniqueName(ex.op === 'cut' ? 'Cut' : ex.op === 'split' ? 'Splitter' : 'Extrude'), pos: sk.pos.slice(), rot: sk.rot.slice(), flip: sk.flip, height: ex.dist, profiles, role: ex.op === 'cut' ? 'hole' : 'solid' });
       this.data.items.push(shape);
@@ -1191,31 +1391,46 @@
         return;
       }
       this._commit(); this._refreshItems(); this._select(shape.id);
+      if (this._backToSketch) { this._backToSketch = false; const skId = sk.id; setTimeout(() => this._sketchStart(skId), 0); }
       this._toast(op === 'cut' ? 'Cut extruded ' + Math.abs(ex.dist) + ' mm' : 'Extruded ' + Math.abs(ex.dist) + ' mm — the sketch stays for more', 'ok');
+    }
+    // A cutter's placement relative to an object, in the object's own (unscaled)
+    // frame: its cuts are made before its per-axis scale (sxyz), so undo that scale.
+    _cutRel(t, Mc) {
+      const T = this.T; const s = t.sxyz || [1, 1, 1];
+      const M = new T.Matrix4().makeScale(1 / (s[0] || 1), 1 / (s[1] || 1), 1 / (s[2] || 1)).multiply(this._placeMatrix(t).invert()).multiply(Mc);
+      return Array.from(M.elements).map((v) => Math.round(v * 1e9) / 1e9);
     }
     _placeMatrix(it) {
       const T = this.T; const o = new T.Object3D(); o.rotation.order = 'ZYX'; this._placeObj(o, it); o.updateMatrixWorld(true);
       return o.matrixWorld.clone();
     }
-    _splitWith(cutterId) {
+    _splitWith(cutterId, cutOnly, only, noBake) {
       const cutter = this._item(cutterId); if (!cutter || this.readOnly) return;
       const cb = this._boundsOf([cutterId]); if (cb.isEmpty()) return;
-      const targets = this.data.items.filter((x) => x.id !== cutterId && x.role === 'solid' && !x.hidden && x.type !== 'image' && (() => { const b = this._boundsOf([x.id]); return !b.isEmpty() && b.intersectsBox(cb); })()).map((x) => x.id);
+      const targets = this.data.items.filter((x) => x.id !== cutterId && (!only || only.includes(x.id)) && x.role === 'solid' && !x.hidden && x.type !== 'image' && !x.draft && (() => { const b = this._boundsOf([x.id]); return !b.isEmpty() && b.intersectsBox(cb); })()).map((x) => x.id);
       if (!targets.length) { this._toast('This shape doesn\'t overlap any Solid object — move it into the part you want to split', 'err'); return; }
       const shape = JSON.parse(JSON.stringify(cutter));
       ['id', 'name', 'pos', 'rot', 'hidden', 'group', 'flip', 'role', 'cuts'].forEach((k) => delete shape[k]);
-      this._snapshot(); this._bakeHoles(targets); this._skipSnap = true;
+      this._snapshot(); if (!noBake) this._bakeHoles(targets); this._skipSnap = !cutOnly;
       const Mc = this._placeMatrix(cutter);
-      const rel = (t) => Array.from(this._placeMatrix(t).clone().invert().multiply(Mc).elements).map((v) => Math.round(v * 1e9) / 1e9);
-      this._copies(targets, (src) => [Object.assign(JSON.parse(JSON.stringify(src)), { name: src.name.replace(/ \d+$/, '') + ' piece', cuts: (src.cuts || []).concat([{ keep: 'inside', m: rel(src), shape }]) })], null);
-      const pieces = this._selIds();
+      const rel = (t) => this._cutRel(t, Mc);
+      if (!cutOnly) this._copies(targets, (src) => [Object.assign(JSON.parse(JSON.stringify(src)), { name: src.name.replace(/ \d+$/, '') + ' piece', cuts: (src.cuts || []).concat([{ keep: 'inside', m: rel(src), shape }]) })], null);
+      const pieces = cutOnly ? [] : this._selIds();
+      const base = {}; targets.forEach((id, i) => { base[id] = (this.pieces && this.pieces[id]) || 1; if (pieces[i]) base[pieces[i]] = base[id]; });
       targets.forEach((id) => { const it = this._item(id); it.cuts = (it.cuts || []).concat([{ keep: 'outside', m: rel(it), shape }]); Object.assign(it, C.normalizeItem(it)); });
       pieces.forEach((id) => { const it = this._item(id); Object.assign(it, C.normalizeItem(it)); });
       this.data.items = this.data.items.filter((x) => x.id !== cutterId);
       this._tidyGroups();
+      if (cutOnly) {
+        this._commit(); this._refreshItems(); this._setSel(targets);
+        this._toast('Cut its shape out of ' + targets.length + ' object' + (targets.length > 1 ? 's' : ''), 'ok');
+        this._autoSeparate(targets, base);
+        return;
+      }
       this._commit(); this._refreshItems(); this._setSel(pieces);
       this._toast('Split ' + targets.length + ' object' + (targets.length > 1 ? 's' : '') + ' — the inside piece is selected; move it out', 'ok');
-      this._autoSeparate(targets.concat(pieces));
+      this._autoSeparate(targets.concat(pieces), base);
     }
 
     // ---------- cut with a plane ----------
@@ -1312,11 +1527,13 @@
       const nW = new T.Vector3(); nW.setComponent(axis, sign);
       const pW = new T.Vector3(); pW.setComponent(axis, at);
       const nL = nW.clone().transformDirection(inv); const pL = pW.clone().applyMatrix4(inv);
+      // the plane trims the object before its per-axis scale (sxyz): express it unscaled
+      { const sc = it.sxyz || [1, 1, 1]; pL.set(pL.x / (sc[0] || 1), pL.y / (sc[1] || 1), pL.z / (sc[2] || 1)); nL.set(nL.x * (sc[0] || 1), nL.y * (sc[1] || 1), nL.z * (sc[2] || 1)).normalize(); }
       return { n: [r3(nL.x * 1e3) / 1e3, r3(nL.y * 1e3) / 1e3, r3(nL.z * 1e3) / 1e3].map((v) => (Math.abs(v) < 1e-9 ? 0 : v)), d: r3(nL.dot(pL)) };
     }
     _cutApply(how) {
       const cm = this.cutMode; if (!cm || this.readOnly) return;
-      const targets = [...cm.on].filter((id) => { const it = this._item(id); return it && it.role === 'solid'; });
+      const targets = [...cm.on].filter((id) => { const it = this._item(id); return it && it.role === 'solid' && !it.draft; });
       if (!targets.length) { this._toast('Choose at least one Solid object to cut', 'err'); return; }
       const { axis, at } = cm;
       if (how === 'split') {
@@ -1325,12 +1542,13 @@
         // _copies took the undo snapshot; now trim the originals to the other side
         targets.forEach((id) => { const it = this._item(id); it.clip = (it.clip || []).concat([this._cutLocal(it, axis, at, 1)]); });
         const copies = this._selIds();
+        const base = {}; targets.forEach((id, i) => { base[id] = (this.pieces && this.pieces[id]) || 1; if (copies[i]) base[copies[i]] = base[id]; });
         this._commit(); this._refreshItems();
         this.cutMode = null;
         if (this._cutPlane) { this.scene.remove(this._cutPlane); this._cutPlane = null; }
         this._inspFor = null; this._setSel(copies);
         this._toast('Split into 2 — the selected half is the new object; move it to see the gap', 'ok');
-        this._autoSeparate(targets.concat(copies));
+        this._autoSeparate(targets.concat(copies), base);
       } else {
         const sign = how === 'keep+' ? 1 : -1;
         this._editMany(targets, (it) => { it.clip = (it.clip || []).concat([this._cutLocal(it, axis, at, sign)]); });
@@ -1406,6 +1624,65 @@
     }
     // Scale the selection by world factors S = [x, y, z] about its centre, as one
     // (used by the scale bar). One undo step.
+    // Typed move (mm) or rotation (degrees about the world X, Y, Z axes through the
+    // selection's centre) from the bottom bar. One undo step.
+    // The bar shows where the selection is now: Position X/Y/Z (one object: its
+    // position; several: their centre) or Rotation (one object: its angles;
+    // several: turn by). Typing a number moves / turns it there.
+    _xfVals() {
+      const ids = this._selIds(); if (!ids.length) return null;
+      const rot = this.mode === 'rotate';
+      if (ids.length === 1) { const it = this._item(ids[0]); if (!it) return null; return { abs: true, v: (rot ? it.rot : it.pos).slice() }; }
+      if (rot) return { abs: false, v: [0, 0, 0] };
+      const c = this._boundsOf(ids).getCenter(new this.T.Vector3()); return { abs: true, v: [c.x, c.y, c.z].map(r3) };
+    }
+    _xfSync() {
+      const xb = this.root.querySelector('.cad-xfbar'); if (!xb || xb.classList.contains('hidden')) return;
+      const xv = this._xfVals(); if (!xv) return;
+      const rot = this.mode === 'rotate';
+      xb.querySelector('[data-xft]').textContent = rot ? (xv.abs ? 'Rotation' : 'Turn by') : (this._selIds().length > 1 ? 'Centre' : 'Position');
+      xb.querySelectorAll('[data-xfu]').forEach((u) => { u.textContent = rot ? '°' : 'mm'; });
+      xb.querySelectorAll('[data-xf]').forEach((inp, i) => { if (document.activeElement === inp) return; const t = String(Math.round(xv.v[i] * 100) / 100); if (inp.value !== t) inp.value = t; });
+      this._xfLive = xv;
+    }
+    // Set an object's angles so it turns about its own centre (not its origin).
+    _rotKeepCentre(id, rot) {
+      const it = this._item(id); if (!it) return; const T = this.T;
+      const c0 = this._boundsOf([id]).getCenter(new T.Vector3());
+      const m0 = this._placeMatrix(it); const lc = c0.clone().applyMatrix4(m0.clone().invert()); // centre in its own frame
+      this._edit(id, (x) => {
+        x.rot = rot;
+        const c1 = lc.clone().applyMatrix4(this._placeMatrix(x));
+        x.pos = x.pos.map((p, i) => r3(p + c0.getComponent(i) - c1.getComponent(i)));
+      });
+      this._inspFor = null; this._renderInspector();
+    }
+    _transformSel(kind, v) {
+      const ids = this._selIds(); if (!ids.length || this.readOnly) return;
+      if (v.every((x) => Math.abs(x) < 1e-9)) return;
+      const T = this.T;
+      this._snapshot();
+      if (kind === 'move') {
+        ids.forEach((id) => { const it = this._item(id); if (it) it.pos = it.pos.map((p, i) => r3(p + v[i])); });
+      } else {
+        const c = this._boundsOf(ids).getCenter(new T.Vector3());
+        const R = new T.Matrix4().makeRotationFromEuler(new T.Euler(v[0] * DEG, v[1] * DEG, v[2] * DEG, 'ZYX'));
+        const D = new T.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(R).multiply(new T.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+        const pos = new T.Vector3(), qt = new T.Quaternion(), sc = new T.Vector3(), eu = new T.Euler();
+        ids.forEach((id) => {
+          const it = this._item(id); if (!it) return;
+          const tmp = new T.Object3D(); tmp.rotation.order = 'ZYX'; this._placeObj(tmp, it); tmp.updateMatrixWorld(true);
+          const f = it.flip || []; const F = new T.Matrix4().makeScale(f[0] ? -1 : 1, f[1] ? -1 : 1, f[2] ? -1 : 1);
+          new T.Matrix4().multiplyMatrices(D, tmp.matrixWorld).multiply(F).decompose(pos, qt, sc);
+          eu.setFromQuaternion(qt, 'ZYX');
+          it.pos = [r3(pos.x), r3(pos.y), r3(pos.z)];
+          it.rot = [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)].map((x) => (Math.abs(x) < 1e-6 ? 0 : x));
+        });
+      }
+      this._commit(); this._refreshItems(); if (this.multi.length) this._placeProxy();
+      this._inspFor = null; this._renderInspector();
+      this._toast(kind === 'move' ? 'Moved' : 'Rotated', 'ok');
+    }
     _scaleSelection(S) {
       const ids = this._selIds(); if (!ids.length || this.readOnly) return;
       if (S.every((x) => Math.abs(x - 1) < 1e-9)) return;
@@ -1495,7 +1772,7 @@
       });
     }
     _setMode(m) {
-      this.mode = m; this.tc.setMode(m); this._renderChrome(); this._dimUpdate();
+      this.mode = m; this.tc.setMode(m); this._refreshItems(); this._renderChrome(); this._dimUpdate();
     }
     _applySnap() {
       if (!this.tc) return;
@@ -1661,6 +1938,8 @@
         { const nm = {}; (m.keep || []).forEach((id) => { if (this.meshes && this.meshes[id]) nm[id] = this.meshes[id]; }); this.meshes = Object.assign(nm, m.items || {}); }
         if ((m.keep || []).some((id) => !this.meshes[id])) { this._needAll = true; this._requestBuild(); }
         this.result = m.result; this.errors = m.errors || {}; this.notes = m.notes || {}; this.stepOk = m.stepOk; this.groupPieces = m.groupPieces || {};
+        if (this.faceOn && this._faceItem) { const fi = this._item(this._faceItem); this._flog('built:', fi ? fi.name : this._faceItem, this.errors[this._faceItem] ? 'ERROR ' + this.errors[this._faceItem] : 'ok', 'design volume ≈', (() => { const r = m.result; if (!r) return 0; const v = r.vertices, t = r.triangles; let x = 0; for (let i = 0; i < t.length; i += 3) { const a = t[i] * 3, b = t[i + 1] * 3, c = t[i + 2] * 3; x += v[a] * (v[b + 1] * v[c + 2] - v[b + 2] * v[c + 1]) - v[a + 1] * (v[b] * v[c + 2] - v[b + 2] * v[c]) + v[a + 2] * (v[b] * v[c + 1] - v[b + 1] * v[c]); } return Math.round(x / 6); })(), 'mm³'); }
+        if (this.faceOn && Object.keys(this.errors).length) this._flog('build errors:', JSON.stringify(this.errors));
         const infoKey = JSON.stringify(m.info || {}) + JSON.stringify(m.pieces || {}); if (infoKey !== this._infoKey) { this._infoKey = infoKey; this._inspFor = null; }
         this.info = m.info || {}; this.floating = m.floating || {}; this.edges = m.edges || {}; this.pieces = m.pieces || {};
         if (this.edgeMode) this._edgeDraw();
@@ -1675,6 +1954,7 @@
         return;
       }
       if (m.type === 'file') { const p = this.pending.get(m.id); if (p) { this.pending.delete(m.id); p.resolve(m.buffer); } return; }
+      if (m.type === 'baked') { const p = this.pending.get(m.id); if (p) { this.pending.delete(m.id); p.resolve(m); } return; }
       if (m.type === 'regions') { const p = this.pending.get(m.id); if (p) { this.pending.delete(m.id); p.resolve(m.regions || []); } return; }
       if (m.type === 'check') { const p = this.pending.get(m.id); if (p) { this.pending.delete(m.id); p.resolve(m.overlaps || []); } return; }
       if (m.type === 'error') {
@@ -1753,7 +2033,12 @@
       q('[data-undo]').disabled = !this.undoStack.length || this.readOnly;
       q('[data-redo]').disabled = !this.redoStack.length || this.readOnly;
       q('.cad-gizmo').classList.toggle('hidden', !(this.sel || this.multi.length) || this.readOnly);
+      { const xb = q('.cad-xfbar'); const busy = !(this.sel || this.multi.length) || this.readOnly || !!(this.sk || this.faceOn || this.edgeMode || this.cutMode || this.exMode);
+        const show = !busy && (this.mode === 'translate' || this.mode === 'rotate');
+        xb.classList.toggle('hidden', !show);
+        if (show) this._xfSync(); }
       q('.cad-scalebar').classList.toggle('hidden', this.mode !== 'scale' || !(this.sel || this.multi.length) || this.readOnly || !!(this.sk || this.faceOn || this.edgeMode || this.cutMode));
+      this._renderActBar();
       q('[data-multimode]').classList.toggle('on', this.multiMode);
       { const vis = this.data.items.filter((it) => !it.hidden); const ids = this._selIds();
         q('[data-selall]').classList.toggle('on', vis.length > 1 && ids.length === vis.length);
@@ -1807,6 +2092,7 @@
     }
     _renderInspector(fromBuild) {
       if (this.exMode) { if (!fromBuild) this._renderExtrudePanel(); return; }
+      if (this.chooseCut) return;
       if (this.cutMode) { if (!fromBuild) this._renderCutPanel(); return; }
       if (this.faceOn) { if (!fromBuild) this._renderFacePanel(); return; }
       if (this.edgeMode) { if (!fromBuild || !this.inspEl.contains(document.activeElement)) this._renderEdgePanel(); return; }
@@ -1845,6 +2131,22 @@
           ${this._field('Hollow', 'hollow', it.hollow, { unit: 'mm', min: 0, step: 0.2 })}
         </div><p class="cad-hint">Hollow = wall thickness, open at the top. 0 = solid.</p>
         <button type="button" class="cad-wide-btn" data-edgemode ${ro ? 'disabled' : ''} title="Tap edges to round or chamfer just those">Round / chamfer edges…${it.edges && it.edges.length ? ' <b>(' + it.edges.length + ')</b>' : ''}</button></div>` : ''}
+        ${it.type !== 'image' && !it.draft ? `        <div class="cad-sec"><div class="cad-sec-t">Mirror — same on the other side</div>
+          <div class="cad-iconrow">
+            <button type="button" data-sym="0" title="Mirror X: what is on the left also on the right (cuts, holes, features)" ${ro ? 'disabled' : ''}>${ICON.mirrorx}<span>X</span></button>
+            <button type="button" data-sym="1" title="Mirror Y: what is on the front also on the back" ${ro ? 'disabled' : ''}>${ICON.mirrory}<span>Y</span></button>
+            <button type="button" data-sym="2" title="Mirror Z: what is on the bottom also on the top" ${ro ? 'disabled' : ''}>${ICON.mirrorz}<span>Z</span></button>
+          </div>
+          <div class="cad-sec-t">Flip in place</div>
+          <div class="cad-iconrow">
+            <button type="button" data-mirror="0" title="Flip X: turn it over left ↔ right" ${ro ? 'disabled' : ''}>${ICON.flip}<span>X</span></button>
+            <button type="button" data-mirror="1" title="Flip Y: turn it over front ↔ back" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Y</span></button>
+            <button type="button" data-mirror="2" title="Flip Z: turn it over top ↔ bottom" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Z</span></button>
+            <button type="button" data-cutstart title="Cut with a plane: split into 2 objects or keep one side" ${ro ? 'disabled' : ''}>Cut by plane</button>
+            <button type="button" data-cutobj title="Cut this object's shape out of every Solid it overlaps (this object is used up)" ${ro ? 'disabled' : ''}>Cut by object</button>
+          </div>
+        </div>
+` : ''}
         ${it.type === 'sketch' && it.draft ? `<div class="cad-sec"><div class="cad-sec-t">2D sketch</div>
           <p class="cad-hint">Outlines only — nothing is solid yet. Extrude its areas (all, or the ones you tap) into shapes.</p>
           <button type="button" class="cad-wide-btn cad-combine" data-extrude ${ro ? 'disabled' : ''}>Extrude…</button>
@@ -1910,19 +2212,7 @@
           <button type="button" data-q="rx" title="Rotate 90° about X">↻X</button><button type="button" data-q="ry" title="Rotate 90° about Y">↻Y</button><button type="button" data-q="rz" title="Rotate 90° about Z">↻Z</button>
         </div></div>
 
-        <div class="cad-sec"><div class="cad-sec-t">Mirror — same on the other side</div>
-          <div class="cad-iconrow">
-            <button type="button" data-sym="0" title="Mirror X: what is on the left also on the right (cuts, holes, features)" ${ro ? 'disabled' : ''}>${ICON.mirrorx}<span>X</span></button>
-            <button type="button" data-sym="1" title="Mirror Y: what is on the front also on the back" ${ro ? 'disabled' : ''}>${ICON.mirrory}<span>Y</span></button>
-            <button type="button" data-sym="2" title="Mirror Z: what is on the bottom also on the top" ${ro ? 'disabled' : ''}>${ICON.mirrorz}<span>Z</span></button>
-          </div>
-          <div class="cad-sec-t">Flip in place</div>
-          <div class="cad-iconrow">
-            <button type="button" data-mirror="0" title="Flip X: turn it over left ↔ right" ${ro ? 'disabled' : ''}>${ICON.flip}<span>X</span></button>
-            <button type="button" data-mirror="1" title="Flip Y: turn it over front ↔ back" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Y</span></button>
-            <button type="button" data-mirror="2" title="Flip Z: turn it over top ↔ bottom" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Z</span></button>
-            <button type="button" data-cutstart title="Cut with a plane: split into 2 objects or keep one side" ${ro ? 'disabled' : ''}>Cut…</button>
-          </div>
+        <div class="cad-sec">
           ${this.sel && !this.multi.length && (this._item(this.sel) || {}).type !== 'image' ? `<button type="button" class="cad-wide-btn cad-combine" data-splitwith ${ro ? 'disabled' : ''} title="Every Solid this shape overlaps is split into the part outside it and the part inside it — no gap">Split objects with this shape</button>` : ''}
           <details class="cad-pattern"><summary>Pattern…</summary>
             <div class="cad-seg2"><button type="button" data-pkind="linear" class="${this._pkind !== 'circular' ? 'on' : ''}">Row</button><button type="button" data-pkind="circular" class="${this._pkind === 'circular' ? 'on' : ''}">Circle</button></div>
@@ -1996,7 +2286,7 @@
             <button type="button" data-mirror="0" title="Flip X: turn it over left ↔ right" ${ro ? 'disabled' : ''}>${ICON.flip}<span>X</span></button>
             <button type="button" data-mirror="1" title="Flip Y: turn it over front ↔ back" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Y</span></button>
             <button type="button" data-mirror="2" title="Flip Z: turn it over top ↔ bottom" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Z</span></button>
-            <button type="button" data-cutstart title="Cut with a plane: split into 2 objects or keep one side" ${ro ? 'disabled' : ''}>Cut…</button>
+            <button type="button" data-cutstart title="Cut with a plane: split into 2 objects or keep one side" ${ro ? 'disabled' : ''}>Cut by plane</button>
           </div>
           ${this.sel && !this.multi.length && (this._item(this.sel) || {}).type !== 'image' ? `<button type="button" class="cad-wide-btn cad-combine" data-splitwith ${ro ? 'disabled' : ''} title="Every Solid this shape overlaps is split into the part outside it and the part inside it — no gap">Split objects with this shape</button>` : ''}
           <details class="cad-pattern"><summary>Pattern…</summary>
@@ -2036,6 +2326,7 @@
       el.querySelectorAll('[data-sym]').forEach((b) => { b.onclick = () => this._symMirror(+b.dataset.sym); });
       el.querySelectorAll('[data-cutstart]').forEach((b) => { b.onclick = () => this._cutStart(); });
       el.querySelectorAll('[data-splitwith]').forEach((b) => { b.onclick = () => this._splitWith(this.sel); });
+      el.querySelectorAll('[data-cutobj]').forEach((b) => { b.onclick = () => this._splitWith(this.sel, true); });
       const pat = el.querySelector('.cad-pattern');
       if (pat) {
         if (this._patOpen) pat.open = true;
@@ -2097,6 +2388,7 @@
           const it = this._item(id); if (!it) return;
           const v = evalNum(inp.value, getPath(it, f));
           if (v === getPath(it, f)) { inp.value = v; return; }
+          if (/^rot\.[012]$/.test(f)) { const r = this._item(id).rot.slice(); r[+f[4]] = v; this._rotKeepCentre(id, r.map(r3)); return; }
           this._edit(id, (x) => setPath(x, f, v));
           const now = getPath(this._item(id), f); inp.value = now;
         };
@@ -2145,7 +2437,7 @@
             const box = new this.T.Box3().setFromObject(o.mesh);
             this._edit(id, (it) => { it.pos[2] = r3(it.pos[2] - box.min.z); });
           } else if (k === 'center') this._edit(id, (it) => { it.pos[0] = 0; it.pos[1] = 0; });
-          else { const ax = { rx: 0, ry: 1, rz: 2 }[k]; this._edit(id, (it) => { it.rot[ax] = r3(((it.rot[ax] + 90 + 180) % 360) - 180); }); }
+          else { const ax = { rx: 0, ry: 1, rz: 2 }[k]; const r = this._item(id).rot.slice(); r[ax] = r3(((r[ax] + 90 + 180) % 360) - 180); this._rotKeepCentre(id, r); return; }
           this._fillTransform();
         };
       });
@@ -2175,6 +2467,7 @@
       el.querySelectorAll('[data-sym]').forEach((b) => { b.onclick = () => this._symMirror(+b.dataset.sym); });
       el.querySelectorAll('[data-cutstart]').forEach((b) => { b.onclick = () => this._cutStart(); });
       el.querySelectorAll('[data-splitwith]').forEach((b) => { b.onclick = () => this._splitWith(this.sel); });
+      el.querySelectorAll('[data-cutobj]').forEach((b) => { b.onclick = () => this._splitWith(this.sel, true); });
       const pat = el.querySelector('.cad-pattern');
       if (pat) {
         if (this._patOpen) pat.open = true;
@@ -2231,7 +2524,7 @@
       this._markView(null);
       this.root.classList.add('cad-sketching');
       this.root.querySelectorAll('[data-skplane]').forEach((b) => b.classList.toggle('on', b.dataset.skplane === (onFace ? '' : (this._skPlane || 'xy'))));
-      this.root.querySelector('.cad-skplane').classList.toggle('hidden', !isNew || !!(onFace && !onFace.plane));
+      this.sk.onFace = !!(onFace && !onFace.plane && !this._planeSwitching);
       this.root.querySelector('.cad-skbar').classList.remove('hidden');
       this._sketchTool(this.sk.tool);
       this._renderChrome();
@@ -2259,12 +2552,15 @@
       // Snap to existing points within ~12 px.
       const r = this.renderer.domElement.getBoundingClientRect();
       let best = 12;
-      for (const q of this._sketchVertices()) {
+      const extra = this.sk.facePts || [];
+      for (const q of this._sketchVertices().concat(extra)) {
         const sp = new T.Vector3(q[0], q[1], 0).applyMatrix4(m).project(this.camera);
         const d = Math.hypot((sp.x + 1) / 2 * r.width + r.left - e.clientX, (1 - sp.y) / 2 * r.height + r.top - e.clientY);
         if (d < best) { best = d; x = q[0]; y = q[1]; snapped = true; }
       }
-      const g = this.snapOn ? this.data.settings.snap : 0;
+      // on a face the grid would not line up with the face (its origin is the face's
+      // centre): put the point where the pointer is; corners / midpoints still snap
+      const g = this.snapOn && !this.sk.onFace ? this.data.settings.snap : 0;
       if (!snapped && g) { x = Math.round(x / g) * g; y = Math.round(y / g) * g; }
       return { x: r3(x), y: r3(y), snapped };
     }
@@ -2343,7 +2639,7 @@
       const id = it.id; const keepUndo = this.undoStack.length;
       this._sketchEnd(false, true); // discard the empty sketch quietly…
       this.undoStack.length = Math.min(this.undoStack.length, keepUndo);
-      this._sketchStart(null, { pos: it.pos, rot: it.rot }); // …and start again on the new plane
+      this._planeSwitching = true; this._sketchStart(null, { pos: it.pos, rot: it.rot }); this._planeSwitching = false; // …and start again on the new plane
       void id;
       this.root.querySelectorAll('[data-skplane]').forEach((b) => b.classList.toggle('on', b.dataset.skplane === pl));
     }
@@ -2401,6 +2697,7 @@
       this._sketchDraw();
     }
     _sketchDraw() {
+      { const it = this._sketchItem(); const pl = this.root.querySelector('.cad-skplane'); if (pl && this.sk) pl.classList.toggle('hidden', !this.sk.isNew || !!(it && it.profiles.length) || this.sk.pts.length > 0 || !!this.sk.onFace); }
       const sk = this.sk; if (!sk) return;
       const T = this.T; const it = this._sketchItem(); if (!it) return;
       sk.group.children.forEach((o) => o.geometry && o.geometry.dispose());
@@ -2570,7 +2867,27 @@
     // ---------- face tools: push / pull, sketch on face, lay flat ----------
     // A face is a flat region of the printed result: connected triangles in one
     // plane. Its outline (and holes in it) become a sketch on that plane.
+    // A finished push (−) is cut into the part(s) it pockets, so no cut shape is
+    // left lying around (undo brings it back).
+    _faceBake() {
+      // Cutting the pocket into the other parts changed "piece k of n" parts (their
+      // pieces get renumbered), so a push now stays its own quiet cut shape.
+      this._faceItem = null;
+    }
+    _faceBakeOld() {
+      const id = this._faceItem; this._faceItem = null;
+      const it = id && this._item(id); if (!it || it.role !== 'hole' || !/^Push/.test(it.name)) return;
+      this._flog('finishing push: cutting the pocket into the part(s)');
+      const b = this._boundsOf([id]); if (b.isEmpty()) return;
+      const targets = this.data.items.filter((x) => x.id !== id && x.role === 'solid' && !x.hidden && !x.draft && x.type !== 'image' && (() => { const xb = this._boundsOf([x.id]); return !xb.isEmpty() && xb.intersectsBox(b); })()).map((x) => x.id);
+      if (!targets.length) return;
+      const keepToast = this._toast; this._toast = () => {}; // quiet: it is part of the push
+      try { this._splitWith(id, true, targets, true); } finally { this._toast = keepToast; }
+      this.undoStack.pop(); // one undo step for the whole push
+      this._select(null);
+    }
     _faceMode(on) {
+      if (!on) this._faceBake();
       this.faceOn = !!on && !this.readOnly;
       if (this.faceOn) { if (this.measureOn) this._measureMode(false); this._select(null); }
       this._faceSet(null);
@@ -2583,38 +2900,42 @@
       const r = this.result; if (!r) return null;
       const v = r.vertices, t = r.triangles, n = t.length / 3;
       const normals = new Float64Array(n * 3); const edge = new Map();
+      // vertices at the same spot count as one (the mesh may repeat them along seams)
+      const canon = new Int32Array(v.length / 3); const at = new Map();
+      for (let i = 0; i < canon.length; i++) { const k = Math.round(v[i * 3] * 1e4) + ',' + Math.round(v[i * 3 + 1] * 1e4) + ',' + Math.round(v[i * 3 + 2] * 1e4); const j = at.get(k); if (j === undefined) { at.set(k, i); canon[i] = i; } else canon[i] = j; }
       for (let i = 0; i < n; i++) {
         const a = t[i * 3] * 3, b = t[i * 3 + 1] * 3, c = t[i * 3 + 2] * 3;
         const ux = v[b] - v[a], uy = v[b + 1] - v[a + 1], uz = v[b + 2] - v[a + 2], wx = v[c] - v[a], wy = v[c + 1] - v[a + 1], wz = v[c + 2] - v[a + 2];
         let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; const l = Math.hypot(nx, ny, nz) || 1;
         normals[i * 3] = nx / l; normals[i * 3 + 1] = ny / l; normals[i * 3 + 2] = nz / l;
-        for (let k = 0; k < 3; k++) { const p = t[i * 3 + k], q = t[i * 3 + (k + 1) % 3]; const key = p < q ? p + ',' + q : q + ',' + p; (edge.get(key) || edge.set(key, []).get(key)).push(i); }
+        for (let k = 0; k < 3; k++) { const p = canon[t[i * 3 + k]], q = canon[t[i * 3 + (k + 1) % 3]]; const key = p < q ? p + ',' + q : q + ',' + p; (edge.get(key) || edge.set(key, []).get(key)).push(i); }
       }
-      this._faceAdj = { normals, edge };
+      this._faceAdj = { normals, edge, canon };
       return this._faceAdj;
     }
     // Flat region containing triangle `tri`, with its outline loops in plane coordinates.
     _faceRegion(tri) {
       const A = this._faceAdjacency(); if (!A) return null;
-      const v = this.result.vertices, t = this.result.triangles, N = A.normals;
+      const v = this.result.vertices, t0 = this.result.triangles, N = A.normals;
+      const C0 = A.canon; const tv = (i) => C0[t0[i]]; // welded triangle corners
       const n0 = [N[tri * 3], N[tri * 3 + 1], N[tri * 3 + 2]];
-      const p0 = [v[t[tri * 3] * 3], v[t[tri * 3] * 3 + 1], v[t[tri * 3] * 3 + 2]];
+      const p0 = [v[tv(tri * 3) * 3], v[tv(tri * 3) * 3 + 1], v[tv(tri * 3) * 3 + 2]];
       const onPlane = (i) => {
         if (N[i * 3] * n0[0] + N[i * 3 + 1] * n0[1] + N[i * 3 + 2] * n0[2] < 0.99999) return false;
-        for (let k = 0; k < 3; k++) { const q = t[i * 3 + k] * 3; if (Math.abs((v[q] - p0[0]) * n0[0] + (v[q + 1] - p0[1]) * n0[1] + (v[q + 2] - p0[2]) * n0[2]) > 2e-3) return false; }
+        for (let k = 0; k < 3; k++) { const q = tv(i * 3 + k) * 3; if (Math.abs((v[q] - p0[0]) * n0[0] + (v[q + 1] - p0[1]) * n0[1] + (v[q + 2] - p0[2]) * n0[2]) > 2e-3) return false; }
         return true;
       };
       const inR = new Set([tri]); const stack = [tri];
       while (stack.length) {
         const i = stack.pop();
         for (let k = 0; k < 3; k++) {
-          const p = t[i * 3 + k], q = t[i * 3 + (k + 1) % 3]; const key = p < q ? p + ',' + q : q + ',' + p;
+          const p = tv(i * 3 + k), q = tv(i * 3 + (k + 1) % 3); const key = p < q ? p + ',' + q : q + ',' + p;
           for (const j of A.edge.get(key) || []) if (!inR.has(j) && onPlane(j)) { inR.add(j); stack.push(j); }
         }
       }
       // Boundary edges keep the triangles' winding: outer loop CCW, holes CW (seen from outside).
       const count = new Map(); const dir = [];
-      for (const i of inR) for (let k = 0; k < 3; k++) { const p = t[i * 3 + k], q = t[i * 3 + (k + 1) % 3]; const key = p < q ? p + ',' + q : q + ',' + p; count.set(key, (count.get(key) || 0) + 1); dir.push([p, q, key]); }
+      for (const i of inR) for (let k = 0; k < 3; k++) { const p = tv(i * 3 + k), q = tv(i * 3 + (k + 1) % 3); const key = p < q ? p + ',' + q : q + ',' + p; count.set(key, (count.get(key) || 0) + 1); dir.push([p, q, key]); }
       const next = new Map(); for (const [p, q, key] of dir) if (count.get(key) === 1) next.set(p, q);
       // A facet of a curved surface (cylinder side, sphere…) meets its neighbours at
       // shallow angles all round: that is not a flat face of the part.
@@ -2660,7 +2981,11 @@
       // centre the sketch on the outer loop's bounding box
       const xs = outer.pts.map((p) => p[0]), ys = outer.pts.map((p) => p[1]);
       const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-      const sh = (pts) => pts.map((p) => [r3(p[0] - cx), r3(p[1] - cy)]);
+      // rounded to 0.001 mm, near-together corners can become the same point: drop repeats
+      const sh = (pts) => { const o = []; for (const p of pts) { const q = [r3(p[0] - cx), r3(p[1] - cy)]; const l = o[o.length - 1]; if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) >= 1e-3) o.push(q); } while (o.length > 3 && Math.hypot(o[0][0] - o[o.length - 1][0], o[0][1] - o[o.length - 1][1]) < 1e-3) o.pop();
+        // drop points on the line through their neighbours (incl. spikes that double back)
+        for (let ch = true; ch && o.length > 3;) { ch = false; for (let i = 0; i < o.length && o.length > 3; i++) { const a0 = o[(i + o.length - 1) % o.length], b0 = o[i], c0 = o[(i + 1) % o.length]; const cr = (b0[0] - a0[0]) * (c0[1] - a0[1]) - (b0[1] - a0[1]) * (c0[0] - a0[0]); const L = Math.hypot(c0[0] - a0[0], c0[1] - a0[1]) + Math.hypot(b0[0] - a0[0], b0[1] - a0[1]); if (Math.abs(cr) <= 1e-6 * Math.max(1, L * L)) { o.splice(i, 1); ch = true; i--; } } }
+        return o; };
       const center = origin.clone().addScaledVector(u, cx).addScaledVector(w, cy);
       const m = new T.Matrix4().makeBasis(u, w, nv); const eu = new T.Euler().setFromRotationMatrix(m, 'ZYX');
       return { tris: inR, n: nv, u, w, center, rot: [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)], outer: sh(outer.pts), holes: holes.map((h) => sh(h.pts)), size: [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)] };
@@ -2687,7 +3012,7 @@
       for (const i of f.tris) for (let k = 0; k < 3; k++) { const q = t[i * 3 + k] * 3; pos.push(v[q] + f.n.x * 0.03, v[q + 1] + f.n.y * 0.03, v[q + 2] + f.n.z * 0.03); }
       const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
       const grp = new T.Group();
-      const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: this.colors.accent, transparent: true, opacity: kind === 'hover' ? 0.22 : 0.45, side: T.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -8 }));
+      const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: kind === 'hover' ? this.colors.accent : this.colors.sel, transparent: true, opacity: kind === 'hover' ? 0.25 : 0.72, side: T.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -8 }));
       m.renderOrder = 6; grp.add(m);
       if (kind !== 'hover') {
         const arrow = new T.ArrowHelper(f.n, f.center, Math.max(8, Math.min(30, (f.size[0] + f.size[1]) / 3)), this.colors.accent.getHex(), 4, 3);
@@ -2696,9 +3021,12 @@
       }
       this.scene.add(grp); this[prop] = grp;
     }
+    // Face operations log to the browser console as "[3D face] …" (DevTools → Console).
+    _flog(...a) { try { console.info('[3D face]', ...a); } catch (_) { /* ignore */ } }
     _facePick(e) {
       const f = this._faceHit(e);
-      if (!f) return;
+      if (!f) { this._flog('tap: no face under the pointer (missed the part, or the build is not ready)', { hasResult: !!this.result }); return; }
+      this._flog(f.curved ? 'tap: curved surface — not a flat face' : 'tap: face', f.curved ? {} : { size: f.size.map(r3), triangles: f.tris.size, outerPoints: f.outer.length, holes: f.holes.length, normal: [f.n.x, f.n.y, f.n.z].map((v) => r3(v)) });
       if (f.curved) { this._toast('That is a curved surface — Push / Pull works on flat faces', 'err'); return; }
       this._faceSet(f);
     }
@@ -2707,7 +3035,8 @@
     _faceOwner(f) {
       const T = this.T;
       for (const it of this.data.items) {
-        if (it.role !== 'solid' || it.hidden || !['box', 'sketch', 'cylinder'].includes(it.type) || (it.clip && it.clip.length) || (it.cuts && it.cuts.length)) continue;
+        // a combined object's faces are faces of the merged solid, not of one member
+        if (it.role !== 'solid' || it.hidden || it.group || it.draft || !['box', 'sketch', 'cylinder'].includes(it.type) || (it.clip && it.clip.length) || (it.cuts && it.cuts.length)) continue;
         const M = this._placeMatrix(it); const inv = M.clone().invert();
         const nl = f.n.clone().transformDirection(inv); const cl = f.center.clone().applyMatrix4(inv);
         const a = [Math.abs(nl.x), Math.abs(nl.y), Math.abs(nl.z)]; const k = a.indexOf(Math.max(...a));
@@ -2720,14 +3049,29 @@
         const onSide = k === 2 ? Math.abs(cl.z - (sign > 0 ? H : 0)) < 0.01 : Math.abs(Math.abs(cl.getComponent(k)) - hw[k]) < 0.01;
         if (!onSide) continue;
         if (it.type === 'box' && (Math.abs(cl.x) > hw[0] + 0.01 || Math.abs(cl.y) > hw[1] + 0.01 || cl.z < -0.01 || cl.z > H + 0.01)) continue;
+        // the face must be just this shape's side: if it runs on into a touching part, extrude the face instead
+        { const fa = this._polyArea(f.outer) - f.holes.reduce((a, h) => a + Math.abs(this._polyArea(h)), 0);
+          const sa = it.type === 'box' ? [it.size.y * it.size.z, it.size.x * it.size.z, it.size.x * it.size.y][k] : it.type === 'cylinder' ? Math.PI * it.size.d * it.size.d / 4 : null;
+          if (sa != null && fa > sa * 1.002 + 0.01) continue;
+          if (sa == null) { const b = this._boundsOf([it.id]); const z = b.getSize(new T.Vector3()); if (Math.max(f.size[0], f.size[1]) > Math.max(z.x, z.y, z.z) + 0.01) continue; } }
         const what = it.type === 'box' ? ['width (X)', 'depth (Y)', 'height (Z)'][k] : 'height';
         return { id: it.id, k, sign, what, base: JSON.parse(JSON.stringify({ size: it.size, height: it.height, pos: it.pos })), M };
       }
       return null;
     }
+    _polyArea(pts) { let a = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; }
+    // The combined object a face belongs to (its centre lies on / in one of the members).
+    _faceGroup(f) {
+      const T = this.T; const c = f.center.clone().addScaledVector(f.n, -0.05);
+      for (const it of this.data.items) { if (!it.group || it.hidden || it.role !== 'solid') continue; const b = this._boundsOf([it.id]); if (!b.isEmpty() && b.expandByScalar(0.06).containsPoint(c)) return it.group; }
+      void T; return '';
+    }
     _faceSet(f) {
+      if (this._fPrev) this._facePreview(0);
+      if (f && this._faceItem) this._faceBake();
       this.face = f; this._faceItem = null; this._faceDist = 0;
       this._faceOwn = f ? this._faceOwner(f) : null;
+      if (f) this._flog('selected:', this._faceOwn ? 'resizes ' + ((this._item(this._faceOwn.id) || {}).name) + ' (' + this._faceOwn.what + ')' : 'extrudes the face shape' + (this._faceGroup(f) ? ' into combined object ' + this._faceGroup(f) : ''));
       this._faceDrawRegion(null, 'hover'); this._faceHovKey = '';
       this._faceDrawRegion(f, 'sel');
       if (!f) this._faceArrow = null;
@@ -2749,6 +3093,7 @@
           <div class="cad-quick">${[-5, -1, 1, 5].map((x) => `<button type="button" data-fstep="${x}">${x > 0 ? '+' : ''}${x}</button>`).join('')}</div>
         </div>
         <div class="cad-sec"><div class="cad-quick">
+          <button type="button" data-ffill title="Fill the gap in front of this face: pull it until it meets the facing surface (closes a slot / pocket)">Fill to opposite face</button>
           <button type="button" data-fsketch title="Start a sketch on this face">Sketch on face</button>
           <button type="button" data-fflat title="Turn the whole design so this face rests on the build plate">Lay flat</button>
         </div></div>
@@ -2759,8 +3104,12 @@
       inp.onkeydown = (e) => { if (e.key === 'Enter') { inp.dispatchEvent(new Event('change')); inp.select(); } };
       inp.onfocus = () => setTimeout(() => inp.select(), 0);
       el.querySelectorAll('[data-fstep]').forEach((b) => { b.onclick = () => this._faceApply(r3((this._faceDist || 0) + +b.dataset.fstep), true); });
-      el.querySelector('[data-fsketch]').onclick = () => { const ff = this.face; this._faceMode(false); this._sketchStart(null, { pos: [r3(ff.center.x), r3(ff.center.y), r3(ff.center.z)], rot: ff.rot }); };
+      el.querySelector('[data-fsketch]').onclick = () => { const ff = this.face; this._faceMode(false); this._sketchStart(null, { pos: [r3(ff.center.x), r3(ff.center.y), r3(ff.center.z)], rot: ff.rot });
+        if (this.sk) { // the face's corners and edge midpoints are snap points
+          const pts = []; [ff.outer].concat(ff.holes).forEach((L) => L.forEach((p, i) => { const q = L[(i + 1) % L.length]; pts.push(p, [r3((p[0] + q[0]) / 2), r3((p[1] + q[1]) / 2)]); }));
+          this.sk.facePts = pts; } };
       el.querySelector('[data-fflat]').onclick = () => this._layFlat(this.face);
+      el.querySelector('[data-ffill]').onclick = () => this._faceFill();
       const dn = el.querySelector('[data-fdone]'); if (dn) dn.onclick = () => { const id = this._faceItem; this._faceMode(false); if (id) this._select(id); };
       // drag the Distance label, like other fields
       const lab = el.querySelector('[data-fscrub]');
@@ -2770,15 +3119,63 @@
         lab.onpointerup = () => { lab.onpointermove = null; lab.onpointerup = null; if (moved) this._faceApply(this._faceDist, true); else inp.focus(); };
       };
     }
+    // Instant preview of a push / pull: the face's outline extruded by d, drawn by
+    // the page (no rebuild), so dragging is smooth even on heavy designs.
+    _facePreview(d) {
+      const T = this.T; const f = this.face;
+      if (this._fPrev) { this.scene.remove(this._fPrev); this._fPrev.traverse((o) => o.geometry && o.geometry.dispose()); this._fPrev = null; }
+      if (!f || !d) return;
+      const sh = new T.Shape(f.outer.map((q) => new T.Vector2(q[0], q[1])));
+      f.holes.forEach((h) => sh.holes.push(new T.Path(h.map((q) => new T.Vector2(q[0], q[1])))));
+      const g = new T.ExtrudeGeometry(sh, { depth: Math.abs(d), bevelEnabled: false });
+      if (d < 0) g.translate(0, 0, -Math.abs(d));
+      const col = d > 0 ? this.colors.accent : this.colors.hole;
+      const grp = new T.Group();
+      const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, depthWrite: false, side: T.DoubleSide }));
+      const e = new T.LineSegments(new T.EdgesGeometry(g, 20), new T.LineBasicMaterial({ color: col, depthTest: false, transparent: true }));
+      m.renderOrder = 7; e.renderOrder = 8; grp.add(m, e);
+      grp.matrixAutoUpdate = false;
+      grp.matrix.makeBasis(f.u, f.w, f.n).setPosition(f.center); // the sketch frame of the face (centre, u, w, normal)
+      this.scene.add(grp); this._fPrev = grp;
+      if (this._faceArrow) { this._faceArrow.position.copy(f.center).addScaledVector(f.n, Math.max(0, d)); }
+    }
+    // Fill: how far in front of the face is the facing surface? Rays from the face's
+    // centre and from points just inside its corners go along the normal; the nearest
+    // hit is the gap (the slot's height). Then pull exactly that far.
+    _faceFill() {
+      const f = this.face; if (!f || this.readOnly) return;
+      const T = this.T; const mesh = this.designGroup.children.find((o) => o.isMesh); if (!mesh) return;
+      const pts = [[0, 0]].concat(f.outer.map((p) => [p[0] * 0.85, p[1] * 0.85]));
+      const rc = new T.Raycaster(); let best = Infinity; let hits = 0;
+      for (const p of pts) {
+        const o = f.center.clone().addScaledVector(f.u, p[0]).addScaledVector(f.w, p[1]).addScaledVector(f.n, 0.01);
+        rc.set(o, f.n.clone()); rc.near = 0; rc.far = 2000;
+        const h = rc.intersectObject(mesh, false).find((x) => x.distance > 0.005 && x.face && x.face.normal.clone().transformDirection(mesh.matrixWorld).dot(f.n) < -0.5);
+        if (h) { hits++; best = Math.min(best, h.distance + 0.01); }
+      }
+      this._flog('fill: rays', pts.length, 'hit', hits, 'gap', isFinite(best) ? r3(best) : 'none');
+      if (!isFinite(best)) { this._toast('Nothing faces this face — it is an outside face. Pick the floor (or a wall) of the slot / pocket.', 'err'); return; }
+      this._faceOwn = null; this._fillNext = true; // always a new fill piece (not a resize)
+      this._faceApply(r3(best), true);
+      this._fillNext = false;
+      this._toast('Filled ' + r3(best) + ' mm up to the facing surface', 'ok');
+    }
+    // One undo snapshot per drag (taken before its first change) or per typed value.
+    _faceSnap(final) {
+      if (!this._fLive) this._snapshot();
+      this._fLive = !final;
+    }
     // Create / update the push-pull shape for distance d (mm along the face normal).
     _faceApply(d, final) {
-      const f = this.face; if (!f || this.readOnly) return;
+      const f = this.face; if (!f || this.readOnly) { this._flog('push/pull ignored:', !f ? 'no face selected' : 'read-only'); return; }
       d = r3(d);
+      if (final) this._flog('push/pull', d, 'mm', this._faceOwn ? '(resize)' : '(face shape)', 'item:', this._faceItem || 'new');
+      this._facePreview(final ? 0 : d);
       const own = this._faceOwn;
       if (own) { // resize the shape the face belongs to
         const it = this._item(own.id); if (!it) return;
-        if (!this._faceItem) { if (!d) return; this._snapshot(); this._faceItem = it.id; }
-        else if (final && d !== this._faceDist) this._snapshot();
+        if (!this._faceItem) { if (!d) return; this._snapshot(); this._faceItem = it.id; this._fLive = !final; }
+        else if (d !== this._faceDist || final) this._faceSnap(final);
         const T = this.T; const b = own.base;
         const grow = Math.max(0.1 - (own.k === 2 ? (it.type === 'box' ? b.size.z : it.type === 'sketch' ? b.height : b.size.z) : (own.k === 0 ? b.size.x : b.size.y)), d);
         if (it.type === 'box') it.size = Object.assign({}, b.size, { [['x', 'y', 'z'][own.k]]: r3(b.size[['x', 'y', 'z'][own.k]] + grow) });
@@ -2790,8 +3187,7 @@
         it.pos = [r3(b.pos[0] + ws.x), r3(b.pos[1] + ws.y), r3(b.pos[2] + ws.z)];
         Object.assign(it, C.normalizeItem(it));
         this._faceDist = d;
-        this._refreshItems(); this._changed(); this._requestBuild(!final);
-        if (final) this._renderFacePanel(); else { const i = this.inspEl.querySelector('[data-fdist]'); if (i) i.value = d; }
+        if (final) { this._refreshItems(); this._changed(); this._requestBuild(); this._renderFacePanel(); } else { const i = this.inspEl.querySelector('[data-fdist]'); if (i) i.value = d; }
         return;
       }
       if (!this._faceItem && !d) return;
@@ -2806,17 +3202,19 @@
       };
       if (!this._faceItem) {
         if (!d) return;
-        this._snapshot();
+        this._snapshot(); this._fLive = !final;
         const it = C.newItem('sketch', Object.assign({ name: this._uniqueName(d >= 0 ? 'Pull' : 'Push') }, fields));
+        const gid = this._faceGroup(f); if (gid) it.group = gid; // stays part of the combined object
+        it.feature = true; // a face push / pull: its cut shape is not drawn as an outline
+        if (this._fillNext && d > 0) { it.fill = true; it.name = this._uniqueName('Fill'); }
         this.data.items.push(it); this._faceItem = it.id;
       } else {
         const it = this._item(this._faceItem); if (!it) return;
         if (!d) { this.data.items = this.data.items.filter((x) => x.id !== it.id); this._faceItem = null; }
-        else { if (final) this._snapshot(); Object.assign(it, C.normalizeItem(Object.assign(it, fields, { name: /^(Pull|Push)( \d+)?$/.test(it.name) ? it.name.replace(/^(Pull|Push)/, d >= 0 ? 'Pull' : 'Push') : it.name }))); }
+        else { this._faceSnap(final); Object.assign(it, C.normalizeItem(Object.assign(it, fields, { name: /^(Pull|Push)( \d+)?$/.test(it.name) ? it.name.replace(/^(Pull|Push)/, d >= 0 ? 'Pull' : 'Push') : it.name }))); }
       }
       this._faceDist = d;
-      this._refreshItems(); this._changed(); this._requestBuild(!final);
-      if (final) this._renderFacePanel();
+      if (final) { this._refreshItems(); this._changed(); this._requestBuild(); this._renderFacePanel(); }
       else { const i = this.inspEl.querySelector('[data-fdist]'); if (i) i.value = d; }
     }
     // Turn every object so the face points down, then put the lowest point on the plate.
@@ -3028,7 +3426,9 @@
     }
     // Which parameter a world axis maps to for the selected object, if any.
     _dimMap(axis) {
-      const ids = this._selIds(); if (ids.length !== 1) return { why: 'Select one object to edit its size' };
+      const ids = this._selIds(); if (!ids.length) return { why: '' };
+      // combined objects / several picked: they scale together as one
+      if (ids.length > 1) { if (ids.some((x) => (this._item(x) || {}).type === 'image')) return { why: 'Images can’t be scaled with other objects' }; return { it: this._item(ids[0]), all: true }; }
       const it = this._item(ids[0]); if (!it) return { why: '' };
       const T = this.T;
       const o = new T.Object3D(); o.rotation.order = 'ZYX'; this._placeObj(o, it); o.updateMatrixWorld(true);
@@ -3056,6 +3456,7 @@
       const m = this._dimMap(axis); if (!m.it) return;
       const cur = this._dimSize.getComponent(axis); if (!(cur > 0)) return;
       const f = v / cur; const k = m.local;
+      if (m.all) { this._scaleSelection([0, 1, 2].map((i) => (i === axis ? f : 1))); return; }
       this._scaleItem(m.it.id, [0, 1, 2].map((i) => (i === k ? f : 1)));
     }
     // Scale an object's own parameters by f = [fx, fy, fz] (in its own frame).
@@ -3089,6 +3490,7 @@
     }
     // Scale gizmo released: the group's scale becomes real sizes; the group resets.
     _applyScale() {
+      this.root.querySelectorAll('[data-sbf]').forEach((x) => { x.value = '1'; });
       const id = this.sel; const o = this.objs[id]; const it = this._item(id); if (!o || !it) return;
       const fl = it.flip || [];
       const f = [Math.abs(o.group.scale.x), Math.abs(o.group.scale.y), Math.abs(o.group.scale.z)];
@@ -3286,6 +3688,7 @@
       if (k === 's' && !mod) { this._sketchStart(null); return; }
       if (k === 'e' && !mod) { this._faceMode(!this.faceOn); return; }
       if (k === 'escape' && this.exMode) { this._extrudeEnd(); return; }
+      if (k === 'escape' && this.chooseCut) { this.chooseCut = null; this._inspFor = null; this._renderInspector(); this._renderChrome(); return; }
       if (k === 'escape' && this.cutMode) { this._cutEnd(); return; }
       if (k === 'escape' && this.faceOn) { this._faceMode(false); return; }
       if (k === 'escape' && this.edgeMode) { this._edgeModeEnd(); return; }

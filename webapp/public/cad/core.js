@@ -73,6 +73,8 @@
       rot: vec(s.rot),
       hidden: !!s.hidden,
       ...(s.group ? { group: str(s.group, 40) } : {}),
+      ...(s.feature ? { feature: true } : {}),
+      ...(s.fill ? { fill: true } : {}), // Fill to opposite face: added after cuts, so cuts can't remove it // made by push / pull on a face: no hole outline drawn
       // Mirrored copies: flip the shape on its own X / Y / Z before rotating.
       ...(Array.isArray(s.flip) && s.flip.some(Boolean) ? { flip: [0, 1, 2].map((i) => !!s.flip[i]) } : {}),
     };
