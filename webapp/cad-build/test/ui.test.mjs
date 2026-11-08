@@ -260,13 +260,12 @@ async function run() {
   const before = JSON.stringify((await items()).map((x) => x.pos));
   await press('[data-combine]'); await idle();
   check('Combine: positions unchanged', JSON.stringify((await items()).map((x) => x.pos)) === before);
-  check('Combine: one row "A + B · 2 parts" in the list', await ev(`[...document.querySelectorAll('.cad-row')].map((r) => r.innerText.trim()).join('|')`).then((t) => /A \+ B\s*2 parts/.test(t)));
+  check('Combine: one row "A + B" in the list', await ev(`[...document.querySelectorAll('.cad-row-name')].map((r) => r.innerText.replace(/\\s+/g, ' ').trim()).join('|')`).then((t) => /A \+ B/.test(t) && !/\d+ parts/.test(t)));
   await ev(`boardEngine._select(null)`); await ev(`boardEngine._select(boardEngine.data.items[1].id)`);
   check('selecting a part selects the whole object', (await selNames()) === 'A,B');
   await ev(`(() => { const i = document.querySelector('.cad-inspector [data-gname]'); i.value = 'Stand'; i.dispatchEvent(new Event('change')); })()`); await sleep(150);
   check('rename the combined object', await ev(`Object.values(boardEngine.data.groups)[0].name`) === 'Stand');
-  const chip = await ev(`(() => { const b = [...document.querySelectorAll('[data-only]')].find((x) => x.textContent.trim() === 'B'); const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
-  await click(chip); check('tap a part chip → edit just that part', (await selNames()) === 'B' && await has('[data-selgroup]'));
+  check('one combined object does not list its pieces', !(await has('.cad-sel-list')) && !/\d+ parts/.test(await ev(`(document.querySelector('.cad-combo-tag') || {}).textContent || ''`)));
   await ev(`boardEngine._select(boardEngine.data.items[0].id)`);
   await ev(`(() => { const E = boardEngine; E._editMany([E.data.items[1].id], (x) => { x.pos[0] = 60; }); E._inspFor = null; E._renderInspector(); })()`); await idle(); await ev(`boardEngine._inspFor = null; boardEngine._renderInspector()`);
   check('parts not touching → "prints as 2 pieces" warning', /2 separate pieces/.test(await ev(`(document.querySelector('.cad-inspector .cad-msg') || {}).textContent || ''`)));
@@ -279,6 +278,21 @@ async function run() {
   check('duplicate a combined object → its own new combined copy', Object.keys(await ev(`boardEngine.data.groups`)).length === 2);
   await key('z', 'KeyZ', 90, MOD.meta); await idle();
   check('undo restores combined objects too', Object.keys(await ev(`boardEngine.data.groups`)).length === 1);
+
+  // Face pulls and pushes stay part of the object, but the lists show objects only.
+  section('Object list ignores face history');
+  await reset([{ type: 'box', name: 'Body', size: { x: 20, y: 20, z: 10 }, pos: [0, 0, 0] }, { type: 'box', name: 'Cap', size: { x: 10, y: 10, z: 4 }, pos: [30, 0, 0] }]);
+  await ev(`(() => { const E = boardEngine; const body = E.data.items[0]; const gid = 'g_hist'; body.group = gid; E.data.groups[gid] = { name: 'Body + Cap' }; E.data.items[1].group = gid;
+    const pull = CadCore.newItem('sketch', { name: 'Pull', role: 'solid', feature: true, height: 2, pos: [0, 0, 10], profiles: [{ k: 'rect', x: 0, y: 0, w: 4, h: 4 }] });
+    pull.group = gid;
+    const loose = CadCore.newItem('sketch', { name: 'Push 2', role: 'hole', feature: true, height: 1, pos: [0, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 2, h: 2 }] });
+    E.data.items.push(pull, loose); E._commit(); E._renderChrome(); E._select(body.id); })()`);
+  await sleep(200);
+  check('Shapes lists the object, not its pulls or a loose push', await ev(`[...document.querySelectorAll('.cad-row-name')].map((r) => r.innerText.replace(/\\s+/g, ' ').trim()).join('|')`) === 'Body + Cap');
+  check('selecting that object does not open a part list', !(await has('.cad-sel-list')) && !/\d+ parts/.test(await ev(`(document.querySelector('.cad-combo-tag') || {}).textContent || ''`)));
+  check('the face edits are still in the object', (await items()).length === 4 && (await selNames()).split(',').length === 3);
+  await ev(`boardEngine._select(null); boardEngine._renderChrome()`);
+  check('a history-only extra is not its own row', await ev(`document.querySelectorAll('.cad-row').length`) === 1);
 
   // ======================================================================
   section('Views & navigation');
@@ -303,6 +317,7 @@ async function run() {
   await press('[data-axis="y"]'); await press('[data-axis="z"]'); check('Y and Z boxes', near(await ev(`boardEngine.camera.getWorldDirection(new boardEngine.T.Vector3()).z`), -1, 0.01));
   await mouse('mouseWheel', 800, 450, { deltaX: 30, deltaY: 3 }); await sleep(150);
   check('trackpad scroll orbits and returns to perspective', !(await ev(`boardEngine.isOrtho`)));
+  check('two fingers pan, left button stays on the model', await ev(`(() => { const m = boardEngine.controls.mouseButtons; const t = boardEngine.controls.touches; return m.LEFT === -1 && m.RIGHT === 0 && m.MIDDLE === 2 && t.ONE === -1 && t.TWO === 2; })()`));
   let d0 = await ev(`boardEngine.camera.position.distanceTo(boardEngine.target)`);
   await mouse('mouseWheel', 800, 450, { deltaX: 0, deltaY: 100 }); await sleep(150);
   check('mouse wheel zooms', (await ev(`boardEngine.camera.position.distanceTo(boardEngine.target)`)) > d0);
@@ -385,6 +400,9 @@ async function run() {
   const sk0 = await it('Sketch');
   check('Done → stays a 2D sketch (nothing solid)', sk0 && sk0.draft === true && !(await ev(`boardEngine.result && boardEngine.result.triangles.length`)));
   check('floating bar shows Extrude / Cut / Split for the sketch', await ev(`!document.querySelector('.cad-actbar').classList.contains('hidden') && !!document.querySelector('.cad-actbar [data-ab="ext-new"]') && !!document.querySelector('.cad-actbar [data-ab="ext-cut"]') && !!document.querySelector('.cad-actbar [data-ab="ext-split"]')`));
+  await press('.cad-actbar [data-ab="ext-new"]'); await sleep(400);
+  check('sketch extrude starts at 1 mm', (await ev(`(document.querySelector('[data-exdist]') || {}).value`)) === '1');
+  await ev(`boardEngine._extrudeEnd()`); await sleep(150);
   await extrude('0.05');
   const sk = await it('Extrude');
   check('Extrude all → a shape 0.05 mm thick, sketch kept', sk && sk.height === 0.05 && !sk.draft && (await it('Sketch')).draft && !(await ev(`boardEngine.errors[boardEngine.sel]`)), JSON.stringify(sk && sk.height));
@@ -558,20 +576,29 @@ async function run() {
   await press('.cad-actbar [data-ab="cutobj"]'); await idle(); await sleep(300); await idle();
   check('cut on a resized (×2 X) object → true-size Ø6 hole', near(await vol(), 40 * 20 * 5 - Math.PI * 9 * 5, 1), await vol());
 
-  // combined objects: faces of the merged solid push / pull as one face, the result stays in the combined object
+  // separate bodies stay independent: a cap and a bottle that are not combined
+  // each keep their own faces, even where the printed surface joins them
+  await reset([{ type: 'box', name: 'L', size: { x: 20, y: 20, z: 10 }, pos: [-10, 0, 0] }, { type: 'box', name: 'Rt', size: { x: 20, y: 20, z: 10 }, pos: [10, 0, 0] }]);
+  await ev(`boardEngine._select(null)`); await ev(`boardEngine._view('iso')`); await sleep(200);
+  await key('e', 'KeyE', 69); await click(await scr(5, 0, 10)); await sleep(200);
+  check('separate bodies: the face is the right box only (20 × 20)', await ev(`!!boardEngine.face && Math.abs(boardEngine.face.size[0] * boardEngine.face.size[1] - 400) < 0.5`), await ev(`boardEngine.face && JSON.stringify(boardEngine.face.size)`));
+  check('…that box on its own, not the pair', await ev(`!!boardEngine._faceOwn`));
+  await key('Escape', 'Escape', 27);
+
+  // combined objects: a joined face selects as the visible piece under the pointer
   await reset([{ type: 'box', name: 'L', size: { x: 20, y: 20, z: 10 }, pos: [-10, 0, 0] }, { type: 'box', name: 'Rt', size: { x: 20, y: 20, z: 10 }, pos: [10, 0, 0] }]);
   await ev(`boardEngine._setSel(boardEngine.data.items.map((x) => x.id))`); await sleep(100);
   await press('[data-combine]'); await idle(); await sleep(200);
   await ev(`boardEngine._select(null)`); await ev(`boardEngine._view('iso')`); await sleep(200);
   await key('e', 'KeyE', 69); await click(await scr(5, 0, 10)); await sleep(200);
-  check('merged top face = one 40 × 20 face', await ev(`!!boardEngine.face && Math.abs(boardEngine.face.size[0] * boardEngine.face.size[1] - 800) < 0.5`), await ev(`boardEngine.face && JSON.stringify(boardEngine.face.size)`));
+  check('combined top: the piece under the pointer (20 × 20), not the whole 40 × 20', await ev(`!!boardEngine.face && Math.abs(boardEngine.face.size[0] * boardEngine.face.size[1] - 400) < 0.5`), await ev(`boardEngine.face && JSON.stringify(boardEngine.face.size)`));
   check('…not treated as one member\'s side', await ev(`!boardEngine._faceOwn`));
   await ev(`(() => { const i = document.querySelector('[data-fdist]'); i.value = '5'; i.dispatchEvent(new Event('change')); })()`); await idle();
   { const its = await items(); const pull = its.find((x) => /^Pull/.test(x.name));
-    check('Pull +5 → a 40×20×5 slab on the whole merged face', near(await vol(), 8000 + 4000, 2), await vol());
+    check('Pull +5 → a 20×20×5 slab on that piece', near(await vol(), 8000 + 2000, 2), await vol());
     check('…members unchanged, the pull joined the combined object', its.find((x) => x.name === 'L').size.z === 10 && its.find((x) => x.name === 'Rt').size.z === 10 && pull && pull.group && pull.group === its[0].group, JSON.stringify(its.map((x) => [x.name, x.group]))); }
   await ev(`(() => { const i = document.querySelector('[data-fdist]'); i.value = '-2'; i.dispatchEvent(new Event('change')); })()`); await idle();
-  check('Push −2 → 2 mm pocket across the merged face', near(await vol(), 8000 - 1600, 2), await vol());
+  check('Push −2 → 2 mm pocket on that piece', near(await vol(), 8000 - 800, 2), await vol());
   // drag the Distance label to −4: a live preview, no rebuild until release
   { const lab = await ev(`(() => { const r = document.querySelector('[data-fscrub]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
     const builds0 = await ev(`boardEngine.buildSeq`);
@@ -580,7 +607,7 @@ async function run() {
     check('dragging −: red preview shown, no rebuild while dragging', await ev(`!!boardEngine._fPrev && boardEngine._faceDist < -2`) && (await ev(`boardEngine.buildSeq`)) === builds0, await ev(`boardEngine._faceDist`));
     await mouse('mouseReleased', lab[0] - 32, lab[1], { button: 'left', clickCount: 1 }); await idle();
     const dd = await ev(`boardEngine._faceDist`);
-    check('release → preview gone, pocket built at that depth', !(await ev(`!!boardEngine._fPrev`)) && near(await vol(), 8000 + 800 * dd, 2), dd + ' ' + (await vol())); }
+    check('release → preview gone, pocket built at that depth', !(await ev(`!!boardEngine._fPrev`)) && near(await vol(), 8000 + 400 * dd, 2), dd + ' ' + (await vol())); }
   const vB = await vol();
   await key('Escape', 'Escape', 27); await idle(); await sleep(200); await idle();
   { const its = await items(); const dd2 = await ev(`0`);
@@ -588,7 +615,7 @@ async function run() {
     check('…no red outline drawn for it', await ev(`(() => { const E = boardEngine; const p = E.data.items.find((x) => /^Push/.test(x.name)); const o = E.objs[p.id]; return !o.edges.material.visible && o.mesh.material.opacity === 0; })()`), await ev(`(() => { const E = boardEngine; const p = E.data.items.find((x) => /^Push/.test(x.name)); const o = E.objs[p.id]; return JSON.stringify({ sel: E.sel, multi: E.multi.length, pid: p.id, hov: E.hov, ev: o.edges.visible, op: o.mesh.material.opacity, err: E.errors[p.id] || '' }); })()`));
     check('…same volume', near(await vol(), vB, 2), (await vol()) + ' vs ' + vB); void dd2; }
   await press('[data-undo]'); await idle(); await sleep(200);
-  check('one undo → back to the −2 pocket (before that drag)', near(await vol(), 8000 - 1600, 2), await vol());
+  check('one undo → back to the −2 pocket (before that drag)', near(await vol(), 8000 - 800, 2), await vol());
   await key('Escape', 'Escape', 27);
 
   // a face whose triangles repeat their corners (unwelded mesh) is still the whole face
@@ -600,6 +627,15 @@ async function run() {
       const r = E._faceRegion(2); E.result = keep; E._faceAdj = null;
       return r ? JSON.stringify({ size: r.size, tris: r.tris.size, outer: r.outer.length }) : 'null'; })()`);
     check('unwelded mesh: tapping one triangle picks the whole 10×10 square (not a triangle)', /"size":\[10,10\],"tris":2,"outer":4/.test(res), res); }
+
+  // selecting a cut body draws the remaining shape, not the removed part
+  await reset([{ type: 'box', name: 'Body', size: { x: 30, y: 20, z: 10 }, pos: [0, 0, 0] }]);
+  await ev(`(() => { const E = boardEngine; const it = CadCore.newItem('sketch', { name: 'Push', role: 'hole', feature: true, height: 2.02, pos: [0, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 30, h: 20 }] }); E.data.items.push(it); E._commit(); E._requestBuild(); })()`);
+  await idle(); await sleep(300);
+  await ev(`boardEngine._select(boardEngine.data.items[0].id)`); await idle(); await sleep(200);
+  const edgeZ = await ev(`(() => { const o = boardEngine.objs[boardEngine.data.items[0].id]; const p = o.edges.geometry.attributes.position; let hi = -1e9, n = 0; if (!p) return null; for (let i = 0; i < p.count; i++) { hi = Math.max(hi, p.getY ? p.getZ(i) : p.array[i * 3 + 2]); n++; } return [hi, n]; })()`);
+  check('selected body: orange edges stop at the cut (no skeleton of the removed top)', edgeZ && edgeZ[1] > 0 && edgeZ[0] < 9, JSON.stringify(edgeZ));
+  check('selected body: the orange fill does not cover the removed top', await ev(`(() => { const o = boardEngine.objs[boardEngine.data.items[0].id]; if (o.mesh.material.opacity > 0.01) return false; if (!o.vis || !o.vis.visible) return true; const p = o.vis.geometry.attributes.position; let hi = -1e9; for (let i = 0; i < p.count; i++) hi = Math.max(hi, p.getZ(i)); return hi < 9; })()`));
 
   // FrameTap STL + a box on its front, combined: push / pull the box's outer face
   if (HAVE_FT) {
@@ -621,7 +657,7 @@ async function run() {
     console.log('DBGC after esc', await vol(), JSON.stringify((await items()).map((x) => [x.name, x.role, x.group])));
   }
 
-  // Fix body: split pieces + a push pocket → one clean solid (same volume), one undo
+  // Join all: split pieces + a push pocket → one piece, every cut merged back
   await reset([{ type: 'box', name: 'Body', size: { x: 40, y: 20, z: 10 }, pos: [0, 0, 0] }, { type: 'box', name: 'Pocket', role: 'hole', feature: true, size: { x: 10, y: 10, z: 6 }, pos: [-10, 0, 5] }]);
   await ev(`boardEngine._select(boardEngine.data.items[0].id)`); await sleep(100);
   await ev(`(() => { const E = boardEngine; E.cutMode = null; })()`);
@@ -630,15 +666,7 @@ async function run() {
   const vSplit = await vol();
   check('setup: 2 body pieces + pocket = 8000 − 500', near(vSplit, 8000 - 500, 1), vSplit);
   await ev(`boardEngine._setSel(boardEngine.data.items.filter((x) => x.role === 'solid').map((x) => x.id))`); await sleep(200);
-  check('Fix body on the floating bar', await ev(`!!document.querySelector('.cad-actbar [data-ab="fix"]')`));
-  await press('.cad-actbar [data-ab="fix"]'); await sleep(1500);
-  check('summary popup: 2 objects → 1 solid, cut shape baked in', /2 objects → 1 solid/.test(await popupText()) && /1 cut shape baked in/.test(await popupText()), await popupText());
-  await popup('Fix body'); await sleep(500); await idle(); await sleep(500); await idle();
-  { const its = await items();
-    check('→ one model object "(fixed)" saved as STL next to the design, pocket shape gone', its.length === 1 && its[0].type === 'model' && /\(fixed\)/.test(its[0].name) && /-fixed-.*\.stl$/.test(its[0].file.path), JSON.stringify(its.map((x) => [x.name, x.type, x.file && x.file.path])));
-    check('…same volume, same place', near(await vol(), vSplit, 1) && near((await ev(`(() => { const b = boardEngine._boundsOf([boardEngine.data.items[0].id]); return b.min.x; })()`)), -20, 0.01), await vol()); }
-  await press('[data-undo]'); await idle(); await sleep(300);
-  check('one undo → the 2 pieces and the pocket are back', (await items()).length === 3 && near(await vol(), vSplit, 1));
+  check('Fix body is gone; Join all stays', await ev(`!document.querySelector('.cad-actbar [data-ab="fix"]') && !!document.querySelector('.cad-actbar [data-ab="joinall"]')`));
   // Join all: one piece, every cut merged back (full 40×20×10 box)
   await ev(`boardEngine._select(boardEngine.data.items[0].id)`); await sleep(200);
   await press('.cad-actbar [data-ab="joinall"]'); await sleep(1500);
@@ -796,7 +824,7 @@ async function run() {
   for (let i = 1; i <= 8; i++) await mouse('mouseMoved', a0[0] + (a1[0] - a0[0]) * i / 8, a0[1] + (a1[1] - a0[1]) * i / 8, { buttons: 1 });
   await mouse('mouseReleased', a1[0], a1[1], { button: 'left', clickCount: 1 }); await idle();
   const dd = await ev(`boardEngine._faceDist`);
-  check('drag the arrow up → pulls out (snapped to whole mm), box grows', dd > 5 && Number.isInteger(dd) && (await it('Blk')).size.z === 10 + dd, dd + ' ' + JSON.stringify((await it('Blk')).size));
+  check('drag the arrow up → pulls out, box grows', dd > 5 && Math.abs((await it('Blk')).size.z - (10 + dd)) < 0.02, dd + ' ' + JSON.stringify((await it('Blk')).size));
   check('the camera did not orbit during the arrow drag', await ev(`boardEngine.controls.enabled === true`));
   // rounded box: the rounded edges move with the face
   await reset([{ type: 'box', name: 'Ref', size: { x: 30, y: 20, z: 15, corner: 3 }, round: 1, pos: [0, 0, 0] }]);
@@ -819,14 +847,48 @@ async function run() {
   await ev(`boardEngine._view('iso')`); await click(await scr(0, 0, 20));
   check('flat top of a cylinder works (round outline)', await ev(`boardEngine.face && boardEngine.face.outer.length > 20`));
   await key('Escape', 'Escape', 27); check('Esc leaves face mode', await ev(`!boardEngine.faceOn`));
+  // several faces: same distance, or up to one shared level
+  await reset([{ type: 'box', name: 'Tall', size: { x: 30, y: 20, z: 10 }, pos: [0, 0, 0] }, { type: 'box', name: 'Short', size: { x: 20, y: 20, z: 6 }, pos: [40, 0, 0] }]);
+  await ev(`boardEngine._view('iso')`); await key('e', 'KeyE', 69);
+  await click(await scr(0, 0, 10)); await click(await scr(40, 0, 6));
+  check('two taps select both tops', (await ev(`(boardEngine.faces || []).length`)) === 2 && await ev(`!!document.querySelector('[data-fhow="level"]')`));
+  await setDist(2);
+  check('same distance +2 → both grow 2 mm (6000+1200 and 2400+800)', near(await fvol(), 6000 + 1200 + 2400 + 800, 4), await fvol());
+  await press('[data-fhow="level"]'); await sleep(200);
+  check('Level starts at the taller top (Z 10)', await ev(`boardEngine._faceLevel === true`) && near(await ev(`+document.querySelector('[data-fdist]').value`), 10, 0.05));
+  await setDist(14);
+  check('level Z 14 → tall grows 4, short grows 8', near(await fvol(), 6000 + 30 * 20 * 4 + 2400 + 20 * 20 * 8, 6), await fvol());
+  await key('Escape', 'Escape', 27);
   // sketch on face
   await reset([{ type: 'box', name: 'Blk', size: { x: 30, y: 20, z: 10 }, pos: [0, 0, 0] }]);
   await ev(`boardEngine._view('iso')`); await key('e', 'KeyE', 69); await click(await scr(0, 0, 10));
   await press('[data-fsketch]'); await sleep(300);
   check('Sketch on face → sketching on the top face (Z 10)', await ev(`!!boardEngine.sk`) && near(await ev(`boardEngine.sk.frame.position.z`), 10, 0.01));
   await press('[data-sktool="circle"]'); await click(await sp(0, 0)); await click(await sp(4, 0));
-  await press('[data-skdone]'); await idle(); await extrude('0.05');
+  const camSketch = await ev(`(() => { const d = boardEngine.camera.getWorldDirection(new boardEngine.T.Vector3()); return [d.x, d.y, d.z]; })()`);
+  await press('[data-skdone]'); await idle();
+  const camDone = await ev(`(() => { const d = boardEngine.camera.getWorldDirection(new boardEngine.T.Vector3()); return [d.x, d.y, d.z]; })()`);
+  check('finishing the sketch keeps the camera angle', camSketch.every((v, i) => Math.abs(v - camDone[i]) < 1e-6), JSON.stringify([camSketch, camDone]));
+  await press('.cad-actbar [data-ab="ext-new"]'); await sleep(400);
+  check('a circle drawn on the face cuts it into the circle and the rest', (await ev(`(boardEngine.exMode && boardEngine.exMode.regions || []).length`)) === 2);
+  await click(await scr(0, 0, 10.05));
+  await ev(`(() => { const i = document.querySelector('[data-exdist]'); i.focus(); i.value = '0.05'; i.dispatchEvent(new Event('change')); })()`);
+  await press('[data-exgo]'); await sleep(200); await idle();
   check('a Ø8 boss on top: +π·16·0.05, top at Z 10.05', near(await fvol(), 6000 + Math.PI * 16 * 0.05, 0.3) && near((await fbounds())[1][2], 10.05, 0.005), (await fvol()) + ' ' + JSON.stringify(await fbounds()));
+  // points across a face cut it, and extrude takes one part
+  await reset([{ type: 'box', name: 'Blk', size: { x: 30, y: 20, z: 10 }, pos: [0, 0, 0] }]);
+  await ev(`boardEngine._view('iso')`); await key('e', 'KeyE', 69); await click(await scr(0, 0, 10));
+  await press('[data-fsketch]'); await sleep(300);
+  await press('[data-sktool="line"]');
+  await click(await sp(-15, 0)); await click(await sp(15, 0));
+  await press('[data-skdone]'); await idle();
+  check('an open line of points is kept as a cut of the face', (await ev(`(boardEngine.data.items.find((x) => x.draft) || {}).splits || []`)).length === 1);
+  await press('.cad-actbar [data-ab="ext-new"]'); await sleep(400);
+  check('the line cuts the 30×20 face into 2 parts', (await ev(`(boardEngine.exMode && boardEngine.exMode.regions || []).length`)) === 2 && (await ev(`boardEngine.exMode.regions.every((r) => Math.abs(r.area - 300) < 2)`)));
+  await click(await scr(0, 5, 10.05));
+  await ev(`(() => { const i = document.querySelector('[data-exdist]'); i.focus(); i.value = '2'; i.dispatchEvent(new Event('change')); })()`);
+  await press('[data-exgo]'); await sleep(200); await idle();
+  check('extrude one part (+2 mm of the 30×10 half) → 6600, the box itself stays 10 high', near(await fvol(), 6600, 2) && (await it('Blk')).size.z === 10, (await fvol()) + ' ' + JSON.stringify((await it('Blk')).size));
   // lay flat
   await reset([{ type: 'box', name: 'Blk', size: { x: 30, y: 20, z: 10 }, pos: [0, 0, 20], rot: [30, 0, 15] }]);
   await ev(`boardEngine._view('iso')`); await key('e', 'KeyE', 69);
@@ -943,16 +1005,14 @@ async function run() {
   await press('[data-cutstart]'); await press('[data-cutaxis="0"]'); await press('[data-cutmid]');
   await press('[data-cutdo="split"]'); await idle();
   check('rotated object split down the middle → two equal halves', near(await fvol(), 6000, 0.05) && (await ev(`boardEngine.data.items.map((x) => { const b = boardEngine._boundsOf([x.id]); return (b.max.x - b.min.x).toFixed(2); }).join(',')`)).split(',').every((w, _, a2) => w === a2[0]));
-  // choose which objects are cut
+  // the cut is the current object; pieces and holes are not a pick-list
   await reset([{ type: 'box', name: 'Keep', size: { x: 20, y: 20, z: 10 }, pos: [-30, 0, 0] }, { type: 'box', name: 'Cut me', size: { x: 20, y: 20, z: 10 }, pos: [30, 0, 0] }, { type: 'cylinder', name: 'Bore', role: 'hole', size: { d: 4, z: 20 }, pos: [30, 0, -5] }]);
-  await press('[data-selall]'); await press('[data-cutstart]'); await sleep(200);
-  check('Cut panel lists the objects; solids chosen, the hole cannot be', (await ev(`document.querySelectorAll('[data-cuton]').length`)) === 3 && (await ev(`document.querySelectorAll('[data-cuton].on').length`)) === 2 && await ev(`[...document.querySelectorAll('[data-cuton]')].find((b) => /Bore/.test(b.textContent)).disabled`));
-  const keepChip = await ev(`(() => { const b = [...document.querySelectorAll('[data-cuton]')].find((x) => /Keep/.test(x.textContent)); const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
-  await click(keepChip);
-  check('tap a chip → left out of the cut', (await ev(`boardEngine.cutMode.on.size`)) === 1);
-  await ev(`boardEngine._view('top')`); await sleep(200);
-  await click(await scr(-30, 0, 10)); check('tap the object in the view → chosen again', (await ev(`boardEngine.cutMode.on.size`)) === 2);
-  await click(await scr(-30, 0, 10)); check('tap again → left out again', (await ev(`boardEngine.cutMode.on.size`)) === 1);
+  await ev(`boardEngine._select(boardEngine.data.items.find((x) => x.name === 'Cut me').id)`); await idle();
+  await press('[data-cutstart]'); await sleep(200);
+  check('cuts the current object only — no piece list, hole left out', (await ev(`document.querySelectorAll('[data-cuton]').length`)) === 0 && (await ev(`boardEngine.cutMode.ids.length`)) === 1 && /Cut me/.test(await ev(`document.querySelector('.cad-name').textContent`)) && await ev(`!!document.querySelector('[data-cutaxis="2"].on')`));
+  await press('[data-cutaxis="1"]');
+  check('Front turns the plane', (await ev(`boardEngine.cutMode.axis`)) === 1 && Math.abs((await ev(`boardEngine._cutPlane.rotation.x`)) - Math.PI / 2) < 0.01);
+  await press('[data-cutaxis="2"]'); await press('[data-cutmid]');
   await press('[data-cutdo="split"]'); await idle();
   const after = await items();
   check('only "Cut me" was split; "Keep" untouched', after.filter((x) => /Cut me/.test(x.name)).length === 2 && !after.find((x) => x.name === 'Keep').clip, JSON.stringify(after.map((x) => [x.name, !!x.clip])));

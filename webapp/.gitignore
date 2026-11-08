@@ -2,3 +2,5 @@
 # 3D modeling add-on: built locally by Settings → 3D modeling (cad-build/build.sh)
 public/cad/vendor/
 public/cad/vendor.tmp/
+public/model/vendor/
+model-build/node_modules

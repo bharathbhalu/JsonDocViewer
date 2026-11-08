@@ -73,6 +73,8 @@
       rot: vec(s.rot),
       hidden: !!s.hidden,
       ...(s.group ? { group: str(s.group, 40) } : {}),
+      // The solid a face Push / Pull / Fill was cut from. Moving that solid moves this with it.
+      ...(s.host ? { host: str(s.host, 40) } : {}),
       ...(s.feature ? { feature: true } : {}),
       ...(s.fill ? { fill: true } : {}), // Fill to opposite face: added after cuts, so cuts can't remove it // made by push / pull on a face: no hole outline drawn
       // Mirrored copies: flip the shape on its own X / Y / Z before rotating.
@@ -81,11 +83,23 @@
     if (type === 'sketch') {
       if (s.draft) out.draft = true; // a 2D sketch (outlines only) — extrude its areas into shapes
       out.profiles = (Array.isArray(s.profiles) ? s.profiles : []).map(normProfile).filter(Boolean).slice(0, 300);
-      // new sketch shapes start 0.05 mm thick; a negative height extrudes into the face it was drawn on
-      { const h = n(s.height, 0.05, -10000, 10000); out.height = Math.abs(h) < 0.05 ? (h < 0 ? -0.05 : 0.05) : h; }
+      // new sketch shapes start 0.05 mm thick; a negative height extrudes into the face it was drawn on.
+      // 0.001 mm is the smallest distance that is kept.
+      { const h = n(s.height, 0.05, -10000, 10000); out.height = Math.abs(h) < 0.001 ? (h < 0 ? -0.001 : 0.001) : h; }
       out.round = n(s.round, 0, 0, 1000);
       out.chamfer = n(s.chamfer, 0, 0, 1000);
       out.hollow = n(s.hollow, 0, 0, 1000);
+      // The face this sketch was drawn on, in sketch coordinates, plus open
+      // point-chains that cut that face so an extrude can take one piece of it.
+      const ring = (L) => (Array.isArray(L) ? L : []).slice(0, 2000).map((q) => [n(q && q[0], 0, -1e5, 1e5), n(q && q[1], 0, -1e5, 1e5)]);
+      if (s.faceCut && Array.isArray(s.faceCut.outer)) {
+        const outer = ring(s.faceCut.outer);
+        if (outer.length >= 3) out.faceCut = { outer, holes: (Array.isArray(s.faceCut.holes) ? s.faceCut.holes : []).map(ring).filter((h) => h.length >= 3).slice(0, 40) };
+      }
+      if (Array.isArray(s.splits)) {
+        const splits = s.splits.slice(0, 40).map((line) => ring(line)).filter((line) => line.length >= 2);
+        if (splits.length) out.splits = splits;
+      }
     }
     if (type === 'image') {
       const f = s.file && typeof s.file === 'object' ? s.file : {};

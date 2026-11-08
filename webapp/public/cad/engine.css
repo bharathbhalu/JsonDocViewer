@@ -35,7 +35,10 @@ html[data-theme="dark"] .cad-primary { color: #10141c !important; }
 .cad-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 250px; padding: 6px; border-radius: 14px; display: flex; flex-direction: column; }
 .cad-menu button { text-align: left; border: 0; background: transparent; padding: 9px 10px; border-radius: 9px; font-weight: 600; }
 .cad-menu button small { display: block; font-weight: 400; color: var(--muted); margin-top: 1px; }
-.cad-menu button:hover { background: var(--accent-soft); }
+.cad-menu button:disabled { opacity: 0.4; cursor: default; }
+.cad-menu-h { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 2px; }
+.cad-objbtn { border: 1px solid var(--line-strong); background: var(--panel); border-radius: 10px; padding: 7px 12px; font-weight: 650; }
+.cad-objbtn:hover { border-color: var(--accent); color: var(--accent); }
 .cad-ro .cad-menu-wrap { display: none; }
 
 /* inspector (right) */
@@ -106,13 +109,30 @@ html[data-theme="dark"] .cad-primary { color: #10141c !important; }
 .cad-seg button:hover { color: var(--ink); background: var(--line); }
 .cad-seg button.on { background: var(--accent-soft); color: var(--accent); }
 
-/* axis boxes */
-.cad-axes { position: absolute; top: 60px; right: 12px; display: flex; gap: 4px; z-index: 2; }
-.cad-axes button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--bg-elev); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-weight: 800; font-size: 12px; box-shadow: var(--shadow); }
-.cad-axes .ax-x { color: #e5484d; } .cad-axes .ax-y { color: #30a46c; } .cad-axes .ax-z { color: #3e63dd; }
-.cad-axes button.on { border-color: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 25%, transparent); }
+/* orientation cube — turns with the camera; drag it, or click a face */
+.cad-axes { position: absolute; top: 56px; right: 12px; z-index: 4; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.cad-cube { width: 108px; height: 108px; perspective: 480px; touch-action: none; cursor: grab; }
+.cad-cube:active { cursor: grabbing; }
+.cad-cube-spin { --hz: 23px; position: absolute; left: 31px; top: 31px; width: 46px; height: 46px; transform-style: preserve-3d; }
+.cad-face { position: absolute; inset: 0; margin: 0; padding: 0; border: 1px solid color-mix(in srgb, currentColor 55%, var(--line-strong)); border-radius: 4px; background: color-mix(in srgb, var(--bg-elev) 78%, currentColor); color: inherit; font: 800 8px/1 inherit; letter-spacing: .01em; backface-visibility: hidden; -webkit-backface-visibility: hidden; cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-elev) 40%, transparent); }
+.cad-face:hover, .cad-face.hot, .cad-face.on { background: color-mix(in srgb, var(--bg-elev) 45%, currentColor); }
+.cad-face.on { box-shadow: inset 0 0 0 1.5px currentColor; }
+.cv-right, .cv-left { color: #e5484d; }
+.cv-front, .cv-back { color: #30a46c; }
+.cv-top, .cv-bottom { color: #3e63dd; }
+/* Face placement follows the world axes (Z up). The extra turn stands the label upright. */
+.cv-right  { transform: rotateY(90deg) translateZ(var(--hz)) rotateZ(-90deg); }
+.cv-left   { transform: rotateY(-90deg) translateZ(var(--hz)) rotateZ(90deg); }
+.cv-top    { transform: translateZ(var(--hz)) rotateZ(90deg); }
+.cv-bottom { transform: rotateY(180deg) translateZ(var(--hz)) rotateZ(-90deg); }
+.cv-front  { transform: rotateX(90deg) translateZ(var(--hz)) rotateZ(-90deg); }
+.cv-back   { transform: rotateX(-90deg) translateZ(var(--hz)) rotateZ(90deg); }
+.cad-axisrow { display: flex; gap: 4px; }
+.cad-axisrow button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--bg-elev); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-weight: 800; font-size: 12px; box-shadow: var(--shadow); }
+.cad-axisrow .ax-x { color: #e5484d; } .cad-axisrow .ax-y { color: #30a46c; } .cad-axisrow .ax-z { color: #3e63dd; }
+.cad-axisrow button.on { border-color: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 25%, transparent); }
 .cad-inspector:not(.hidden) ~ .cad-axes, .cad-root:has(.cad-inspector:not(.hidden)) .cad-axes { right: 292px; }
-@media (pointer: coarse) { .cad-axes button { width: 40px; height: 40px; } }
+@media (pointer: coarse) { .cad-axisrow button { width: 40px; height: 40px; } .cad-cube { width: 128px; height: 128px; } .cad-cube-spin { --hz: 28px; left: 36px; top: 36px; width: 56px; height: 56px; } .cad-face { font-size: 9px; } }
 
 /* sketch */
 .cad-skbar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 5px; border-radius: 16px; z-index: 6; background: var(--bg-elev); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-strong); box-shadow: var(--shadow); max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; }
@@ -308,6 +328,7 @@ html[data-theme="dark"] .cad-primary { color: #10141c !important; }
 .cad-dimlabel.ax0 b { color: #e5484d; } .cad-dimlabel.ax1 b { color: #30a46c; } .cad-dimlabel.ax2 b { color: #3e63dd; }
 .cad-dimlabel.ro { cursor: default; opacity: .85; }
 .cad-dim-in { width: 58px; border: 1px solid var(--accent); border-radius: 6px; padding: 2px 4px; font: inherit; text-align: right; color: var(--ink); background: var(--panel); outline: none; user-select: text; -webkit-user-select: text; }
+button.cad-skdim { font: inherit; cursor: text; pointer-events: auto; }
 .cad-dimlabel em { font-style: normal; font-weight: 500; font-size: 11px; margin-left: 3px; color: var(--muted); }
 
 /* no page pinch-zoom inside the 3D area (panels still scroll) */
@@ -337,7 +358,11 @@ html[data-theme="dark"] .cad-primary { color: #10141c !important; }
 @media (pointer: coarse) { .cad-iconrow button { padding: 9px 12px; } }
 
 /* floating action bar for the selected object */
-.cad-actbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 118px; z-index: 4; display: flex; gap: 4px; padding: 5px; border-radius: 14px; background: var(--bg-elev); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+.cad-actbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 118px; z-index: 4; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; max-width: min(960px, calc(100% - 24px)); padding: 5px; border-radius: 14px; background: var(--bg-elev); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+.cad-ab-g { display: flex; align-items: center; gap: 2px; margin-left: 4px; padding-left: 6px; border-left: 1px solid var(--line); }
+.cad-actbar .cad-ab-g:first-child { margin-left: 0; padding-left: 0; border-left: 0; }
+.cad-ab-l { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 0 4px; }
+.cad-actions { flex-wrap: wrap; }
 .cad-actbar button { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 58px; padding: 6px 8px; border: 0; border-radius: 10px; background: transparent; color: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
 .cad-actbar button:hover { background: var(--line); }
 .cad-actbar svg { width: 22px; height: 22px; fill: currentColor; }

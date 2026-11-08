@@ -11,6 +11,7 @@ const MusicCore = require(path.join(__dirname, 'public', 'music', 'core.js'));
 const TerminalCore = require(path.join(__dirname, 'public', 'terminal', 'core.js'));
 const RunbookCore = require(path.join(__dirname, 'public', 'runbook', 'core.js'));
 const CadCore = require(path.join(__dirname, 'public', 'cad', 'core.js'));
+const ModelCore = require(path.join(__dirname, 'public', 'model', 'core.js'));
 const LinkRewrite = require(path.join(__dirname, 'link-rewrite.js'));
 const zlib = require('zlib');
 const { execFile, execFileSync } = require('child_process');
@@ -915,6 +916,7 @@ function peekFileKind(full, name) {
     if (head.includes('data-docviewer="music"')) return 'music';
     if (head.includes('data-docviewer="terminal"')) return 'terminal';
     if (head.includes('data-docviewer="runbook"')) return 'runbook';
+    if (head.includes('data-docviewer="model"')) return 'model';
     if (head.includes('data-docviewer="cad"')) return 'cad';
   } catch (e) {
     return undefined;
@@ -1471,6 +1473,7 @@ function defaultContentFor(relPath, kind, template) {
   if (kind === 'terminal') return TerminalCore.serializeToHtml(TerminalCore.createStarter(template || 'local'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (kind === 'runbook') return RunbookCore.serializeToHtml(RunbookCore.createStarter(template || 'blank'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (kind === 'cad') return CadCore.serializeToHtml(CadCore.createStarter(template || 'blank'), path.posix.basename(relPath).replace(/\.html?$/i, ''));
+  if (kind === 'model') return ModelCore.serializeToHtml(ModelCore.createStarter(), path.posix.basename(relPath).replace(/\.html?$/i, ''));
   if (/\.json$/i.test(relPath)) return '{}\n';
   if (/\.(yaml|yml)$/i.test(relPath)) return '';
   // New Mermaid files start with a small example diagram.
@@ -2547,6 +2550,7 @@ function kindLabel(kind) {
   if (kind === 'terminal') return 'Terminal';
   if (kind === 'runbook') return 'Runbook';
   if (kind === 'cad') return '3D design';
+  if (kind === 'model') return '3D Model';
   if (kind === 'json') return 'JSON';
   if (kind === 'yaml') return 'YAML';
   if (kind === 'markdown') return 'Markdown';

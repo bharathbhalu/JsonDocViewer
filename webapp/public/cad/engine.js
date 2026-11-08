@@ -4,10 +4,13 @@
  * selected shape. Modelling runs in a Web Worker (vendor/cad-worker.js):
  * OpenCascade builds drawn shapes, manifold joins and cuts everything.
  *
- * Input: mouse (left orbit, right pan, wheel zoom), trackpad (two-finger
- * scroll orbits, shift pans, pinch zooms), touch (one finger orbits, two pan /
- * pinch), Apple Pencil (tap selects, drag the gizmo, hover highlights) and a
- * keyboard on desktop.
+ * Navigation follows a direct modeler. With a mouse, the left button selects
+ * and draws, right-drag orbits, middle-drag pans, Shift+right pans, and the
+ * wheel zooms toward the pointer. A trackpad: two-finger scroll orbits, Shift
+ * pans, pinch zooms. On iPad a finger orbits, two fingers pan and pinch to
+ * zoom, and a tap still selects; Apple Pencil draws, selects, and drags
+ * handles (it never orbits), and Pencil hover highlights. The corner cube
+ * turns with the view — drag it to orbit, tap a face for that side.
  */
 (function (global) {
   const C = global.CadCore;
@@ -30,7 +33,6 @@
     try { const v = Function('"use strict";return (' + t + ')')(); return Number.isFinite(v) ? v : fallback; } catch (e) { return fallback; } // eslint-disable-line no-new-func
   }
   const ICON = {
-    fixbody: '<svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.1-.4-.4-2.1 2.5-2.5z"/></svg>',
     knife: '<svg viewBox="0 0 24 24"><path d="M3 21 21 3" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2.5" fill="none"/><path d="M4 12h6v8H4zM14 4h6v6h-6z" opacity=".55"/></svg>',
     splitshape: '<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" opacity=".6"/><path d="M12 6v-4M12 22v-4" stroke="currentColor" stroke-width="1.6"/></svg>',
     holeic: '<svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="2 2"/></svg>',
@@ -83,7 +85,7 @@
       this.sel = null;              // selected item id (single selection)
       this.multi = [];              // ids when 2+ objects are selected (then sel is null)
       this.multiMode = false;       // iPad: every tap adds / removes
-      this.mode = 'translate';      // gizmo mode
+      this.mode = 'translate';      // number bar: translate (position), rotate (turn), or scale
       this.showHoles = true;
       this.undoStack = []; this.redoStack = [];
       this.meshes = {};             // id -> {vertices, triangles} (local frame)
@@ -191,7 +193,7 @@
     // ---------- DOM ----------
     _buildDom() {
       this.root.innerHTML = `
-        <div class="cad-view"></div>
+        <div class="cad-view"><div class="cad-glive hidden"><input type="text" inputmode="decimal" data-glive value="0"><em data-gliveu>mm</em></div></div>
         <div class="cad-tools" role="toolbar" aria-label="Shapes">
           <button type="button" data-add="box" title="Box (B)">${ICON.box}<span>Box</span></button>
           <button type="button" data-add="cylinder" title="Cylinder (C)">${ICON.cylinder}<span>Cylinder</span></button>
@@ -211,6 +213,23 @@
         <div class="cad-top">
           <span class="cad-status"></span>
           <div class="cad-menu-wrap">
+            <button type="button" class="cad-objbtn" data-objmenu title="Cut, join, copy and paste the selection">Objects</button>
+            <div class="cad-menu cad-objmenu hidden" data-objpop>
+              <div class="cad-menu-h">Cut</div>
+              <button type="button" data-oa="plane">Cut by plane <small>A flat plane through the selection</small></button>
+              <button type="button" data-oa="cutobj">Cut by object <small>One shape cuts the others and is used up</small></button>
+              <button type="button" data-oa="split">Split by shape <small>Inside and outside, with no gap</small></button>
+              <div class="cad-menu-h">Join</div>
+              <button type="button" data-oa="combine">Combine <small>One object — each part stays editable</small></button>
+              <button type="button" data-oa="uncombine">Uncombine <small>Separate objects again</small></button>
+              <button type="button" data-oa="joinall">Join all <small>One solid, every cut merged in</small></button>
+              <div class="cad-menu-h">Edit</div>
+              <button type="button" data-oa="copy">Copy <small>⌘C</small></button>
+              <button type="button" data-oa="paste">Paste <small>⌘V · 10 mm to the right</small></button>
+              <button type="button" data-oa="dup">Duplicate <small>⌘D</small></button>
+            </div>
+          </div>
+          <div class="cad-menu-wrap">
             <button type="button" class="cad-primary cad-export-btn" data-export>${ICON.export}<span>Export</span></button>
             <div class="cad-menu hidden">
               <button type="button" data-ex="3mf">Save 3MF <small>separate named objects — Bambu, Orca, Prusa</small></button>
@@ -221,10 +240,22 @@
             </div>
           </div>
         </div>
-        <div class="cad-axes" aria-label="Look along an axis">
-          <button type="button" data-axis="x" class="ax-x" title="Look along X — tap again for the other side">X</button>
-          <button type="button" data-axis="y" class="ax-y" title="Look along Y — tap again for the other side">Y</button>
-          <button type="button" data-axis="z" class="ax-z" title="Look along Z (top) — tap again for the bottom">Z</button>
+        <div class="cad-axes" aria-label="Orientation">
+          <div class="cad-cube" data-cube title="Drag to turn the view. Click a face to look from that side. A click near a corner looks from that corner.">
+            <div class="cad-cube-spin">
+              <button type="button" class="cad-face cv-right" data-cubeview="right">Right</button>
+              <button type="button" class="cad-face cv-left" data-cubeview="left">Left</button>
+              <button type="button" class="cad-face cv-top" data-cubeview="top">Top</button>
+              <button type="button" class="cad-face cv-bottom" data-cubeview="bottom">Bottom</button>
+              <button type="button" class="cad-face cv-front" data-cubeview="front">Front</button>
+              <button type="button" class="cad-face cv-back" data-cubeview="back">Back</button>
+            </div>
+          </div>
+          <div class="cad-axisrow">
+            <button type="button" data-axis="x" class="ax-x" title="Look along X — tap again for the other side">X</button>
+            <button type="button" data-axis="y" class="ax-y" title="Look along Y — tap again for the other side">Y</button>
+            <button type="button" data-axis="z" class="ax-z" title="Look along Z (top) — tap again for the bottom">Z</button>
+          </div>
         </div>
         <div class="cad-skbar hidden">
           <div class="cad-seg">
@@ -270,10 +301,10 @@
           <button type="button" class="cad-primary cad-small" data-sbapply>Apply</button>
         </div>
         <div class="cad-viewbar">
-          <div class="cad-seg cad-gizmo hidden">
-            <button type="button" data-mode="translate" title="Move (M)">${ICON.move}</button>
-            <button type="button" data-mode="rotate" title="Rotate (R)">${ICON.rotate}</button>
-            <button type="button" data-mode="scale" title="Scale / resize along X, Y, Z (T)">${ICON.scale}</button>
+          <div class="cad-seg cad-gizmo hidden" title="The handles on the object do both. These switch the numbers you type.">
+            <button type="button" data-mode="translate" title="Type a position. Drag an arrow or a square to move (M)">Move</button>
+            <button type="button" data-mode="rotate" title="Type a turn about the centre. Drag an arc (R)">Turn</button>
+            <button type="button" data-mode="scale" title="Scale the selection (T)">Scale</button>
           </div>
           <div class="cad-seg">
             <button type="button" data-view="iso" title="3D view (1)">3D</button>
@@ -306,19 +337,25 @@
       this._on(q('.cad-file'), 'change', (e) => { const f = [...e.target.files]; e.target.value = ''; this._importFiles(f); });
       this._on(q('[data-undo]'), 'click', () => this._undo());
       this._on(q('[data-redo]'), 'click', () => this._redo());
-      this._on(q('[data-export]'), 'click', (e) => { e.stopPropagation(); q('.cad-menu').classList.toggle('hidden'); });
-      this._on(document, 'pointerdown', (e) => { if (!e.target.closest('.cad-menu-wrap')) q('.cad-menu').classList.add('hidden'); });
+      const closeMenus = () => this.root.querySelectorAll('.cad-menu').forEach((m) => m.classList.add('hidden'));
+      const toggleMenu = (menu) => { const open = menu.classList.contains('hidden'); closeMenus(); if (open) menu.classList.remove('hidden'); };
+      this._on(q('[data-export]'), 'click', (e) => { e.stopPropagation(); toggleMenu(q('[data-export]').nextElementSibling); });
+      this._on(q('[data-objmenu]'), 'click', (e) => { e.stopPropagation(); this._syncObjMenu(); toggleMenu(q('[data-objpop]')); });
+      this._on(document, 'pointerdown', (e) => { if (!e.target.closest('.cad-menu-wrap')) closeMenus(); });
+      this.root.querySelectorAll('[data-oa]').forEach((b) => this._on(b, 'click', () => { closeMenus(); this._objectAction(b.dataset.oa); }));
       this.root.querySelectorAll('[data-ex]').forEach((b) => this._on(b, 'click', () => { q('.cad-menu').classList.add('hidden'); this._export(b.dataset.ex); }));
       this.root.querySelectorAll('[data-mode]').forEach((b) => this._on(b, 'click', () => this._setMode(b.dataset.mode)));
       this.root.querySelectorAll('[data-view]').forEach((b) => this._on(b, 'click', () => this._view(b.dataset.view)));
+      this._cubeSpin = q('.cad-cube-spin');
+      this._bindCube(q('[data-cube]'));
       this._on(q('[data-fit]'), 'click', () => this._fit());
       this._on(q('[data-holes]'), 'click', () => this._toggleHoles());
       this._on(q('[data-snap]'), 'click', () => { this.snapOn = !this.snapOn; this._applySnap(); this._renderChrome(); });
       this._on(q('[data-sketch]'), 'click', () => this._sketchStart(null));
       this._on(q('[data-selall]'), 'click', () => {
-        const vis = this.data.items.filter((it) => !it.hidden).map((it) => it.id);
+        const vis = this.data.items.filter((it) => !it.hidden && !this._isHistory(it)).map((it) => it.id);
         const ids = this._selIds();
-        if (vis.length && ids.length === vis.length && vis.every((id) => ids.includes(id))) this._select(null); else this._selectAll();
+        if (vis.length && vis.every((id) => ids.includes(id))) this._select(null); else this._selectAll();
       });
       this._on(q('[data-multimode]'), 'click', () => { this.multiMode = !this.multiMode; this._renderChrome(); this._toast(this.multiMode ? 'Multi-select on — tap objects to add or remove them' : 'Multi-select off'); });
       this.root.querySelectorAll('[data-sktool]').forEach((b) => this._on(b, 'click', () => this._sketchTool(b.dataset.sktool)));
@@ -449,9 +486,25 @@
       controls.enableDamping = true; controls.dampingFactor = 0.15;
       controls.enableZoom = false; // our own wheel handling (trackpad vs mouse)
       controls.screenSpacePanning = true;
-      controls.touches = { ONE: T.TOUCH.ROTATE, TWO: T.TOUCH.DOLLY_PAN };
-      controls.mouseButtons = { LEFT: T.MOUSE.ROTATE, MIDDLE: T.MOUSE.PAN, RIGHT: T.MOUSE.PAN };
+      // Mouse: the left button is the model (select, sketch, push). Right orbits.
+      // Shift, Ctrl or ⌘ on a rotate button pans, so Shift+right pans. Middle
+      // always pans — a modifier would swap a pan button into a rotate, so the
+      // button is flipped first to cancel that swap.
+      // iPad: two fingers pan. One finger is orbited below — OrbitControls cannot
+      // tilt off a straight top or sketch view, and a pen must never orbit.
+      // A pinch is zoomed below (enableZoom stays off so the mouse wheel stays ours).
+      controls.touches = { ONE: -1, TWO: T.TOUCH.DOLLY_PAN };
+      controls.mouseButtons = { LEFT: -1, MIDDLE: T.MOUSE.PAN, RIGHT: T.MOUSE.ROTATE };
+      // A view straight down or straight up sits on the pole. There "left" is
+      // undefined, so the picture swaps left and right on every frame.
+      controls.minPolarAngle = 0.02;
+      controls.maxPolarAngle = Math.PI - 0.02;
       this.controls = controls;
+      this._on(renderer.domElement, 'pointerdown', (e) => {
+        if (e.button !== 1) return;
+        const mod = e.shiftKey || e.ctrlKey || e.metaKey;
+        controls.mouseButtons.MIDDLE = mod ? T.MOUSE.ROTATE : T.MOUSE.PAN;
+      }, true);
 
       const tc = new T.TransformControls(cam, renderer.domElement);
       tc.setSpace('world');
@@ -470,9 +523,9 @@
       tc.addEventListener('dragging-changed', (e) => {
         controls.enabled = !e.value;
         this.dragging = e.value;
-        if (e.value) { this._snapshot(); if (this._px()) this._multiDragStart(); }
+        if (e.value) { this._snapshot(); if (this._px()) this._multiDragStart(); else if (this.sel) this._grabFeat(this.sel); }
         else if (this._px()) this._multiDragApply(true);
-        else { this._readGizmo(true); }
+        else { this._readGizmo(true); this._featGrab = null; }
       });
       tc.addEventListener('objectChange', () => {
         if (this.tc.mode === 'scale') {
@@ -486,14 +539,41 @@
       this._applySnap();
 
       // Wheel: pinch (ctrl) zooms; trackpad scroll orbits (shift pans); mouse wheel zooms.
-      this._on(renderer.domElement, 'wheel', (e) => {
-        e.preventDefault();
-        const trackpad = e.deltaMode === 0 && (e.deltaX !== 0 || Math.abs(e.deltaY) < 40) && !e.ctrlKey;
-        if (e.ctrlKey) this._zoom(Math.exp(e.deltaY * 0.012), e);
-        else if (trackpad && e.shiftKey) this._pan(-e.deltaX, -e.deltaY);
-        else if (trackpad) this._orbit(e.deltaX, e.deltaY);
-        else this._zoom(Math.exp(e.deltaY * 0.0015), e);
+      this._on(renderer.domElement, 'wheel', (e) => this._viewWheel(e), { passive: false });
+      this._on(this.root.querySelector('[data-cube]'), 'wheel', (e) => this._viewWheel(e), { passive: false });
+      // Two fingers pinch to zoom. The same gesture pans (OrbitControls, above).
+      // preventDefault keeps Safari from scrolling or zooming the page.
+      let pinchD = 0;
+      this._on(renderer.domElement, 'touchmove', (e) => {
+        if (e.cancelable) e.preventDefault();
+        if (e.touches.length !== 2) { pinchD = 0; return; }
+        const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        if (pinchD) this._zoom(clamp(pinchD / d, 0.85, 1.18));
+        pinchD = d;
       }, { passive: false });
+      this._on(renderer.domElement, 'touchend', () => { pinchD = 0; });
+      this._on(renderer.domElement, 'touchcancel', () => { pinchD = 0; });
+      // One finger tumbles the view, including off a top or sketch view.
+      // A second finger cancels that and pans. The arrow, the cut plane and a
+      // pencil stroke take the finger only when they already claimed it.
+      let finger = null;
+      this._on(renderer.domElement, 'pointerdown', (e) => {
+        if (e.pointerType !== 'touch') return;
+        if (!e.isPrimary) { finger = null; return; }
+        if (this._faceDrag || this._cutDrag || this._skDrag || this._gizmoDrag) return;
+        finger = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      }, true);
+      this._on(renderer.domElement, 'pointermove', (e) => {
+        if (!finger || e.pointerId !== finger.id) return;
+        if (this._faceDrag || this._cutDrag || this._skDrag || this._gizmoDrag) { finger = null; return; }
+        const dx = e.clientX - finger.x, dy = e.clientY - finger.y;
+        if (!dx && !dy) return;
+        finger.x = e.clientX; finger.y = e.clientY;
+        this._orbit(dx, dy);
+      }, true);
+      const endFinger = (e) => { if (finger && (!e || e.pointerId == null || e.pointerId === finger.id)) finger = null; };
+      this._on(window, 'pointerup', endFinger, true);
+      this._on(window, 'pointercancel', endFinger, true);
       // Safari trackpad pinch arrives as gesture events.
       let gs = 1;
       this._on(renderer.domElement, 'gesturestart', (e) => { e.preventDefault(); gs = 1; });
@@ -502,34 +582,91 @@
       // Tap / click to select; hover highlight for mouse and Pencil hover.
       let down = null;
       this._on(renderer.domElement, 'pointerdown', (e) => {
+        if (e.button !== 0) return; // the right button always turns the view
         this._faceDragged = false; // a new press: only a drag that starts now suppresses the tap
-        if (!this.faceOn || !this.face || !this._faceArrow) return;
-        // grab near the arrow: within 40 px of its line on screen
-        const f = this.face; const r = renderer.domElement.getBoundingClientRect();
-        const toS = (p) => { const q = p.clone().project(this.camera); return [(q.x + 1) / 2 * r.width + r.left, (1 - q.y) / 2 * r.height + r.top]; };
-        const a = toS(f.center), b = toS(f.center.clone().addScaledVector(f.n, this._faceArrow.line.scale.y + 4 + (this._faceDist > 0 ? this._faceDist : 0)));
-        const t = Math.max(0, Math.min(1, ((e.clientX - a[0]) * (b[0] - a[0]) + (e.clientY - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 || 1)));
-        if (Math.hypot(a[0] + (b[0] - a[0]) * t - e.clientX, a[1] + (b[1] - a[1]) * t - e.clientY) > 40) return;
-        e.stopPropagation(); this.controls.enabled = false; this._faceDrag = { d0: this._faceDist || 0 }; renderer.domElement.setPointerCapture(e.pointerId);
+        const grabbed = this._faceArrowAt(e, renderer.domElement); if (!grabbed) return;
+        e.stopPropagation(); this.controls.enabled = false;
+        const level = this._faceLevel && (this.faces || []).length > 1;
+        const start = level ? (this._faceAt != null ? this._faceAt : this._faceOuter()) : (this._faceDist || 0);
+        this._faceDrag = Object.assign({ start, f: grabbed, level, x0: e.clientX, y0: e.clientY }, this._faceScreenAxis(grabbed));
+        renderer.domElement.setPointerCapture(e.pointerId);
       }, true);
       this._on(renderer.domElement, 'pointermove', (e) => {
-        if (!this._faceDrag) return;
-        // distance along the normal: closest point between the pointer ray and the normal line
-        const f = this.face; const ray = this._ray(e).ray; const d = f.n.clone();
-        const w0 = f.center.clone().sub(ray.origin); const b = d.dot(ray.direction), dd = d.dot(w0), ee = ray.direction.dot(w0);
-        const den = 1 - b * b; if (Math.abs(den) < 1e-6) return;
-        let s = (b * ee - dd) / den; const g = this.snapOn && this.data.settings.snap ? this.data.settings.snap : 0;
-        if (g) s = Math.round(s / g) * g;
-        this._faceDragged = true; this._faceApply(r3(s), false);
+        const drag = this._faceDrag; if (!drag) return;
+        // Pixels moved along the face normal on screen, from where the drag
+        // started. A fresh ray intersection jumps whenever the view is nearly
+        // square to the face.
+        const along = (e.clientX - drag.x0) * drag.ax + (e.clientY - drag.y0) * drag.ay;
+        let delta = along * drag.mmPerPx;
+        const step = e.shiftKey ? 0.01 : 0.1;
+        this._faceDragged = true;
+        if (drag.level) {
+          const k = this._faceAxis(); const nk = drag.f.n.getComponent(k);
+          if (Math.abs(nk) < 0.35) return;
+          delta *= nk;
+        }
+        this._faceApply(r3(Math.round((drag.start + delta) / step) * step), false);
       }, true);
       // End the arrow drag however the pointer is released — on the canvas, elsewhere
       // on the page, or if the browser cancels / drops the capture — so the camera
       // never stays locked.
-      const endFaceDrag = () => { if (!this._faceDrag) return; this._faceDrag = null; this.controls.enabled = true; this._faceApply(this._faceDist || 0, true); };
+      const endFaceDrag = () => { if (!this._faceDrag) return; this._faceDrag = null; this.controls.enabled = true; const level = this._faceLevel && (this.faces || []).length > 1; this._faceApply(level ? (this._faceAt != null ? this._faceAt : this._faceOuter()) : (this._faceDist || 0), true); };
       this._on(window, 'pointerup', endFaceDrag, true);
       this._on(window, 'pointercancel', endFaceDrag, true);
       this._on(renderer.domElement, 'lostpointercapture', endFaceDrag);
       this._on(window, 'blur', endFaceDrag);
+      // Drag the red cut plane along its axis. A press anywhere else still orbits.
+      this._on(renderer.domElement, 'pointerdown', (e) => {
+        if (!this.cutMode || e.button !== 0 || !this._cutPlaneHit(e)) return; // right-drag turns the view
+        e.stopPropagation(); this.controls.enabled = false;
+        this._cutDrag = Object.assign({ start: this.cutMode.at, x0: e.clientX, y0: e.clientY }, this._cutScreenAxis());
+        renderer.domElement.setPointerCapture(e.pointerId);
+      }, true);
+      this._on(renderer.domElement, 'pointermove', (e) => {
+        const d = this._cutDrag; if (!d) return;
+        const along = (e.clientX - d.x0) * d.ax + (e.clientY - d.y0) * d.ay;
+        this._cutSetAt(d.start + along * d.mmPerPx);
+      }, true);
+      const endCutDrag = () => { if (!this._cutDrag) return; this._cutDrag = null; if (!this._faceDrag) this.controls.enabled = true; };
+      this._on(window, 'pointerup', endCutDrag, true);
+      this._on(window, 'pointercancel', endCutDrag, true);
+      this._on(renderer.domElement, 'lostpointercapture', endCutDrag);
+      this._on(window, 'blur', endCutDrag);
+      // While sketching, a mouse or Apple Pencil drag draws. A finger drag orbits
+      // instead, and a finger tap (no movement) still places a point.
+      this._on(renderer.domElement, 'pointerdown', (e) => {
+        if (!this.sk || e.pointerType === 'touch' || e.button !== 0 || this._skDimEditing) return;
+        const p = this._sketchPoint(e); if (!p) return;
+        e.stopPropagation(); this.controls.enabled = false;
+        this._skDrag = { x0: e.clientX, y0: e.clientY, p0: p, moved: false, id: e.pointerId };
+        renderer.domElement.setPointerCapture(e.pointerId);
+      }, true);
+      this._on(renderer.domElement, 'pointermove', (e) => {
+        const d = this._skDrag; if (!d || e.pointerId !== d.id) return;
+        if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > 6) d.moved = true;
+        if (!d.moved) return;
+        let p = this._sketchPoint(e); if (!p) return;
+        if (this.sk.tool === 'line') p = this._sketchLock(this._sketchAnchor(d.p0), p);
+        else if (this.sk.tool === 'rect' && e.shiftKey) p = this._sketchSquare(this._sketchAnchor(d.p0), p);
+        this.sk.hover = p; this._sketchDraw();
+      }, true);
+      const endSkDrag = (e) => {
+        const d = this._skDrag; if (!d) return;
+        if (e && e.pointerId != null && e.pointerId !== d.id) return;
+        this._skDrag = null;
+        if (!this._cutDrag && !this._faceDrag) this.controls.enabled = true;
+        if (!this.sk) return;
+        const cancel = !e || e.type === 'blur' || e.type === 'pointercancel' || e.clientX == null;
+        if (cancel || !d.moved) { if (!cancel && !d.moved) this._sketchClick(e); return; }
+        let p = this._sketchPoint(e); if (!p) return;
+        const anchor = this._sketchAnchor(d.p0);
+        if (this.sk.tool === 'line') p = this._sketchLock(anchor, p);
+        else if (this.sk.tool === 'rect' && e.shiftKey) p = this._sketchSquare(anchor, p);
+        this._sketchDragCommit(d.p0, p, e);
+      };
+      this._on(window, 'pointerup', endSkDrag, true);
+      this._on(window, 'pointercancel', endSkDrag, true);
+      this._on(window, 'blur', endSkDrag);
       this._on(renderer.domElement, 'pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: Date.now(), id: e.pointerId, multi: !e.isPrimary }; this.root.focus({ preventScroll: true }); });
       this._on(renderer.domElement, 'pointerup', (e) => {
         if (!down || down.id !== e.pointerId) return;
@@ -541,7 +678,7 @@
         if (this.sk) { this._sketchClick(e); return; }
         if (this.faceOn) { if (!this._faceDragged) this._facePick(e); this._faceDragged = false; return; }
         if (this.edgeMode) { this._edgeClick(e); return; }
-        if (this.cutMode) { const hit = this._pick(e); if (hit) this._cutToggle(hit); return; }
+        if (this.cutMode) return;
         if (this.exMode) { const o = this.objs[this.exMode.id]; if (o && o.fills) { const h = this._ray(e).intersectObjects(o.fills, false)[0]; if (h) this._extrudeToggle(h.object.userData.region); } return; }
         if (this.measureOn) { this._measureClick(e); return; }
         const add = e.shiftKey || e.metaKey || e.ctrlKey || this.multiMode;
@@ -553,7 +690,8 @@
         if (e.buttons !== 0 || e.pointerType === 'touch') return;
         if (this.faceOn && !this._faceDrag) { this._faceHover(e); return; }
         if (this.edgeMode) { this._edgeHover(e); return; }
-        if (this.sk) this._sketchMove(e); else if (this.measureOn) this._measureHover(e); else this._hover(this._pick(e));
+        if (this.sk) { if (!this._skDrag) this._sketchMove(e); return; }
+        if (this.measureOn) this._measureHover(e); else this._hover(this._pick(e));
       });
       this._on(renderer.domElement, 'pointerleave', () => this._hover(null));
       this._on(renderer.domElement, 'contextmenu', (e) => e.preventDefault());
@@ -569,8 +707,12 @@
       const loop = () => {
         if (this.destroyed) return;
         this._raf = requestAnimationFrame(loop);
-        controls.update();
+        // A flat top or bottom view sits on the pole. OrbitControls rewrites that
+        // pose every frame and the centre flips between the two ways "up" can point.
+        // Leave it alone until a drag actually starts.
+        if (!(this.isOrtho && controls.state === -1)) controls.update();
         if (this.isOrtho) this._orthoFrustum();
+        this._cubeSync();
         renderer.render(scene, this.camera);
         if ((this.measures && this.measures.length) || this._mLive) this._measureLabels();
         if (this._dimLabels && this._dimLabels.length) this._dimPlace();
@@ -609,6 +751,8 @@
     }
     _markView(v) {
       this.root.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+      const face = { x: 'right', '-x': 'left', y: 'back', '-y': 'front', z: 'top', '-z': 'bottom', right: 'right', left: 'left', back: 'back', front: 'front', top: 'top', bottom: 'bottom' }[v] || null;
+      this.root.querySelectorAll('[data-cubeview]').forEach((b) => b.classList.toggle('on', b.dataset.cubeview === face));
       if (!v || !String(v).match(/^-?[xyz]$/)) { this._lastAxis = null; this._axisFlip = false; this.root.querySelectorAll('[data-axis]').forEach((x) => { x.classList.remove('on'); x.textContent = x.dataset.axis.toUpperCase(); }); }
     }
     _css(name, fb) { return getComputedStyle(this.root).getPropertyValue(name).trim() || fb; }
@@ -644,15 +788,43 @@
     }
 
     // camera helpers
-    _orbit(dx, dy) {
+    // A right-drag's damping keeps turning after the pointer is up. A chosen
+    // view, a pan, or a wheel orbit has to cancel that or the view drifts off.
+    // Drop a leftover right-drag or finger-orbit so a chosen view does not drift.
+    // A pinch calls this mid-gesture; clearing then would cancel the two-finger pan.
+    _calmNav(force) {
+      const c = this.controls; if (!c) return;
+      if (!force && typeof c.state === 'number' && c.state !== -1) return;
+      if (c._sphericalDelta) c._sphericalDelta.set(0, 0, 0);
+      if (c._panOffset) c._panOffset.set(0, 0, 0);
+      c._scale = 1;
+    }
+    // Pinch zooms, a trackpad's two-finger scroll orbits (Shift pans), a mouse wheel zooms.
+    _viewWheel(e) {
+      e.preventDefault();
+      const trackpad = e.deltaMode === 0 && (e.deltaX !== 0 || Math.abs(e.deltaY) < 40) && !e.ctrlKey;
+      if (e.ctrlKey) this._zoom(Math.exp(e.deltaY * 0.012), e);
+      else if (trackpad && e.shiftKey) this._pan(-e.deltaX, -e.deltaY);
+      else if (trackpad) this._orbit(e.deltaX, e.deltaY);
+      else this._zoom(Math.exp(e.deltaY * 0.0015), e);
+    }
+    _orbit(dx, dy, scale) {
       if (this.isOrtho) { this._setOrtho(false); this._markView(null); }
+      const s = scale || 1;
       const off = this.camera.position.clone().sub(this.target);
       const r = off.length();
       let th = Math.atan2(off.y, off.x); let ph = Math.acos(clamp(off.z / r, -1, 1));
-      th -= dx * 0.006; ph = clamp(ph - dy * 0.006, 0.02, Math.PI - 0.02);
+      th -= dx * 0.006 * s; ph -= dy * 0.006 * s;
+      // Stop just short of straight up or straight down. Crossing that pole
+      // and flipping the heading turns the picture left and right on every
+      // move, so a drag onto the top kept jumping. A top view can still be
+      // tilted away: this only refuses the last degree.
+      const lo = 0.02, hi = Math.PI - 0.02;
+      ph = clamp(ph, lo, hi);
       off.set(r * Math.sin(ph) * Math.cos(th), r * Math.sin(ph) * Math.sin(th), r * Math.cos(ph));
       this.camera.position.copy(this.target).add(off);
       this.camera.lookAt(this.target);
+      this._calmNav();
     }
     _pan(dx, dy) {
       const T = this.T;
@@ -661,19 +833,32 @@
       const right = new T.Vector3().setFromMatrixColumn(this.camera.matrix, 0).multiplyScalar(-dx * k);
       const up = new T.Vector3().setFromMatrixColumn(this.camera.matrix, 1).multiplyScalar(dy * k);
       this.camera.position.add(right).add(up); this.target.add(right).add(up);
+      this._calmNav();
     }
     _zoom(f, e) {
-      const T = this.T;
       f = clamp(f, 0.5, 2);
-      const off = this.camera.position.clone().sub(this.target);
-      const len = clamp(off.length() * f, 2, 8000);
-      // Zoom toward the pointer: move the target a little toward what is under it.
-      if (e && f < 1 && e.clientX != null) {
-        const hit = this._rayHit(e);
-        if (hit) this.target.lerp(hit, 1 - f);
+      const dir = this.camera.position.clone().sub(this.target);
+      const len0 = Math.max(dir.length(), 0.001);
+      const len = clamp(len0 * f, 2, 8000);
+      const applied = len / len0;
+      // Keep the point under the pointer still, zooming in or out.
+      if (e && e.clientX != null && Math.abs(applied - 1) > 1e-4) {
+        const hit = this._zoomAnchor(e);
+        if (hit) this.target.addScaledVector(hit.clone().sub(this.target), 1 - applied);
       }
-      off.setLength(len);
-      this.camera.position.copy(this.target).add(off);
+      dir.setLength(len);
+      this.camera.position.copy(this.target).add(dir);
+      this.camera.lookAt(this.target);
+      this._calmNav();
+    }
+    // The surface under the pointer, or the view plane through the orbit target.
+    _zoomAnchor(e) {
+      const hit = this._rayHit(e);
+      if (hit) return hit;
+      const T = this.T;
+      const n = this.camera.getWorldDirection(new T.Vector3());
+      const plane = new T.Plane().setFromNormalAndCoplanarPoint(n, this.target);
+      return this._ray(e).ray.intersectPlane(plane, new T.Vector3());
     }
     _ray(e) {
       const T = this.T;
@@ -714,20 +899,118 @@
       this.target.copy(c);
       this.camera.position.copy(c).add(dir.multiplyScalar(Math.max(dist, 30)));
       this.camera.lookAt(c);
+      this._calmNav(true);
     }
     _view(v) {
       const T = this.T;
-      // Top / bottom keep a hair of -Y so "up" on screen stays +Y (camera up is +Z).
-      const e = 1e-4;
+      // Top / bottom keep a little -Y so "up" on screen stays +Y (camera up is +Z).
+      // 1e-4 was small enough that the pose fell on the pole and the centre jumped.
+      const e = 0.007;
       const dirs = { iso: [0.75, -1, 0.75], top: [0, -e, 1], bottom: [0, -e, -1], front: [0, -1, 0], back: [0, 1, 0], left: [-1, 0, 0], right: [1, 0, 0],
         x: [1, 0, 0], '-x': [-1, 0, 0], y: [0, 1, 0], '-y': [0, -1, 0], z: [0, -e, 1], '-z': [0, -e, -1] };
-      this._setOrtho(v !== 'iso');
-      const d = new T.Vector3(...(dirs[v] || dirs.iso)).normalize();
-      const dist = this.camera.position.distanceTo(this.target) || 200;
+      this._look(new T.Vector3(...(dirs[v] || dirs.iso)), v !== 'iso', !arguments[1]);
+      this._markView(v);
+    }
+    // Point the camera along dir (from the target toward the camera). ortho is a
+    // flat standard view; a corner of the cube stays in perspective.
+    _look(dir, ortho, fit) {
+      this._setOrtho(!!ortho);
+      const d = dir.clone().normalize();
+      if (Math.abs(d.z) > 0.999) d.set(d.x, d.y - 1e-4, d.z).normalize();
+      const dist = Math.max(this.camera.position.distanceTo(this.target) || 200, 30);
       this.camera.position.copy(this.target).add(d.multiplyScalar(dist));
       this.camera.lookAt(this.target);
-      if (!arguments[1]) this._fit();
-      this._markView(v);
+      this._calmNav(true);
+      if (fit) this._fit();
+    }
+    // The cube uses the same axes as the model. Its local +X/+Y/+Z are the world
+    // axes, drawn as the camera sees them (CSS Y points down, so camera Y is flipped).
+    _cubeSync() {
+      const spin = this._cubeSpin;
+      if (!spin || !this.camera) return;
+      this.camera.updateMatrixWorld();
+      const e = this.camera.matrixWorld.elements;
+      spin.style.transform = `matrix3d(${e[0]},${-e[4]},${e[8]},0,${e[1]},${-e[5]},${e[9]},0,${e[2]},${-e[6]},${e[10]},0,0,0,0,1)`;
+    }
+    _bindCube(cube) {
+      if (!cube) return;
+      let drag = null;
+      this._on(cube, 'pointerdown', (e) => {
+        if (e.button !== 0) return;
+        this._cubeDragMoved = false;
+        drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
+        cube.setPointerCapture(e.pointerId);
+      });
+      this._on(cube, 'pointermove', (e) => {
+        if (drag && e.pointerId === drag.id) {
+          const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+          if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+          drag.moved = true;
+          drag.x = e.clientX; drag.y = e.clientY;
+          this._orbit(dx, dy, 2.4);
+          return;
+        }
+        if (e.buttons !== 0) return;
+        const hot = this._cubeFaceAt(e);
+        cube.querySelectorAll('[data-cubeview]').forEach((b) => b.classList.toggle('hot', b.dataset.cubeview === hot));
+      });
+      const end = (e) => {
+        if (!drag || (e && e.pointerId != null && e.pointerId !== drag.id)) return;
+        if (drag.moved) this._cubeDragMoved = true;
+        drag = null;
+      };
+      this._on(cube, 'pointerup', end);
+      this._on(cube, 'pointercancel', end);
+      this._on(cube, 'click', (e) => {
+        if (this._cubeDragMoved) { this._cubeDragMoved = false; e.preventDefault(); e.stopPropagation(); return; }
+        this._cubeActivate(e);
+      });
+      this._on(cube, 'contextmenu', (e) => e.preventDefault());
+    }
+    // Screen position of a world-axis face on the cube, in pixels from its centre.
+    _cubeFacePoint(name) {
+      const T = this.T;
+      const n = { right: [1, 0, 0], left: [-1, 0, 0], top: [0, 0, 1], bottom: [0, 0, -1], front: [0, -1, 0], back: [0, 1, 0] }[name];
+      if (!n || !this.camera) return null;
+      const normal = new T.Vector3(...n);
+      const toCam = this.camera.position.clone().sub(this.target);
+      if (normal.dot(toCam) <= 0.12 * toCam.length()) return null;
+      this.camera.updateMatrixWorld();
+      const right = new T.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+      const up = new T.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+      return { name, x: normal.dot(right) * 30, y: -normal.dot(up) * 30, normal };
+    }
+    _cubeCentre() {
+      const r = (this._cubeSpin || this.root.querySelector('[data-cube]')).getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    _cubeFaceAt(e) {
+      const c = this._cubeCentre();
+      let best = null, bestD = 1e9;
+      for (const name of ['right', 'left', 'top', 'bottom', 'front', 'back']) {
+        const p = this._cubeFacePoint(name); if (!p) continue;
+        const d = Math.hypot(e.clientX - (c.x + p.x), e.clientY - (c.y + p.y));
+        if (d < bestD) { bestD = d; best = name; }
+      }
+      return best;
+    }
+    _cubeActivate(e) {
+      const c = this._cubeCentre();
+      const faces = ['right', 'left', 'top', 'bottom', 'front', 'back'].map((n) => this._cubeFacePoint(n)).filter(Boolean);
+      if (!faces.length) return;
+      let best = faces[0], bestD = 1e9;
+      for (const p of faces) {
+        const d = Math.hypot(e.clientX - (c.x + p.x), e.clientY - (c.y + p.y));
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      // On the face itself: that flat view. Near a corner: look from between the faces.
+      if (bestD < 20) { this._view(best.name); return; }
+      const T = this.T;
+      const dir = new T.Vector3();
+      faces.forEach((p) => dir.add(p.normal));
+      dir.add(best.normal);
+      this._look(dir, false, true);
+      this._markView(null);
     }
 
     // ---------- items in the scene ----------
@@ -735,9 +1018,11 @@
     _geom(m) {
       const T = this.T;
       const g = new T.BufferGeometry();
-      g.setAttribute('position', new T.BufferAttribute(m.vertices, 3));
-      g.setIndex(new T.BufferAttribute(m.triangles, 1));
-      g.computeVertexNormals();
+      const v = m && m.vertices && m.vertices.length ? m.vertices : new Float32Array(0);
+      const t = m && m.triangles && m.triangles.length ? m.triangles : new Uint32Array(0);
+      g.setAttribute('position', new T.BufferAttribute(v, 3));
+      if (t.length) g.setIndex(new T.BufferAttribute(t, 1));
+      if (v.length) g.computeVertexNormals();
       return g;
     }
     _refreshDesign() {
@@ -760,7 +1045,7 @@
       // Remove only objects that are gone. A rebuilt shape keeps its scene object
       // (just new geometry): replacing the object mid-drag used to drop it at
       // 0,0,0 and the gizmo jumped to the centre with it.
-      for (const [id, o] of Object.entries(this.objs)) if (!live.has(id) || (!o.image && !o.draft && !this.meshes[id]) || (o.draft && !(this._item(id) || {}).draft)) { if (this.tc.object === o.group) this.tc.detach(); this.itemsGroup.remove(o.group); o.mesh.geometry.dispose(); o.edges.geometry.dispose(); delete this.objs[id]; }
+      for (const [id, o] of Object.entries(this.objs)) if (!live.has(id) || (!o.image && !o.draft && !this.meshes[id]) || (o.draft && !(this._item(id) || {}).draft)) { if (this.tc.object === o.group) this.tc.detach(); this.itemsGroup.remove(o.group); o.mesh.geometry.dispose(); o.edges.geometry.dispose(); if (o.vis) o.vis.geometry.dispose(); delete this.objs[id]; }
       for (const it of this.data.items) {
         if (it.type === 'image') { this._imageObj(it); continue; }
         if (it.type === 'sketch' && it.draft) { this._draftObj(it); continue; }
@@ -769,9 +1054,11 @@
         let o = this.objs[it.id];
         if (o && !o.image && o.src !== m) {
           const g = this._geom(m);
-          o.mesh.geometry.dispose(); o.edges.geometry.dispose();
-          o.mesh.geometry = g; o.edges.geometry = new T.EdgesGeometry(g, 28);
-          o.src = m;
+          const old = o.mesh.geometry;
+          o.mesh.geometry = g; o.edges.geometry.dispose();
+          o.edges.geometry = new T.EdgesGeometry(g, 28);
+          if (old && old !== g) old.dispose();
+          o.src = m; o._edgeSrc = null; o._wm = null; o._wmKey = null;
         }
         if (!o) {
           const g = this._geom(m);
@@ -818,12 +1105,140 @@
       if (!(this.dragging && this._isSel(it.id))) this._placeObj(o.group, it);
       this._styleObj(o, it);
     }
+    // Point in a ring (even-odd). Boundary counts as inside.
+    _pin(x, y, ring) {
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+        if (Math.abs((xj - xi) * (y - yi) - (yj - yi) * (x - xi)) < 1e-6 * Math.max(1, Math.hypot(xj - xi, yj - yi)) && Math.min(xi, xj) - 1e-6 <= x && x <= Math.max(xi, xj) + 1e-6 && Math.min(yi, yj) - 1e-6 <= y && y <= Math.max(yi, yj) + 1e-6) return true;
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    }
+    // Cut a face polygon by closed outlines and open point-chains. Each result
+    // is one piece of the face: its outline, and any holes that sit in it.
+    _facePieces(outer, holes, lines) {
+      const q4 = (v) => Math.round(v * 1e4) / 1e4;
+      const key = (p) => q4(p[0]) + ',' + q4(p[1]);
+      const chains = [];
+      const addChain = (pts, closed) => {
+        const p = (pts || []).map((q) => [q4(q[0]), q4(q[1])]).filter((q, i, a) => i === 0 || q[0] !== a[i - 1][0] || q[1] !== a[i - 1][1]);
+        if (closed && p.length > 1 && p[0][0] === p[p.length - 1][0] && p[0][1] === p[p.length - 1][1]) p.pop();
+        if (p.length >= (closed ? 3 : 2)) chains.push({ p, closed });
+      };
+      addChain(outer, true);
+      (holes || []).forEach((h) => addChain(h, true));
+      (lines || []).forEach((l) => addChain(l.pts || l, !!l.closed));
+      if (!chains.length) return [];
+      const segs = [];
+      for (const ch of chains) {
+        const n = ch.p.length, m = ch.closed ? n : n - 1;
+        for (let i = 0; i < m; i++) segs.push({ a: ch.p[i], b: ch.p[(i + 1) % n], ts: [] });
+      }
+      const onSeg = (p, a, b) => {
+        const abx = b[0] - a[0], aby = b[1] - a[1], apx = p[0] - a[0], apy = p[1] - a[1];
+        const ab2 = abx * abx + aby * aby; if (ab2 < 1e-12) return null;
+        const t = (apx * abx + apy * aby) / ab2; if (t < -1e-6 || t > 1 + 1e-6) return null;
+        if (Math.hypot(a[0] + abx * t - p[0], a[1] + aby * t - p[1]) > 0.02) return null;
+        return Math.min(1, Math.max(0, t));
+      };
+      const pushT = (seg, t) => { if (t > 1e-6 && t < 1 - 1e-6) seg.ts.push(t); };
+      for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) {
+        const A = segs[i], B = segs[j];
+        const rx = A.b[0] - A.a[0], ry = A.b[1] - A.a[1], sx = B.b[0] - B.a[0], sy = B.b[1] - B.a[1];
+        const den = rx * sy - ry * sx;
+        if (Math.abs(den) > 1e-9) {
+          const qx = B.a[0] - A.a[0], qy = B.a[1] - A.a[1];
+          const t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+          if (t >= -1e-6 && t <= 1 + 1e-6 && u >= -1e-6 && u <= 1 + 1e-6) { pushT(A, t); pushT(B, u); }
+        }
+        pushT(B, onSeg(A.a, B.a, B.b)); pushT(B, onSeg(A.b, B.a, B.b));
+        pushT(A, onSeg(B.a, A.a, A.b)); pushT(A, onSeg(B.b, A.a, A.b));
+      }
+      const adj = new Map(), xy = new Map();
+      const addE = (p, q) => {
+        const kp = key(p), kq = key(q); if (kp === kq) return;
+        if (!xy.has(kp)) xy.set(kp, [q4(p[0]), q4(p[1])]);
+        if (!xy.has(kq)) xy.set(kq, [q4(q[0]), q4(q[1])]);
+        let ap = adj.get(kp); if (!ap) adj.set(kp, ap = []); if (!ap.some((e) => e.to === kq)) ap.push({ to: kq, ang: Math.atan2(q[1] - p[1], q[0] - p[0]) });
+        let aq = adj.get(kq); if (!aq) adj.set(kq, aq = []); if (!aq.some((e) => e.to === kp)) aq.push({ to: kp, ang: Math.atan2(p[1] - q[1], p[0] - q[0]) });
+      };
+      for (const s of segs) {
+        const ts = [0];
+        s.ts.sort((a, b) => a - b).forEach((t) => { if (t - ts[ts.length - 1] > 1e-6) ts.push(t); });
+        if (1 - ts[ts.length - 1] > 1e-6) ts.push(1);
+        const pts = ts.map((t) => [s.a[0] + (s.b[0] - s.a[0]) * t, s.a[1] + (s.b[1] - s.a[1]) * t]);
+        for (let i = 0; i < pts.length - 1; i++) addE(pts[i], pts[i + 1]);
+      }
+      for (const list of adj.values()) list.sort((a, b) => a.ang - b.ang);
+      const used = new Set(), loops = [];
+      for (const [vk0, list0] of adj) for (let i0 = 0; i0 < list0.length; i0++) {
+        if (used.has(vk0 + '>' + list0[i0].to)) continue;
+        const poly = [], seen = [];
+        let vk = vk0, ei = i0, guard = 0, closed = false;
+        while (guard++ < 8000) {
+          const e = adj.get(vk)[ei];
+          const ek = vk + '>' + e.to;
+          if (seen.includes(ek)) break;
+          seen.push(ek); poly.push(xy.get(vk));
+          const outs = adj.get(e.to); const back = outs.findIndex((o) => o.to === vk);
+          if (back < 0) break;
+          ei = (back - 1 + outs.length) % outs.length; vk = e.to;
+          if (vk === vk0 && ei === i0) { closed = true; break; }
+        }
+        if (!closed || poly.length < 3) continue;
+        seen.forEach((k) => used.add(k));
+        const area = this._polyArea(poly);
+        if (area < 0.05) continue;
+        const a0 = poly[0], b0 = poly[1];
+        const dx = b0[0] - a0[0], dy = b0[1] - a0[1], L = Math.hypot(dx, dy) || 1;
+        const sx = (a0[0] + b0[0]) / 2 - dy / L * 0.05, sy = (a0[1] + b0[1]) / 2 + dx / L * 0.05;
+        if (!this._pin(sx, sy, outer)) continue;
+        if ((holes || []).some((h) => this._pin(sx, sy, h) && !this._onRing(sx, sy, h))) continue;
+        loops.push({ poly, area, sample: [sx, sy] });
+      }
+      const kids = loops.map(() => []);
+      for (let i = 0; i < loops.length; i++) {
+        let parent = -1, best = Infinity;
+        for (let j = 0; j < loops.length; j++) if (i !== j && loops[j].area > loops[i].area + 0.05 && this._pin(loops[i].sample[0], loops[i].sample[1], loops[j].poly) && loops[j].area < best) { parent = j; best = loops[j].area; }
+        if (parent >= 0) kids[parent].push(i);
+      }
+      const cent = (ring) => { let a = 0, x = 0, y = 0; for (let i = 0; i < ring.length; i++) { const p = ring[i], q = ring[(i + 1) % ring.length], c = p[0] * q[1] - q[0] * p[1]; a += c; x += (p[0] + q[0]) * c; y += (p[1] + q[1]) * c; } a *= 0.5; return Math.abs(a) < 1e-8 ? ring[0] : [x / (6 * a), y / (6 * a)]; };
+      return loops.map((f, i) => {
+        const hs = kids[i].map((k) => loops[k].poly);
+        for (const h of holes || []) {
+          const c = cent(h);
+          if (this._pin(c[0], c[1], f.poly) && !kids[i].some((k) => this._pin(c[0], c[1], loops[k].poly))) hs.push(h);
+        }
+        const holeA = hs.reduce((s, h) => s + Math.abs(this._polyArea(h)), 0);
+        return { poly: f.poly, holes: hs, area: f.area - holeA };
+      }).filter((r) => r.area > 0.05);
+    }
+    _onRing(x, y, ring) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+        if (Math.abs((xj - xi) * (y - yi) - (yj - yi) * (x - xi)) < 1e-4 * Math.max(1, Math.hypot(xj - xi, yj - yi)) && Math.min(xi, xj) - 1e-4 <= x && x <= Math.max(xi, xj) + 1e-4 && Math.min(yi, yj) - 1e-4 <= y && y <= Math.max(yi, yj) + 1e-4) return true;
+      }
+      return false;
+    }
     // A 2D sketch on its plane: outlines plus a light fill per separate area
-    // (areas come from the worker). In Extrude mode the areas are tappable.
+    // (areas come from the worker). A sketch drawn on a face is cut into pieces
+    // of that face, so extrude can take one part of it. In Extrude mode the
+    // areas are tappable.
     async _sketchRegions(it) {
-      const key = JSON.stringify(it.profiles);
+      const key = JSON.stringify(it.profiles) + '|' + JSON.stringify(it.faceCut || null) + '|' + JSON.stringify(it.splits || null);
       this._regionCache = this._regionCache || new Map();
       if (this._regionCache.has(key)) return this._regionCache.get(key);
+      if (it.faceCut && ((it.profiles && it.profiles.length) || (it.splits && it.splits.length))) {
+        const lines = (it.profiles || []).map((p) => ({ pts: this._outline(p), closed: true })).concat((it.splits || []).map((pts) => ({ pts, closed: false })));
+        const pieces = this._facePieces(it.faceCut.outer, it.faceCut.holes || [], lines);
+        if (pieces.length) {
+          const orient = (poly, pos) => { const a = this._polyArea(poly); return (a >= 0) === pos ? poly.slice() : poly.slice().reverse(); };
+          const regions = pieces.map((pc) => ({ polys: [orient(pc.poly, true)].concat(pc.holes.map((h) => orient(h, false))), area: pc.area }));
+          this._regionCache.set(key, regions);
+          return regions;
+        }
+      }
       if (!this.worker || !this.pending) return null; // still starting: drawn again once the worker is up
       const outlines = it.profiles.map((p) => this._outline(p));
       const id = 'r' + (++this.buildSeq);
@@ -834,7 +1249,7 @@
     _draftObj(it) {
       const T = this.T;
       let o = this.objs[it.id];
-      const key = JSON.stringify(it.profiles) + '|' + (this.exMode && this.exMode.id === it.id ? [...this.exMode.sel].join(',') : '') + '|' + this._isSel(it.id) + '|' + (this.hov === it.id);
+      const key = JSON.stringify(it.profiles) + '|' + JSON.stringify(it.splits || null) + '|' + (it.faceCut ? 1 : 0) + '|' + (this.exMode && this.exMode.id === it.id ? [...this.exMode.sel].join(',') : '') + '|' + this._isSel(it.id) + '|' + (this.hov === it.id);
       if (!o) {
         const group = new T.Group(); group.rotation.order = 'ZYX'; group.userData.id = it.id;
         this.itemsGroup.add(group);
@@ -854,6 +1269,7 @@
       // outlines
       const segs = [];
       for (const p of it.profiles) { const ol = this._outline(p); for (let i = 0; i < ol.length; i++) { const a = ol[i], b = ol[(i + 1) % ol.length]; segs.push(a[0], a[1], 0.03, b[0], b[1], 0.03); } }
+      for (const line of it.splits || []) for (let i = 0; i < line.length - 1; i++) { const a = line[i], b = line[i + 1]; segs.push(a[0], a[1], 0.03, b[0], b[1], 0.03); }
       o.edges.geometry.dispose(); o.edges.geometry = new T.BufferGeometry(); o.edges.geometry.setAttribute('position', new T.Float32BufferAttribute(segs, 3));
       o.edges.material.color.copy(sel ? this.colors.sel : hov ? this.colors.accent : this.colors.edge); o.edges.material.opacity = sel || hov ? 1 : 0.8; o.edges.material.needsUpdate = true;
       // areas (async): light fills; in Extrude mode, picked areas are strong
@@ -884,6 +1300,122 @@
       g.position.set(it.pos[0], it.pos[1], it.pos[2]); g.rotation.set(it.rot[0] * DEG, it.rot[1] * DEG, it.rot[2] * DEG, 'ZYX');
       if (!g.userData.image) { const f = it.flip || []; g.scale.set(f[0] ? -1 : 1, f[1] ? -1 : 1, f[2] ? -1 : 1); }
     }
+    // Triangles of a world-space mesh, grouped so a point can find the face it sits on.
+    _meshIndex(wm) {
+      if (wm.index) return wm.index;
+      const cell = 8, map = new Map(), v = wm.v, t = wm.t;
+      const put = (ix, iy, iz, i) => { const k = ix + ',' + iy + ',' + iz; let a = map.get(k); if (!a) map.set(k, a = []); a.push(i); };
+      for (let i = 0; i < t.length; i += 3) {
+        const ia = t[i] * 3, ib = t[i + 1] * 3, ic = t[i + 2] * 3;
+        const minx = Math.min(v[ia], v[ib], v[ic]), maxx = Math.max(v[ia], v[ib], v[ic]);
+        const miny = Math.min(v[ia + 1], v[ib + 1], v[ic + 1]), maxy = Math.max(v[ia + 1], v[ib + 1], v[ic + 1]);
+        const minz = Math.min(v[ia + 2], v[ib + 2], v[ic + 2]), maxz = Math.max(v[ia + 2], v[ib + 2], v[ic + 2]);
+        for (let ix = Math.floor((minx - 0.4) / cell); ix <= Math.floor((maxx + 0.4) / cell); ix++) for (let iy = Math.floor((miny - 0.4) / cell); iy <= Math.floor((maxy + 0.4) / cell); iy++) for (let iz = Math.floor((minz - 0.4) / cell); iz <= Math.floor((maxz + 0.4) / cell); iz++) put(ix, iy, iz, i);
+      }
+      wm.index = { map, cell, v, t };
+      return wm.index;
+    }
+    // Closest triangle of `index` to a world point. `n`, when set, requires the
+    // triangle to face the same way (a point on the back of a thin wall does not count).
+    _surfHit(index, x, y, z, n, tol) {
+      const { map, cell, v, t } = index;
+      const list = map.get(Math.floor(x / cell) + ',' + Math.floor(y / cell) + ',' + Math.floor(z / cell));
+      if (!list) return null;
+      let best = null;
+      for (const i of list) {
+        const ia = t[i] * 3, ib = t[i + 1] * 3, ic = t[i + 2] * 3;
+        const ax = v[ia], ay = v[ia + 1], az = v[ia + 2], bx = v[ib], by = v[ib + 1], bz = v[ib + 2], cx = v[ic], cy = v[ic + 1], cz = v[ic + 2];
+        const abx = bx - ax, aby = by - ay, abz = bz - az, acx = cx - ax, acy = cy - ay, acz = cz - az;
+        let nx = aby * acz - abz * acy, ny = abz * acx - abx * acz, nz = abx * acy - aby * acx;
+        const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+        if (n && nx * n[0] + ny * n[1] + nz * n[2] < 0.7) continue;
+        const apx = x - ax, apy = y - ay, apz = z - az;
+        const d00 = abx * abx + aby * aby + abz * abz, d01 = abx * acx + aby * acy + abz * acz, d11 = acx * acx + acy * acy + acz * acz;
+        const d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+        const den = d00 * d11 - d01 * d01; if (Math.abs(den) < 1e-8) continue;
+        const vv = (d11 * d1 - d01 * d2) / den, w = (d00 * d2 - d01 * d1) / den, u = 1 - vv - w;
+        if (u < -0.05 || vv < -0.05 || w < -0.05) continue;
+        const qx = ax + abx * vv + acx * w, qy = ay + aby * vv + acy * w, qz = az + abz * vv + acz * w;
+        const dist = Math.hypot(x - qx, y - qy, z - qz);
+        if (dist <= tol && (!best || dist < best.dist)) best = { dist, tri: i / 3 };
+      }
+      return best;
+    }
+    // True when a world point lies on this object's own surface (within tol mm).
+    _onObject(index, x, y, z, tol) { return !!this._surfHit(index, x, y, z, null, tol); }
+    // Selected / hovered solid: orange only where that solid is still visible.
+    // The tint and the frame follow the printed surface, so a cut does not leave
+    // the removed shape (or the cut tool) drawn in orange.
+    _fitSelEdges(o, it) {
+      if (!o || o.draft || o.image || it.role === 'hole' || it.role === 'ref' || it.type === 'image') return;
+      if (!(this._isSel(it.id) || this.hov === it.id)) { if (o.vis) o.vis.visible = false; return; }
+      if (this.dragging && this._isSel(it.id) && o._edgeSrc) return;
+      const res = this.result, lines = res && res.lines;
+      if (!res || !res.vertices || !res.triangles) return;
+      if (o._edgeSrc === res) return;
+      const wm = this._worldMesh(o); if (!wm) return;
+      const own = this._meshIndex(wm);
+      if (!res._rix) res._rix = this._meshIndex({ v: res.vertices, t: res.triangles });
+      const rix = res._rix;
+      const v = wm.v, t = wm.t, nTri = t.length / 3;
+      const exposed = new Uint8Array(nTri);
+      let any = 0;
+      for (let i = 0; i < nTri; i++) {
+        const ia = t[i * 3] * 3, ib = t[i * 3 + 1] * 3, ic = t[i * 3 + 2] * 3;
+        const ax = v[ia], ay = v[ia + 1], az = v[ia + 2], bx = v[ib], by = v[ib + 1], bz = v[ib + 2], cx = v[ic], cy = v[ic + 1], cz = v[ic + 2];
+        const ux = bx - ax, uy = by - ay, uz = bz - az, wx = cx - ax, wy = cy - ay, wz = cz - az;
+        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        const hit = this._surfHit(rix, (ax + bx + cx) / 3, (ay + by + cy) / 3, (az + bz + cz) / 3, [nx / nl, ny / nl, nz / nl], 0.4);
+        if (hit) { exposed[i] = 1; any++; }
+      }
+      o._visNone = !any;
+      o._visPartial = any > 0 && any < nTri;
+      const T = this.T;
+      const onExposed = (x, y, z) => { const h = this._surfHit(own, x, y, z, null, 0.4); return !!(h && exposed[h.tri]); };
+      const pos = [];
+      if (lines && lines.length >= 6) {
+        o.group.updateMatrixWorld(true);
+        const inv = o.group.matrixWorld.clone().invert();
+        const p = new T.Vector3(), q = new T.Vector3();
+        for (let i = 0; i < lines.length; i += 6) {
+          const mx = (lines[i] + lines[i + 3]) / 2, my = (lines[i + 1] + lines[i + 4]) / 2, mz = (lines[i + 2] + lines[i + 5]) / 2;
+          if (!onExposed(mx, my, mz)) continue;
+          p.set(lines[i], lines[i + 1], lines[i + 2]).applyMatrix4(inv);
+          q.set(lines[i + 3], lines[i + 4], lines[i + 5]).applyMatrix4(inv);
+          pos.push(p.x, p.y, p.z, q.x, q.y, q.z);
+        }
+      }
+      o.edges.geometry.dispose();
+      const eg = new T.BufferGeometry(); eg.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+      o.edges.geometry = eg;
+      // Tint only the faces that are still entirely on the printed surface, and
+      // only when a cut has removed some of this solid. An intact solid keeps
+      // its normal highlight.
+      let fill = null;
+      if (o._visPartial) {
+        const lp = o.mesh.geometry.attributes.position;
+        fill = [];
+        for (let i = 0; i < nTri; i++) {
+          if (!exposed[i]) continue;
+          let ok = true;
+          const ids = [t[i * 3], t[i * 3 + 1], t[i * 3 + 2]];
+          for (const vi of ids) { const q = vi * 3; if (!this._surfHit(rix, v[q], v[q + 1], v[q + 2], null, 0.45)) { ok = false; break; } }
+          if (!ok) continue;
+          for (const vi of ids) fill.push(lp.getX(vi), lp.getY(vi), lp.getZ(vi));
+        }
+        if (!o.vis) {
+          const vm = new T.Mesh(new T.BufferGeometry(), new T.MeshBasicMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -6 }));
+          vm.raycast = function () {}; vm.renderOrder = 4;
+          o.group.add(vm); o.vis = vm;
+        }
+        if (o.vis.geometry) o.vis.geometry.dispose();
+        const vg = new T.BufferGeometry(); vg.setAttribute('position', new T.Float32BufferAttribute(fill, 3)); if (fill.length) vg.computeVertexNormals();
+        o.vis.geometry = vg; o.vis.visible = false;
+      } else if (o.vis) o.vis.visible = false;
+      o._visCount = fill ? fill.length / 9 : 0;
+      o._edgeSrc = res;
+    }
     _styleObj(o, it) {
       if (o.draft) return;
       const sel = this._isSel(it.id), hov = it.id === this.hov && !sel;
@@ -901,11 +1433,25 @@
       if (it.role === 'ref') { color = this.colors.ref; op = 0.18; eop = 0.35; }
       else if (it.role === 'hole') { const q = featHole && !(this.sel === it.id && !this.multi.length); color = this.colors.hole; op = this.showHoles && !q ? 0.12 : 0; eop = this.showHoles && !q ? 0.45 : 0; }
       // Selected: a clear accent tint plus a full-strength outline drawn through other parts.
-      const quietSel = featHole && this.multi.length > 0; // part of a selected combined object
+      // A cut (any hole) stays quiet while the body it belongs to is selected — its
+      // outline is the removed material, not something that is still there.
+      const sole = this.sel === it.id && !this.multi.length;
+      const quietSel = it.role === 'hole' && sel && !sole;
       if (sel && !quietSel) { color = this.colors.sel; op = 0.72; eop = 1; }
       else if (hov && !quietSel && !featHole) { color = this.colors.accent; op = Math.max(op, 0.16); eop = 0.8; }
       if (this.errors[it.id] && !sel) { color = this.colors.hole; eop = Math.max(eop, 0.6); }
-      mm.color.copy(color); mm.opacity = op; mm.colorWrite = op > 0; mm.needsUpdate = true;
+      this._fitSelEdges(o, it);
+      // A cut solid: don't paint the removed volume. An intact solid keeps its tint.
+      const clip = (sel || hov) && it.role === 'solid' && o._edgeSrc && (o._visPartial || o._visNone);
+      if (clip && o._visNone) { op = 0; eop = 0; }
+      mm.color.copy(color); mm.opacity = clip ? 0 : op; mm.colorWrite = !(clip) && op > 0; mm.needsUpdate = true;
+      if (o.vis) {
+        o.vis.material.color.copy(color);
+        o.vis.material.opacity = clip && o._visCount ? op : 0;
+        o.vis.material.colorWrite = clip && o._visCount > 0 && op > 0;
+        o.vis.material.needsUpdate = true;
+        o.vis.visible = !!(clip && o._visCount && op > 0);
+      }
       em.color.copy(sel ? this.colors.sel : hov ? this.colors.accent : color); em.opacity = eop; em.visible = eop > 0;
       em.depthTest = !sel; // a selected outline stays visible even behind other geometry
       o.edges.renderOrder = sel ? 5 : 0;
@@ -920,6 +1466,13 @@
     // selects one part of it on purpose (from the combined object's panel).
     _gid(id) { const it = this._item(id); return (it && it.group) || ''; }
     _members(gid) { return gid ? this.data.items.filter((it) => it.group === gid).map((it) => it.id) : []; }
+    // A face pull, push or fill is an edit of an object. It stays in the object
+    // (it still moves, hides and combines with it) but it is not a shape of its own.
+    _isHistory(it) {
+      if (!it || it.draft) return false;
+      if (it.feature || it.fill) return true;
+      return /^(Push|Pull|Fill)( \d+)?( (piece|part) \d+)?$/.test(it.name || '');
+    }
     _expand(ids) { const out = []; ids.forEach((id) => { const g = this._gid(id); (g ? this._members(g) : [id]).forEach((x) => { if (!out.includes(x)) out.push(x); }); }); return out; }
     // The one combined object that is exactly the current selection, if any.
     _soleGroup() {
@@ -960,7 +1513,7 @@
       this._renderChrome();
     }
     _selectAll() {
-      const ids = this.data.items.filter((it) => !it.hidden).map((it) => it.id);
+      const ids = this.data.items.filter((it) => !it.hidden && !this._isHistory(it)).map((it) => it.id);
       if (!ids.length) return;
       this._setSel(ids);
       if (this.listEl) this.listEl.classList.remove('collapsed');
@@ -968,7 +1521,11 @@
     // World-space bounds of objects (precise, after rotation).
     _boundsOf(ids, fast) {
       const T = this.T; const b = new T.Box3();
-      for (const id of ids) { const o = this.objs[id]; if (!o) continue; o.group.updateMatrixWorld(true); b.union(new T.Box3().setFromObject(o.mesh, !fast)); }
+      for (const id of ids) {
+        const o = this.objs[id]; if (!o) continue;
+        o.group.updateMatrixWorld(true);
+        b.union(new T.Box3().setFromObject(o.mesh, !fast));
+      }
       return b;
     }
     // The gizmo for a multi-selection drives this pivot at the selection's centre.
@@ -990,6 +1547,7 @@
         const it = this._item(id); const tmp = new T.Object3D(); tmp.rotation.order = 'ZYX'; this._placeObj(tmp, it); tmp.updateMatrixWorld(true);
         return { id, m: tmp.matrixWorld.clone() };
       }) };
+      this._featPlans = this._planFollow(this._mStart.items.map((s) => s.id));
     }
     // New placement of each object = (pivot motion) × (its start placement).
     _multiDragApply(final) {
@@ -1007,8 +1565,9 @@
         it.rot = [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)].map((v) => (Math.abs(v) < 1e-6 ? 0 : v));
         const o = this.objs[s0.id]; if (o) this._placeObj(o.group, it);
       }
+      this._replayFollow(this._featPlans);
       this._renderDims(); this._dimUpdate(!final); this._xfSync();
-      if (final) { this._mStart = null; this._changed(); this._requestBuild(); this._placeProxy(); this._xfSync(); } else this._requestBuild(true);
+      if (final) { this._mStart = null; this._featPlans = null; this._changed(); this._requestBuild(); this._placeProxy(); this._xfSync(); } else this._requestBuild(true);
     }
     // Mirror the selection across a plane through its centre (axis 0/1/2 = X/Y/Z):
     // makes mirror-image copies. World mirror M of T·R·F is T'·(M R M)·(M F):
@@ -1120,6 +1679,7 @@
             if (!newGid[key]) { newGid[key] = C.uid('g_'); this.data.groups[newGid[key]] = { name: ((this.data.groups[src.group] || {}).name || 'Combined') + ' copy' }; }
             c.group = newGid[key];
           }
+          delete c.host; // a copy is its own shape; it must not follow the original
           const ni = C.normalizeItem(c); this.data.items.push(ni); made.push(ni.id);
         });
       }
@@ -1189,7 +1749,7 @@
       const regions = await this._sketchRegions(it);
       if (!regions) { this._toast('Still starting up — try again in a moment', 'err'); return; }
       if (!regions.length) { this._toast('This sketch has no closed areas to extrude', 'err'); return; }
-      this.exMode = { id, sel: new Set(regions.length === 1 ? [0] : []), dist: this._exDist || 5, op: this._exOpOnce || 'new', regions };
+      this.exMode = { id, sel: new Set(regions.length === 1 ? [0] : []), dist: this._exDist || 1, op: this._exOpOnce || 'new', regions, fromFace: !!(it.faceCut && ((it.profiles && it.profiles.length) || (it.splits && it.splits.length))) };
       this._exOpOnce = null; // Split / Cut are never remembered: each extrude starts as New object unless a Cut / Split button opened it
       if (this.tc.object) this.tc.detach();
       const o = this.objs[id]; if (o) o.key = null; this._refreshItems();
@@ -1197,6 +1757,7 @@
     }
     _extrudeEnd() {
       this._backToSketch = false;
+      this._extrudePreview(0);
       if (!this.exMode) return; const id = this.exMode.id; this.exMode = null;
       const o = this.objs[id]; if (o) o.key = null; this._inspFor = null; this._select(id);
     }
@@ -1208,11 +1769,12 @@
       const mids = this.multi.length > 1 ? this._selIds().filter((x) => { const t = this._item(x); return t && t.type !== 'image' && !t.draft; }) : [];
       if (!it && mids.length >= 2 && !this.readOnly && !busy) {
         bar.classList.remove('hidden'); const k = 'm|' + mids.join(','); if (bar.dataset.k === k) return; bar.dataset.k = k;
-        bar.innerHTML = `<button type="button" data-ab="mcut" title="Choose which object cuts the others">${ICON.extcut}<span>Cut by object</span></button><button type="button" data-ab="msplit" title="Choose which object splits the others into inside / outside parts">${ICON.splitshape}<span>Split by object</span></button><button type="button" data-ab="plane" title="Cut all of them with a flat plane">${ICON.knife}<span>Cut by plane</span></button><button type="button" data-ab="fix" title="Make one clean solid from these, as they look now">${ICON.fixbody}<span>Fix body</span></button><button type="button" data-ab="joinall" title="Join every solid into one piece and merge all cuts back">${ICON.separate}<span>Join all</span></button>`;
+        const g = (label, html) => `<div class="cad-ab-g"><span class="cad-ab-l">${label}</span>${html}</div>`;
+        bar.innerHTML = g('Cut', `<button type="button" data-ab="mcut" title="Choose which object cuts the others">${ICON.extcut}<span>By object</span></button><button type="button" data-ab="msplit" title="Choose which object splits the others into inside / outside parts">${ICON.splitshape}<span>Split</span></button><button type="button" data-ab="plane" title="Cut all of them with a flat plane">${ICON.knife}<span>By plane</span></button>`)
+          + g('Join', `<button type="button" data-ab="joinall" title="Join every solid into one piece and merge all cuts back">${ICON.separate}<span>Join all</span></button>`);
         bar.querySelector('[data-ab="mcut"]').onclick = () => this._chooseCutter('cut', mids);
         bar.querySelector('[data-ab="msplit"]').onclick = () => this._chooseCutter('split', mids);
         bar.querySelector('[data-ab="plane"]').onclick = () => this._cutStart();
-        bar.querySelector('[data-ab="fix"]').onclick = () => this._fixBody();
         bar.querySelector('[data-ab="joinall"]').onclick = () => this._joinAll();
         return;
       }
@@ -1222,18 +1784,18 @@
       bar.classList.remove('hidden');
       if (bar.dataset.k === k) return; bar.dataset.k = k;
       const b = (attr, icon, label, title) => `<button type="button" ${attr} title="${title}">${icon}<span>${label}</span></button>`;
+      const g = (label, html) => `<div class="cad-ab-g"><span class="cad-ab-l">${label}</span>${html}</div>`;
       bar.innerHTML = it.draft
-        ? b('data-ab="ext-new"', ICON.extrude, 'Extrude', 'Make a new object from areas of this sketch')
+        ? g('Sketch', b('data-ab="ext-new"', ICON.extrude, 'Extrude', 'Make a new object from areas of this sketch')
           + b('data-ab="ext-cut"', ICON.extcut, 'Cut', 'Cut areas of this sketch out of what they pass through')
           + b('data-ab="ext-split"', ICON.extsplit, 'Split', 'Split what the areas pass through into inside / outside parts')
-          + b('data-ab="sketch"', ICON.backsk, 'Edit', 'Back to sketch mode')
-        : b('data-ab="plane"', ICON.knife, 'Cut by plane', 'Cut with a flat plane: 2 objects, or keep one side')
-          + b('data-ab="cutobj"', ICON.extcut, 'Cut by object', 'Cut this object\'s shape out of every Solid it overlaps (this object is used up)')
-          + b('data-ab="split"', ICON.splitshape, 'Split by shape', 'Split every object this shape overlaps into inside / outside parts — no gap')
-          + b('data-ab="hole"', ICON.holeic, it.role === 'hole' ? 'Make solid' : 'Use as cut', it.role === 'hole' ? 'Turn back into a solid' : 'Turn this shape into a cut (hole)')
-          + (sep ? b('data-ab="sep"', ICON.separate, 'Separate', 'Make each loose piece its own object') : '')
-          + b('data-ab="fix"', ICON.fixbody, 'Fix body', 'Make one clean solid from this object as it looks now (cuts, pieces and pushes baked in)')
-          + b('data-ab="joinall"', ICON.separate, 'Join all', 'Join every solid into one piece and merge all cuts back');
+          + b('data-ab="sketch"', ICON.backsk, 'Edit', 'Back to sketch mode'))
+        : g('Cut', b('data-ab="plane"', ICON.knife, 'By plane', 'Cut with a flat plane: 2 objects, or keep one side')
+          + b('data-ab="cutobj"', ICON.extcut, 'By object', 'Cut this object\'s shape out of every Solid it overlaps (this object is used up)')
+          + b('data-ab="hole"', ICON.holeic, it.role === 'hole' ? 'Make solid' : 'Use as cut', it.role === 'hole' ? 'Turn back into a solid' : 'Turn this shape into a cut (hole)'))
+          + g('Join', b('data-ab="joinall"', ICON.separate, 'Join all', 'Join every solid into one piece and merge all cuts back'))
+          + g('Shape', b('data-ab="split"', ICON.splitshape, 'Split', 'Split every object this shape overlaps into inside / outside parts — no gap')
+            + (sep ? b('data-ab="sep"', ICON.separate, 'Separate', 'Make each loose piece its own object') : ''));
       bar.querySelectorAll('[data-ab]').forEach((x) => { x.onclick = () => {
         const id = this.sel; const a = x.dataset.ab;
         if (a.startsWith('ext-')) { this._exOpOnce = a.slice(4); this._extrudeStart(id); }
@@ -1243,7 +1805,6 @@
         else if (a === 'cutobj') this._splitWith(id, true);
         else if (a === 'hole') { this._edit(id, (t) => { t.role = t.role === 'hole' ? 'solid' : 'hole'; }); this._inspFor = null; this._renderInspector(); }
         else if (a === 'sep') this._separate(id);
-        else if (a === 'fix') this._fixBody();
         else if (a === 'joinall') this._joinAll();
       }; });
     }
@@ -1264,11 +1825,9 @@
       });
       this._renderChrome();
     }
-    // Fix body: the selected objects (or combined object), exactly as they look now,
-    // become one clean solid saved as an STL next to the design. Tiny loose slivers
-    // are dropped; empty pieces and cut shapes used only by these go too. One undo.
     // Join all: every visible solid becomes one piece with every cut merged back
-    // (plane cuts, shape cuts, piece splits and cut shapes removed first).
+    // (plane cuts, shape cuts, piece splits and cut shapes removed first). The result
+    // is one solid saved as an STL next to the design. One undo.
     async _joinAll() {
       if (this.readOnly) return;
       const before = JSON.stringify(this.data); const undoLen = this.undoStack.length;
@@ -1291,22 +1850,22 @@
       opt = opt || {};
       if (this.readOnly) return false;
       const ids = (opt.ids || this._expand(this._selIds())).filter((id) => { const it = this._item(id); return it && it.role === 'solid' && !it.hidden && !it.draft && it.type !== 'image'; });
-      if (!ids.length) { this._toast('Select the object(s) to fix', 'err'); return false; }
-      { // already one clean solid (e.g. a fixed body): nothing to do
+      if (!ids.length) { this._toast('Nothing to join', 'err'); return false; }
+      { // already one clean solid: nothing to join
         const one = ids.length === 1 && this._item(ids[0]); const ob = one && this._boundsOf([one.id]);
         const touchedByHole = one && this.data.items.some((x) => x.role === 'hole' && !x.hidden && (() => { const hb = this._boundsOf([x.id]); return !hb.isEmpty() && ob && hb.intersectsBox(ob); })());
-        if (one && !(one.cuts || []).length && !(one.clip || []).length && !one.piece && !touchedByHole && !(this.pieces && this.pieces[one.id] > 1)) { this._toast('Already one clean solid — nothing to fix', 'ok'); return false; }
+        if (one && !(one.cuts || []).length && !(one.clip || []).length && !one.piece && !touchedByHole && !(this.pieces && this.pieces[one.id] > 1)) { this._toast('Already one solid — nothing to join', 'ok'); return false; }
       }
       this._toast('Checking the body…');
       await new Promise((r) => { this._afterBuild(r); this._requestBuild(); });
       const empty = this.data.items.filter((x) => /Nothing is left/.test(this.errors[x.id] || ''));
       const ok = ids.filter((id) => !this.errors[id]);
-      if (!ok.length) { this._toast('These objects do not build — nothing to fix', 'err'); return false; }
+      if (!ok.length) { this._toast('These objects do not build — nothing to join', 'err'); return false; }
       let r;
       try {
         const id = 'b' + (++this.buildSeq);
         r = await new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ type: 'bake', id, ids: ok, minVol: 1 }); });
-      } catch (e) { this._toast('Fix body: ' + e.message, 'err'); return false; }
+      } catch (e) { this._toast('Join all: ' + e.message, 'err'); return false; }
       const T = this.T; const body = new T.Box3(new T.Vector3(...r.min), new T.Vector3(...r.max));
       const others = this.data.items.filter((x) => x.role === 'solid' && !ids.includes(x.id) && !x.hidden && !x.draft);
       const touchesOther = (hid) => { const hb = this._boundsOf([hid]); return others.some((o) => { const ob = this._boundsOf([o.id]); return !ob.isEmpty() && ob.intersectsBox(hb); }); };
@@ -1322,7 +1881,7 @@
       if (holes.length) lines.push('•  ' + holes.length + ' cut shape' + (holes.length > 1 ? 's' : '') + ' baked in (no longer separate)');
       if (empty.length) lines.push('•  ' + empty.length + ' empty piece' + (empty.length > 1 ? 's' : '') + ' removed: ' + empty.map((x) => x.name).join(', '));
       if (broken.length) lines.push('•  ' + broken.length + ' broken object' + (broken.length > 1 ? 's' : '') + ' removed: ' + broken.map((id) => this._item(id).name).join(', '));
-      const go = await global.uiConfirm((opt.joinInfo ? 'Join everything into one piece:' : 'Make one clean solid from what you see:') + '\n\n' + lines.join('\n') + '\n\nThe old objects can\'t be edited separately afterwards — one Undo brings them back.', { title: opt.joinInfo ? 'Join all' : 'Fix body', okLabel: opt.joinInfo ? 'Join all' : 'Fix body', cancelLabel: 'Cancel' });
+      const go = await global.uiConfirm('Join everything into one piece:\n\n' + lines.join('\n') + '\n\nThe old objects can\'t be edited separately afterwards — one Undo brings them back.', { title: 'Join all', okLabel: 'Join all', cancelLabel: 'Cancel' });
       if (!go) return false;
       // save the solid next to the design
       const gname = (() => { const g = this._gid(ids[0]); return g && ids.every((x) => this._gid(x) === g) ? ((this.data.groups || {})[g] || {}).name : ''; })();
@@ -1333,7 +1892,7 @@
       try {
         const bytes = new Uint8Array(r.stl); let bin = '';
         for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-        await api('/api/cad/export', { path: rel, content: btoa(bin), message: 'Fix body: ' + rel });
+        await api('/api/cad/export', { path: rel, content: btoa(bin), message: 'Join all: ' + rel });
       } catch (e) { this._toast('Could not save the fixed body: ' + e.message, 'err'); return false; }
       if (!opt.noSnap) this._snapshot();
       const drop = new Set(ids.concat(holes.map((x) => x.id), empty.map((x) => x.id)));
@@ -1344,7 +1903,7 @@
       this.data.items.push(it);
       this._tidyGroups();
       this._commit(); this._refreshItems(); this._select(it.id); this._requestBuild();
-      this._toast((opt.joinInfo ? 'Joined: ' : 'Fixed: ') + ok.length + ' objects → 1 solid · saved ' + rel.split('/').pop(), 'ok');
+      this._toast('Joined: ' + ok.length + ' objects → 1 solid · saved ' + rel.split('/').pop(), 'ok');
       return true;
     }
     _extrudeToggle(ri) { const ex = this.exMode; if (!ex) return; if (ex.sel.has(ri)) ex.sel.delete(ri); else ex.sel.add(ri); const o = this.objs[ex.id]; if (o) o.key = null; this._refreshItems(); this._renderExtrudePanel(); }
@@ -1354,10 +1913,11 @@
       const n = ex.regions.length, k = ex.sel.size;
       el.innerHTML = `
         <div class="cad-insp-head"><div class="cad-name">Extrude</div><button type="button" class="cad-icon-btn" data-exx title="Cancel (Esc)">✕</button></div>
-        <p class="cad-hint">Tap areas of the sketch to pick them${n > 1 ? ' — overlaps are separate areas' : ''}.</p>
+        <p class="cad-hint">${ex.fromFace ? 'The sketch cuts the face. Tap one part of the face to extrude just that part.' : 'Tap areas of the sketch to pick them'}${!ex.fromFace && n > 1 ? ' — overlaps are separate areas' : ''}.</p>
         <p class="cad-combo-tag"><b>${k}</b> of ${n} area${n > 1 ? 's' : ''} picked · <a href="#" data-exall>${k === n ? 'none' : 'all'}</a></p>
-        <div class="cad-grid"><label class="cad-field wide"><span class="cad-scrub">Distance</span><input type="text" inputmode="decimal" data-exdist value="${ex.dist}"><em>mm</em></label></div>
-        <p class="cad-hint">− goes the other way (into the face it was drawn on).</p>
+        <div class="cad-grid"><label class="cad-field wide"><span class="cad-scrub" data-exscrub>Distance</span><input type="text" inputmode="decimal" data-exdist value="${ex.dist}"><em>mm</em></label></div>
+        <p class="cad-hint">− goes the other way (into the face it was drawn on). Drag moves 0.1 mm; hold Shift for 0.01. You can type 0.001.</p>
+        <div class="cad-quick">${[-5, -1, -0.1, 0.1, 1, 5].map((x) => `<button type="button" data-exstep="${x}">${x > 0 ? '+' : ''}${x}</button>`).join('')}</div>
         <div class="cad-seg2 cad-seg3">${[['new', 'New object'], ['cut', 'Cut'], ['split', 'Split']].map(([v, t]) => `<button type="button" data-exop="${v}" class="${ex.op === v ? 'on' : ''}" title="${v === 'new' ? 'A new solid object' : v === 'cut' ? 'Cut it out of whatever it passes through' : 'Divide what it passes through into the part inside and outside (no gap)'}">${t}</button>`).join('')}</div>
         <button type="button" class="cad-wide-btn cad-combine" data-exgo ${k ? '' : 'disabled'}>Extrude ${k ? k + ' area' + (k > 1 ? 's' : '') : ''}</button>
         <button type="button" class="cad-wide-btn" data-exback>${ICON.backsk} Back to sketch</button>`;
@@ -1365,10 +1925,53 @@
       el.querySelector('[data-exx]').onclick = () => this._extrudeEnd();
       el.querySelector('[data-exall]').onclick = (e) => { e.preventDefault(); ex.sel = k === n ? new Set() : new Set(ex.regions.map((_, i) => i)); const o = this.objs[ex.id]; if (o) o.key = null; this._refreshItems(); this._renderExtrudePanel(); };
       const inp = el.querySelector('[data-exdist]');
-      inp.onchange = () => { const v = evalNum(inp.value, ex.dist); if (Math.abs(v) >= 0.05) ex.dist = this._exDist = r3(v); inp.value = ex.dist; };
+      const setDist = (v, write) => { if (!(Math.abs(v) >= 0.001)) return; ex.dist = this._exDist = r3(v); if (write) inp.value = ex.dist; this._extrudePreview(ex.dist); };
+      inp.onchange = () => setDist(evalNum(inp.value, ex.dist), true);
+      inp.oninput = () => setDist(evalNum(inp.value, ex.dist), false);
       inp.onkeydown = (e) => { if (e.key === 'Enter') { inp.dispatchEvent(new Event('change')); el.querySelector('[data-exgo]').click(); } };
       el.querySelectorAll('[data-exop]').forEach((b) => { b.onclick = () => { ex.op = this._exOp = b.dataset.exop; this._renderExtrudePanel(); }; });
       el.querySelector('[data-exgo]').onclick = () => { inp.dispatchEvent(new Event('change')); this._extrudeApply(); };
+      el.querySelectorAll('[data-exstep]').forEach((b) => { b.onclick = () => setDist(r3(ex.dist + (+b.dataset.exstep)), true); });
+      const lab = el.querySelector('[data-exscrub]');
+      lab.onpointerdown = (e) => {
+        e.preventDefault(); lab.setPointerCapture(e.pointerId); const x0 = e.clientX; const d0 = ex.dist; let moved = false;
+        lab.onpointermove = (ev2) => { const dx = ev2.clientX - x0; if (!moved && Math.abs(dx) < 3) return; moved = true; const step = ev2.shiftKey ? 0.01 : 0.1; setDist(r3(Math.round((d0 + dx / 12) / step) * step), true); };
+        lab.onpointerup = () => { lab.onpointermove = null; lab.onpointerup = null; };
+      };
+      this._extrudePreview(ex.dist);
+    }
+    // The extrusion the pointer is setting, drawn on the page. Built once per
+    // picked area and scaled along the sketch normal, so dragging the distance
+    // does not rebuild anything and does not wait for the modeler.
+    _extrudePreviewClear() {
+      const p = this._exPrev; if (!p) return;
+      p.parent && p.parent.remove(p); p.traverse((o) => o.geometry && o.geometry.dispose()); this._exPrev = null;
+    }
+    _extrudePreview(d) {
+      const T = this.T; const ex = this.exMode;
+      if (!ex || !ex.sel.size || !d) { this._extrudePreviewClear(); return; }
+      const o = this.objs[ex.id]; if (!o) return;
+      const key = [...ex.sel].sort((a, b) => a - b).join(',') + '|' + ex.op;
+      if (!this._exPrev || this._exPrev.userData.key !== key || this._exPrev.parent !== o.group) {
+        this._extrudePreviewClear();
+        const area = (poly) => { let a = 0; for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; };
+        const col = ex.op === 'cut' ? this.colors.hole : this.colors.accent;
+        const wrap = new T.Group(); wrap.userData.key = key;
+        [...ex.sel].sort((a, b) => a - b).forEach((ri) => {
+          const polys = (ex.regions[ri] || { polys: [] }).polys;
+          const outers = polys.filter((poly) => area(poly) > 0); const holes = polys.filter((poly) => area(poly) < 0);
+          outers.forEach((ob) => {
+            const sh = new T.Shape(ob.map((q) => new T.Vector2(q[0], q[1])));
+            holes.forEach((h) => sh.holes.push(new T.Path(h.map((q) => new T.Vector2(q[0], q[1])))));
+            const g = new T.ExtrudeGeometry(sh, { depth: 1, bevelEnabled: false });
+            const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, depthWrite: false, depthTest: false, side: T.DoubleSide }));
+            const e = new T.LineSegments(new T.EdgesGeometry(g, 20), new T.LineBasicMaterial({ color: col, depthTest: false, transparent: true }));
+            m.renderOrder = 7; e.renderOrder = 8; wrap.add(m, e);
+          });
+        });
+        o.group.add(wrap); this._exPrev = wrap;
+      }
+      const ad = Math.abs(d); this._exPrev.scale.z = ad; this._exPrev.position.z = d < 0 ? -ad : 0;
     }
     _extrudeApply() {
       const ex = this.exMode; if (!ex || !ex.sel.size) return;
@@ -1377,7 +1980,8 @@
       const profiles = [];
       [...ex.sel].sort((a, b) => a - b).forEach((ri) => { (ex.regions[ri] || { polys: [] }).polys.forEach((poly) => profiles.push(area(poly) >= 0 ? { k: 'poly', pts: poly } : { k: 'poly', pts: poly, cut: true })); });
       // all of it: keep the sketch's own shapes (rectangles, circles, cut-outs stay editable)
-      if (ex.sel.size === ex.regions.length) { profiles.length = 0; sk.profiles.forEach((q) => profiles.push(JSON.parse(JSON.stringify(q)))); }
+      if (!ex.fromFace && ex.sel.size === ex.regions.length) { profiles.length = 0; sk.profiles.forEach((q) => profiles.push(JSON.parse(JSON.stringify(q)))); }
+      this._extrudePreview(0);
       this._snapshot();
       const shape = C.newItem('sketch', { name: this._uniqueName(ex.op === 'cut' ? 'Cut' : ex.op === 'split' ? 'Splitter' : 'Extrude'), pos: sk.pos.slice(), rot: sk.rot.slice(), flip: sk.flip, height: ex.dist, profiles, role: ex.op === 'cut' ? 'hole' : 'solid' });
       this.data.items.push(shape);
@@ -1404,6 +2008,92 @@
     _placeMatrix(it) {
       const T = this.T; const o = new T.Object3D(); o.rotation.order = 'ZYX'; this._placeObj(o, it); o.updateMatrixWorld(true);
       return o.matrixWorld.clone();
+    }
+    // A face Push / Pull / Fill is its own shape, parked in world space on the
+    // solid it cuts. These follow that solid when the solid itself is moved.
+    _faceHost(f) {
+      if (!f || !f.center || !f.n) return '';
+      const T = this.T; const c = f.center.clone().addScaledVector(f.n, -0.2);
+      let best = '', bestV = Infinity;
+      for (const it of this.data.items) {
+        if (it.role !== 'solid' || it.hidden || it.draft || it.type === 'image' || this._isHistory(it)) continue;
+        const b = this._boundsOf([it.id]); if (b.isEmpty() || !b.clone().expandByScalar(0.4).containsPoint(c)) continue;
+        const s = b.getSize(new T.Vector3()); const vol = s.x * s.y * s.z;
+        if (vol < bestV) { bestV = vol; best = it.id; }
+      }
+      return best;
+    }
+    _tagFaceHost(it, f) { if (!it || (it.host && this._item(it.host)) || !f) return; const id = this._faceHost(f); if (id) it.host = id; }
+    // Where each solid's face features are, before those solids move. A feature
+    // already in the move is left to that move. An older push with no host is
+    // claimed by the smallest solid that contains it.
+    _planFollow(ids) {
+      const T = this.T; const skip = new Set(ids); const plans = new Map();
+      for (const id of ids) {
+        const it = this._item(id); if (!it) continue;
+        plans.set(id, { id, before: this._placeMatrix(it), poses: [] });
+      }
+      const hist = this.data.items.filter((it) => this._isHistory(it) && !skip.has(it.id));
+      if (hist.length) {
+        const solids = [];
+        if (hist.some((it) => !(it.host && this._item(it.host)))) {
+          for (const h of this.data.items) {
+            if (h.role !== 'solid' || h.hidden || h.draft || h.type === 'image' || this._isHistory(h)) continue;
+            const hb = this._boundsOf([h.id]); if (hb.isEmpty()) continue;
+            const s = hb.getSize(new T.Vector3()); solids.push({ id: h.id, box: hb, vol: s.x * s.y * s.z });
+          }
+        }
+        const claimed = new Set();
+        for (const it of hist) {
+          if (claimed.has(it.id)) continue;
+          let owner = it.host && this._item(it.host) ? it.host : '';
+          if (!owner) {
+            const b = this._boundsOf([it.id]); if (b.isEmpty()) continue;
+            const c = b.getCenter(new T.Vector3()); const reach = Math.max(0.4, b.getSize(new T.Vector3()).length() * 0.51);
+            let bestV = Infinity;
+            for (const s of solids) { if (!s.box.clone().expandByScalar(reach).containsPoint(c)) continue; if (s.vol < bestV) { bestV = s.vol; owner = s.id; } }
+          }
+          const plan = plans.get(owner); if (!plan) continue;
+          claimed.add(it.id); plan.poses.push({ id: it.id, m: this._placeMatrix(it) });
+        }
+      }
+      return ids.map((id) => plans.get(id) || null);
+    }
+    _rigidChanged(before, after) {
+      const T = this.T; const a = new T.Vector3(), b = new T.Vector3(), qa = new T.Quaternion(), qb = new T.Quaternion(), sa = new T.Vector3(), sb = new T.Vector3();
+      before.decompose(a, qa, sa); after.decompose(b, qb, sb);
+      return a.distanceToSquared(b) > 1e-8 || qa.angleTo(qb) > 1e-5 || Math.abs(sa.x * sa.y * sa.z - sb.x * sb.y * sb.z) > 1e-6;
+    }
+    // Same rigid motion the solid just took, applied to a feature's start placement.
+    _applyDelta(it, delta, startM) {
+      const T = this.T; const f = it.flip || [];
+      const F = new T.Matrix4().makeScale(f[0] ? -1 : 1, f[1] ? -1 : 1, f[2] ? -1 : 1);
+      const pos = new T.Vector3(), q = new T.Quaternion(), sc = new T.Vector3(), eu = new T.Euler();
+      new T.Matrix4().multiplyMatrices(delta, startM).multiply(F).decompose(pos, q, sc);
+      eu.setFromQuaternion(q, 'ZYX');
+      it.pos = [r3(pos.x), r3(pos.y), r3(pos.z)];
+      it.rot = [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)].map((v) => (Math.abs(v) < 1e-6 ? 0 : v));
+    }
+    _replayFollow(plans) {
+      if (!plans) return;
+      for (const p of plans) {
+        if (!p || !p.poses.length) continue;
+        const it = this._item(p.id); if (!it) continue;
+        const after = this._placeMatrix(it); if (!this._rigidChanged(p.before, after)) continue;
+        const delta = after.clone().multiply(p.before.clone().invert());
+        for (const pose of p.poses) {
+          const ft = this._item(pose.id); if (!ft) continue;
+          this._applyDelta(ft, delta, pose.m);
+          if (!ft.host) ft.host = p.id;
+          const o = this.objs[ft.id]; if (o) this._placeObj(o.group, ft);
+        }
+      }
+    }
+    _grabFeat(id) { const p = this._planFollow([id])[0]; this._featGrab = p && p.poses.length ? p : null; }
+    _shiftIds(ids, dv) {
+      const plans = this._planFollow(ids);
+      ids.forEach((id) => { const it = this._item(id); if (it) it.pos = it.pos.map((v, i) => r3(v + dv[i])); });
+      this._replayFollow(plans);
     }
     _splitWith(cutterId, cutOnly, only, noBake) {
       const cutter = this._item(cutterId); if (!cutter || this.readOnly) return;
@@ -1433,41 +2123,60 @@
       this._autoSeparate(targets.concat(pieces), base);
     }
 
-    // ---------- cut with a plane ----------
+    // ---------- cut the current object with a plane ----------
+    // The selection is one object (a combined object counts as one). Face edits
+    // stay inside it and are cut with it. There is no list of pieces to pick.
+    _cutName(ids) {
+      const seen = new Set(); const names = [];
+      ids.forEach((id) => {
+        const it = this._item(id); if (!it) return;
+        const g = it.group;
+        if (g) { if (seen.has(g)) return; seen.add(g); names.push((this.data.groups[g] || {}).name || 'Combined'); }
+        else if (!this._isHistory(it)) names.push(it.name);
+      });
+      if (names.length === 1) return names[0];
+      if (names.length > 1) return names.length + ' objects';
+      const it = this._item(ids[0]); return it ? it.name : 'object';
+    }
     _cutStart() {
-      const ids = this._selIds().filter((id) => { const it = this._item(id); return it && it.type !== 'image'; });
-      if (!ids.length || this.readOnly) return;
+      const raw = [];
+      this._selIds().forEach((id) => { (this._gid(id) ? this._members(this._gid(id)) : [id]).forEach((x) => { if (!raw.includes(x)) raw.push(x); }); });
+      const ids = raw.filter((id) => { const it = this._item(id); return it && it.type !== 'image' && it.role === 'solid' && !it.draft; });
+      if (!ids.length || this.readOnly) { if (!this.readOnly && this._selIds().length) this._toast('Only a solid object can be cut', 'err'); return; }
       const b = this._boundsOf(ids); if (b.isEmpty()) return;
       const c = b.getCenter(new this.T.Vector3());
-      this.cutMode = { ids, on: new Set(ids.filter((id) => (this._item(id) || {}).role === 'solid')), axis: this._cutAxis == null ? 2 : this._cutAxis, at: 0, box: b, center: c };
-      this._cutShowSel();
-      this.cutMode.at = r3(c.getComponent(this.cutMode.axis));
+      const axis = this._cutAxis == null ? 2 : this._cutAxis;
+      this.cutMode = { ids, name: this._cutName(raw), axis, at: r3(c.getComponent(axis)), box: b, center: c };
       if (this.tc.object) this.tc.detach();
       this._cutPreview(); this._renderCutPanel();
     }
     _cutEnd() {
       if (!this.cutMode) return;
-      const ids = this.cutMode.ids; this.cutMode = null;
+      const ids = this.cutMode.ids; this.cutMode = null; this._cutDrag = null;
       if (this._cutPlane) { this.scene.remove(this._cutPlane); this._cutPlane.traverse((o) => o.geometry && o.geometry.dispose()); this._cutPlane = null; }
       this._inspFor = null; this._setSel(ids.filter((id) => this._item(id)));
     }
-    // Chosen objects are highlighted like a selection; bounds follow the choice.
-    _cutShowSel() {
+    _cutSetAt(v) {
       const cm = this.cutMode; if (!cm) return;
-      const on = [...cm.on].filter((id) => this._item(id));
-      this.sel = on.length === 1 ? on[0] : null; this.multi = on.length > 1 ? on : [];
-      const b = this._boundsOf(on.length ? on : cm.ids);
-      if (!b.isEmpty()) { cm.box = b; cm.center = b.getCenter(new this.T.Vector3()); }
-      this._refreshItems();
+      cm.at = r3(v);
+      const inp = this.inspEl && this.inspEl.querySelector('[data-cutat]');
+      if (inp && document.activeElement !== inp) inp.value = cm.at;
+      this._cutPreview();
     }
-    _cutToggle(id) {
-      const cm = this.cutMode; const it = this._item(id); if (!cm || !it) return;
-      const unit = this._expand([id]);
-      const turnOn = !unit.every((x) => cm.on.has(x));
-      unit.forEach((x) => { if (!cm.ids.includes(x)) cm.ids.push(x); if (turnOn && (this._item(x) || {}).role === 'solid') cm.on.add(x); else cm.on.delete(x); });
-      if (turnOn && !unit.some((x) => (this._item(x) || {}).role === 'solid')) this._toast('Only Solid objects can be cut', 'err');
-      this._cutShowSel(); this._cutPreview(); this._renderCutPanel();
+    // One millimetre along the plane normal, in screen pixels, so a drag follows the cursor.
+    _cutScreenAxis() {
+      const T = this.T; const cm = this.cutMode; const r = this.renderer.domElement.getBoundingClientRect();
+      const n = new T.Vector3(); n.setComponent(cm.axis, 1);
+      const o = cm.center.clone(); o.setComponent(cm.axis, cm.at);
+      const toS = (p) => { const q = p.clone().project(this.camera); return [(q.x + 1) / 2 * r.width + r.left, (1 - q.y) / 2 * r.height + r.top]; };
+      const a = toS(o), b = toS(o.clone().add(n));
+      const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+      if (len >= 2) return { ax: dx / len, ay: dy / len, mmPerPx: 1 / len };
+      const dist = this.camera.position.distanceTo(o) || 1;
+      const span = this.camera.isOrthographicCamera ? Math.abs(this.ortho.top - this.ortho.bottom) / (this.camera.zoom || 1) : 2 * Math.tan((this.persp.fov * Math.PI / 180) / 2) * dist;
+      return { ax: 0, ay: -1, mmPerPx: span / (r.height || 1) };
     }
+    _cutPlaneHit(e) { return !!(this._cutPlane && this._ray(e).intersectObject(this._cutPlane, true).length); }
     _cutPreview() {
       const T = this.T; const cm = this.cutMode; if (!cm) return;
       if (this._cutPlane) { this.scene.remove(this._cutPlane); this._cutPlane.traverse((o) => o.geometry && o.geometry.dispose()); }
@@ -1491,14 +2200,12 @@
       const AX = 'XYZ'[cm.axis];
       const sideName = [['Right (+X)', 'Left (−X)'], ['Back (+Y)', 'Front (−Y)'], ['Top (+Z)', 'Bottom (−Z)']][cm.axis];
       el.innerHTML = `
-        <div class="cad-insp-head"><div class="cad-name">Cut ${cm.ids.length > 1 ? cm.ids.length + ' objects' : esc((this._item(cm.ids[0]) || {}).name || '')}</div><button type="button" class="cad-icon-btn" data-cutx title="Cancel (Esc)">✕</button></div>
-        <div class="cad-sec-t">Objects to cut</div>
-        <div class="cad-sel-list cad-cutlist">${cm.ids.map((id) => this._item(id)).filter(Boolean).map((x) => `<button type="button" data-cuton="${esc(x.id)}" class="${cm.on.has(x.id) ? 'on' : ''}" ${x.role !== 'solid' ? 'disabled title="Only Solid objects can be cut"' : 'title="Tap to include / leave out"'}><span class="cad-dot ${x.role}"></span>${esc(x.name)}</button>`).join('')}</div>
-        <p class="cad-hint">Tap objects here or in the view to choose which are cut (${cm.on.size} chosen).</p>
-        <div class="cad-sec-t">Plane across</div>
-        <div class="cad-seg2 cad-seg3">${['X', 'Y', 'Z'].map((a, i) => `<button type="button" data-cutaxis="${i}" class="${cm.axis === i ? 'on' : ''}">${a}</button>`).join('')}</div>
+        <div class="cad-insp-head"><div class="cad-name">Cut ${esc(cm.name)}</div><button type="button" class="cad-icon-btn" data-cutx title="Cancel (Esc)">✕</button></div>
+        <div class="cad-sec-t">Plane</div>
+        <div class="cad-seg2 cad-seg3">${[['2', 'Floor', 'Horizontal cut, the XY plane'], ['1', 'Front', 'Cut facing you, the XZ plane'], ['0', 'Side', 'Cut from the side, the YZ plane']].map(([i, name, tip]) => `<button type="button" data-cutaxis="${i}" class="${cm.axis === +i ? 'on' : ''}" title="${tip}">${name}</button>`).join('')}</div>
+        <p class="cad-hint">Drag the red plane to move the cut. Floor, Front and Side turn it.</p>
         <div class="cad-grid"><label class="cad-field wide"><span class="cad-scrub" data-cutscrub>${AX} at</span><input type="text" inputmode="decimal" data-cutat value="${cm.at}"><em>mm</em></label></div>
-        <p class="cad-hint">The selection spans ${AX} ${lo} → ${hi}. The red plane shows the cut.</p>
+        <p class="cad-hint">The object spans ${AX} ${lo} → ${hi}.</p>
         <div class="cad-quick"><button type="button" data-cutmid>Middle</button><button type="button" data-cutstep="-1">−1</button><button type="button" data-cutstep="1">+1</button></div>
         <div class="cad-sec">
           <button type="button" class="cad-wide-btn cad-combine" data-cutdo="split">Split into 2 objects</button>
@@ -1506,11 +2213,9 @@
           <p class="cad-hint">Holes and references are not cut — holes still cut whatever they overlap.</p>
         </div>`;
       el.querySelector('[data-cutx]').onclick = () => this._cutEnd();
-      el.querySelectorAll('[data-cuton]').forEach((b) => { b.onclick = () => this._cutToggle(b.dataset.cuton); });
-      el.querySelectorAll('[data-cutdo]').forEach((b) => { b.disabled = !cm.on.size; });
       el.querySelectorAll('[data-cutaxis]').forEach((b) => { b.onclick = () => { cm.axis = this._cutAxis = +b.dataset.cutaxis; cm.at = r3(cm.center.getComponent(cm.axis)); this._cutPreview(); this._renderCutPanel(); }; });
       const inp = el.querySelector('[data-cutat]');
-      const setAt = (v) => { cm.at = r3(v); inp.value = cm.at; this._cutPreview(); };
+      const setAt = (v) => this._cutSetAt(v);
       inp.onchange = () => setAt(evalNum(inp.value, cm.at));
       inp.onkeydown = (e) => { if (e.key === 'Enter') { inp.dispatchEvent(new Event('change')); inp.select(); } };
       el.querySelector('[data-cutmid]').onclick = () => setAt(cm.center.getComponent(cm.axis));
@@ -1533,8 +2238,8 @@
     }
     _cutApply(how) {
       const cm = this.cutMode; if (!cm || this.readOnly) return;
-      const targets = [...cm.on].filter((id) => { const it = this._item(id); return it && it.role === 'solid' && !it.draft; });
-      if (!targets.length) { this._toast('Choose at least one Solid object to cut', 'err'); return; }
+      const targets = cm.ids.filter((id) => { const it = this._item(id); return it && it.role === 'solid' && !it.draft; });
+      if (!targets.length) { this._toast('Only a solid object can be cut', 'err'); return; }
       const { axis, at } = cm;
       if (how === 'split') {
         this._snapshot(); this._bakeHoles(targets); this._skipSnap = true;
@@ -1577,7 +2282,8 @@
       ids.forEach((id) => { delete this._item(id).group; });
       delete this.data.groups[gid];
       this._commit(); this._setSel(ids, true);
-      this._toast('Uncombined — ' + ids.length + ' separate objects again');
+      const nObj = ids.map((id) => this._item(id)).filter((it) => it && !this._isHistory(it)).length;
+      this._toast('Uncombined — ' + (nObj || ids.length) + ' separate objects again');
     }
     // Drop groups left with fewer than 2 parts (after delete / uncombine of parts).
     _tidyGroups() {
@@ -1662,6 +2368,7 @@
       if (v.every((x) => Math.abs(x) < 1e-9)) return;
       const T = this.T;
       this._snapshot();
+      const follow = this._planFollow(ids);
       if (kind === 'move') {
         ids.forEach((id) => { const it = this._item(id); if (it) it.pos = it.pos.map((p, i) => r3(p + v[i])); });
       } else {
@@ -1679,6 +2386,7 @@
           it.rot = [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)].map((x) => (Math.abs(x) < 1e-6 ? 0 : x));
         });
       }
+      this._replayFollow(follow);
       this._commit(); this._refreshItems(); if (this.multi.length) this._placeProxy();
       this._inspFor = null; this._renderInspector();
       this._toast(kind === 'move' ? 'Moved' : 'Rotated', 'ok');
@@ -1720,6 +2428,7 @@
       const newGid = {}; // a copied combined object gets its own new group
       const copies = ids.map((id) => this._item(id)).filter(Boolean).map((it) => {
         const c = C.normalizeItem(Object.assign(JSON.parse(JSON.stringify(it)), { id: C.uid('i_'), name: this._uniqueName(it.name.replace(/ \d+$/, '')) }));
+        delete c.host;
         if (it.group) {
           if (!newGid[it.group]) { newGid[it.group] = C.uid('g_'); this.data.groups[newGid[it.group]] = { name: ((this.data.groups[it.group] || {}).name || 'Combined') + ' copy' }; }
           c.group = newGid[it.group];
@@ -1732,7 +2441,9 @@
     _editMany(ids, fn) {
       if (this.readOnly) return;
       this._snapshot();
+      const follow = this._planFollow(ids);
       ids.forEach((id) => { const it = this._item(id); if (it) { fn(it); Object.assign(it, C.normalizeItem(it)); } });
+      this._replayFollow(follow);
       this._refreshItems(); this._commit();
     }
     // Move / rotate the whole selection as one rigid object (relative positions kept).
@@ -1788,6 +2499,7 @@
       it.pos = [r3(g.position.x), r3(g.position.y), r3(g.position.z)];
       g.rotation.reorder ? g.rotation.reorder('ZYX') : null;
       it.rot = [r3(g.rotation.x / DEG), r3(g.rotation.y / DEG), r3(g.rotation.z / DEG)];
+      if (this._featGrab && this._featGrab.id === it.id) this._replayFollow([this._featGrab]);
       this._fillTransform();
       this._dimUpdate(!final);
       if (final) { this._changed(); this._requestBuild(); } else this._requestBuild(true);
@@ -1831,14 +2543,76 @@
       const it = this._item(id); if (!it) return;
       this._snapshot();
       const copy = C.normalizeItem(Object.assign(JSON.parse(JSON.stringify(it)), { id: C.uid('i_'), name: this._uniqueName(it.name.replace(/ \d+$/, '')) }));
+      delete copy.host;
       copy.pos = [r3(copy.pos[0] + 10), copy.pos[1], copy.pos[2]];
       this.data.items.push(copy); this.sel = copy.id; this._commit();
+    }
+    // Remember the selection. Paste drops a new copy 10 mm further right each time.
+    _copySel() {
+      const items = this._selIds().map((id) => this._item(id)).filter(Boolean);
+      if (!items.length) { this._toast('Select an object to copy', 'err'); return; }
+      const groups = {};
+      items.forEach((it) => { if (it.group && this.data.groups[it.group]) groups[it.group] = this.data.groups[it.group].name; });
+      this._clip = { items: JSON.parse(JSON.stringify(items)), groups, n: 0 };
+      this.root.querySelectorAll('[data-paste], [data-oa="paste"]').forEach((b) => { b.disabled = false; });
+      this._toast('Copied ' + items.length + ' object' + (items.length > 1 ? 's' : ''));
+    }
+    _paste() {
+      const clip = this._clip; if (this.readOnly || !clip || !clip.items.length) { this._toast('Nothing to paste', 'err'); return; }
+      this._snapshot();
+      clip.n = (clip.n || 0) + 1;
+      const shift = 10 * clip.n;
+      const newGid = {};
+      const copies = clip.items.map((it) => {
+        const c = C.normalizeItem(Object.assign(JSON.parse(JSON.stringify(it)), { id: C.uid('i_'), name: this._uniqueName(String(it.name || 'Object').replace(/ \d+$/, '')) }));
+        delete c.host;
+        if (it.group) {
+          if (!newGid[it.group]) { newGid[it.group] = C.uid('g_'); this.data.groups[newGid[it.group]] = { name: (clip.groups[it.group] || 'Combined') + ' copy' }; }
+          c.group = newGid[it.group];
+        }
+        c.pos = [r3((c.pos[0] || 0) + shift), c.pos[1], c.pos[2]];
+        this.data.items.push(c); return c.id;
+      });
+      this._tidyGroups(); this._commit(); this._setSel(copies);
+      this._toast('Pasted ' + copies.length + ' object' + (copies.length > 1 ? 's' : ''));
+    }
+    _solidsOfSel() {
+      return this._selIds().filter((id) => { const t = this._item(id); return t && t.type !== 'image' && !t.draft; });
+    }
+    _syncObjMenu() {
+      const n = this._selIds().length;
+      const solids = this._solidsOfSel().length;
+      const gid = this._soleGroup() || this._gid(this.sel);
+      const on = {
+        plane: solids > 0, cutobj: solids > 0, split: solids > 0,
+        combine: n >= 2 && !this._soleGroup(), uncombine: !!gid,
+        joinall: this.data.items.some((x) => x.role === 'solid' && !x.hidden && !x.draft && x.type !== 'image'),
+        copy: n > 0, paste: !!(this._clip && this._clip.items && this._clip.items.length), dup: n > 0,
+      };
+      this.root.querySelectorAll('[data-oa]').forEach((b) => { b.disabled = this.readOnly || !on[b.dataset.oa]; });
+    }
+    // One place for the Objects menu: cut, join, copy, paste.
+    _objectAction(a) {
+      if (this.readOnly) return;
+      const ids = this._solidsOfSel();
+      const one = !this.multi.length && this.sel;
+      if (a === 'copy') { this._copySel(); return; }
+      if (a === 'paste') { this._paste(); return; }
+      if (a === 'dup') { if (this.multi.length) this._duplicateMany(this.multi.slice()); else if (this.sel) this._duplicate(this.sel); else this._toast('Select an object to duplicate', 'err'); return; }
+      if (a === 'combine') { if (this._selIds().length < 2) this._toast('Select two or more objects to combine', 'err'); else this._combine(); return; }
+      if (a === 'uncombine') { const gid = this._soleGroup() || this._gid(this.sel); if (!gid) this._toast('This is not a combined object', 'err'); else this._uncombine(gid); return; }
+      if (a === 'joinall') { this._joinAll(); return; }
+      if (a === 'plane') { if (!ids.length) this._toast('Select a solid to cut', 'err'); else this._cutStart(); return; }
+      if (a === 'cutobj') { if (ids.length >= 2) this._chooseCutter('cut', ids); else if (one) this._splitWith(one, true); else this._toast('Select the object that cuts', 'err'); return; }
+      if (a === 'split') { if (ids.length >= 2) this._chooseCutter('split', ids); else if (one) this._splitWith(one); else this._toast('Select the shape that splits', 'err'); }
     }
     _edit(id, fn, rebuild) {
       const it = this._item(id); if (!it || this.readOnly) return;
       this._snapshot();
+      const follow = this._planFollow([id]);
       fn(it);
       Object.assign(it, C.normalizeItem(it));
+      this._replayFollow(follow);
       this._refreshItems(); // place it first, so the panel's Size row reads the new placement
       this._commit(rebuild);
     }
@@ -1945,7 +2719,7 @@
         if (this.edgeMode) this._edgeDraw();
         this._refreshDesign(); this._refreshItems(); this._renderList(); this._renderInspector(true); this._dimUpdate();
         if (this._afterBuildQ && this._afterBuildQ.length) { const q = this._afterBuildQ; this._afterBuildQ = []; q.forEach((f) => { try { f(); } catch (e) { console.error(e); } }); }
-        if (this.faceOn && this.face && !this._faceItem) this._faceDrawRegion(this.face, 'sel');
+        if (this.faceOn && (this.faces || []).length) this._faceDrawSel();
         this._codeStatus();
         const nErr = Object.keys(this.errors).length;
         this._setStatus(nErr ? nErr + ' shape' + (nErr > 1 ? 's' : '') + ' need attention' : (this.result ? 'Ready · ' + m.ms + ' ms' : 'Add a shape to start'), nErr ? 'warn' : 'ok');
@@ -2040,8 +2814,8 @@
       q('.cad-scalebar').classList.toggle('hidden', this.mode !== 'scale' || !(this.sel || this.multi.length) || this.readOnly || !!(this.sk || this.faceOn || this.edgeMode || this.cutMode));
       this._renderActBar();
       q('[data-multimode]').classList.toggle('on', this.multiMode);
-      { const vis = this.data.items.filter((it) => !it.hidden); const ids = this._selIds();
-        q('[data-selall]').classList.toggle('on', vis.length > 1 && ids.length === vis.length);
+      { const vis = this.data.items.filter((it) => !it.hidden && !this._isHistory(it)); const ids = this._selIds();
+        q('[data-selall]').classList.toggle('on', vis.length > 1 && vis.every((it) => ids.includes(it.id)));
         q('[data-selall]').disabled = !vis.length; }
       this.root.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === this.mode));
       q('[data-holes]').classList.toggle('on', this.showHoles);
@@ -2053,16 +2827,21 @@
     _renderList() {
       const body = this.listEl.querySelector('.cad-list-body');
       const seen = new Set(); const rows = [];
-      this.data.items.forEach((it) => { if (!it.group) rows.push(it); else if (!seen.has(it.group)) { seen.add(it.group); rows.push(it); } });
+      this.data.items.forEach((it) => {
+        if (this._isHistory(it)) return;
+        if (!it.group) rows.push(it); else if (!seen.has(it.group)) { seen.add(it.group); rows.push(it); }
+      });
       this.listEl.querySelector('.cad-count').textContent = rows.length || '';
       body.innerHTML = rows.length ? rows.map((it) => {
         const g = it.group; const mem = g ? this._members(g).map((x) => this._item(x)) : null;
         const hidden = g ? mem.every((x) => x.hidden) : it.hidden;
+        const err = g ? mem.map((x) => this.errors[x.id]).find(Boolean) : this.errors[it.id];
+        const note = !err && (g ? mem.map((x) => this.notes[x.id]).find(Boolean) : this.notes[it.id]);
         return `
         <div class="cad-row ${this._isSel(it.id) ? 'sel' : ''} ${hidden ? 'off' : ''} ${g ? 'grp' : ''}" data-id="${esc(it.id)}">
           <span class="cad-dot ${g ? 'combo' : it.role}"></span>
-          <span class="cad-row-name">${esc(g ? (this.data.groups[g] || {}).name || 'Combined' : it.name)}${g ? ' <em>' + mem.length + ' parts</em>' : ''}</span>
-          ${this.errors[it.id] ? '<span class="cad-flag err" title="' + esc(this.errors[it.id]) + '">!</span>' : this.notes[it.id] ? '<span class="cad-flag" title="' + esc(this.notes[it.id]) + '">i</span>' : ''}
+          <span class="cad-row-name">${esc(g ? (this.data.groups[g] || {}).name || 'Combined' : it.name)}</span>
+          ${err ? '<span class="cad-flag err" title="' + esc(err) + '">!</span>' : note ? '<span class="cad-flag" title="' + esc(note) + '">i</span>' : ''}
           ${(g ? mem.some((x) => this.floating && this.floating[x.id] != null) : this.floating && this.floating[it.id] != null) ? '<span class="cad-flag float" title="Floating above the build plate — needs support">⤒</span>' : ''}
           <button type="button" class="cad-icon-btn" data-vis title="${hidden ? 'Show' : 'Hide'}">${hidden ? ICON.eyeOff : ICON.eye}</button>
         </div>`; }).join('') : '<p class="cad-empty">No shapes yet. Add a box or import a model.</p>';
@@ -2142,13 +2921,11 @@
             <button type="button" data-mirror="0" title="Flip X: turn it over left ↔ right" ${ro ? 'disabled' : ''}>${ICON.flip}<span>X</span></button>
             <button type="button" data-mirror="1" title="Flip Y: turn it over front ↔ back" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Y</span></button>
             <button type="button" data-mirror="2" title="Flip Z: turn it over top ↔ bottom" ${ro ? 'disabled' : ''}>${ICON.flip}<span>Z</span></button>
-            <button type="button" data-cutstart title="Cut with a plane: split into 2 objects or keep one side" ${ro ? 'disabled' : ''}>Cut by plane</button>
-            <button type="button" data-cutobj title="Cut this object's shape out of every Solid it overlaps (this object is used up)" ${ro ? 'disabled' : ''}>Cut by object</button>
           </div>
         </div>
 ` : ''}
         ${it.type === 'sketch' && it.draft ? `<div class="cad-sec"><div class="cad-sec-t">2D sketch</div>
-          <p class="cad-hint">Outlines only — nothing is solid yet. Extrude its areas (all, or the ones you tap) into shapes.</p>
+          <p class="cad-hint">${it.faceCut && it.splits && it.splits.length ? 'These points cut the face. Extrude, then tap the part of the face you want.' : 'Outlines only — nothing is solid yet. Extrude its areas (all, or the ones you tap) into shapes.'}</p>
           <button type="button" class="cad-wide-btn cad-combine" data-extrude ${ro ? 'disabled' : ''}>Extrude…</button>
           <button type="button" class="cad-wide-btn" data-editsketch ${ro ? 'disabled' : ''}>${ICON.sketch} Edit sketch</button>
           <div class="cad-sec-t">Plane</div>
@@ -2157,7 +2934,7 @@
           <p class="cad-hint">Or turn it freely with the rotate tool (R).</p>
         </div>` : ''}
         ${it.type === 'sketch' && !it.draft ? `<div class="cad-sec"><div class="cad-sec-t">Sketch</div>
-          <div class="cad-grid">${this._field('Height', 'height', it.height, { unit: 'mm', min: 0.05, wide: true })}</div>
+          <div class="cad-grid">${this._field('Height', 'height', it.height, { unit: 'mm', min: 0.001, wide: true })}</div>
           ${it.profiles.map((pr, i) => {
             const f = (L, k, v, o) => this._field(L, 'profiles.' + i + '.' + k, v, o);
             const icon = { rect: '▭', circle: '◯', slot: '⬭', ngon: '⬡', poly: '⬠' }[pr.k];
@@ -2213,6 +2990,13 @@
         </div></div>
 
         <div class="cad-sec">
+          ${it.type !== 'image' && !it.draft ? `<div class="cad-sec-t">Cut</div>
+          <div class="cad-iconrow">
+            <button type="button" data-cutstart title="Cut with a plane: split into 2 objects or keep one side" ${ro ? 'disabled' : ''}>By plane</button>
+            <button type="button" data-cutobj title="Cut this object's shape out of every Solid it overlaps (this object is used up)" ${ro ? 'disabled' : ''}>By object</button>
+          </div>
+          <div class="cad-sec-t">Join</div>
+          <button type="button" class="cad-wide-btn" data-joinone ${ro ? 'disabled' : ''} title="Every visible solid becomes one piece, and every cut is merged in">Join all into one solid</button>` : ''}
           ${this.sel && !this.multi.length && (this._item(this.sel) || {}).type !== 'image' ? `<button type="button" class="cad-wide-btn cad-combine" data-splitwith ${ro ? 'disabled' : ''} title="Every Solid this shape overlaps is split into the part outside it and the part inside it — no gap">Split objects with this shape</button>` : ''}
           <details class="cad-pattern"><summary>Pattern…</summary>
             <div class="cad-seg2"><button type="button" data-pkind="linear" class="${this._pkind !== 'circular' ? 'on' : ''}">Row</button><button type="button" data-pkind="circular" class="${this._pkind === 'circular' ? 'on' : ''}">Circle</button></div>
@@ -2231,6 +3015,8 @@
           </details>
         </div>
         <div class="cad-actions">
+          <button type="button" data-copy ${ro ? 'disabled' : ''}>Copy</button>
+          <button type="button" data-paste ${ro || !this._clip ? 'disabled' : ''}>Paste</button>
           <button type="button" data-dup ${ro ? 'disabled' : ''}>Duplicate</button>
           <button type="button" data-del class="danger" ${ro ? 'disabled' : ''}>Delete</button>
         </div>`;
@@ -2244,15 +3030,17 @@
       if (fromBuild && this._inspFor === key) { this._renderDims(); return; }
       this._inspFor = key;
       const items = ids.map((id) => this._item(id)).filter(Boolean);
-      const roles = new Set(items.map((i) => i.role));
+      const listed = items.filter((i) => !this._isHistory(i));
+      const parts = listed.length ? listed : items;
+      const roles = new Set(parts.map((i) => i.role));
       const gid = this._soleGroup();
       const pieces = gid && this.groupPieces ? this.groupPieces[gid] : 0;
       const al = (axis, label, hint) => `<div class="cad-align"><b class="ax-${axis}">${axis.toUpperCase()}</b>${label.map(([w, t, h]) => `<button type="button" data-align="${axis}:${w}" title="${h}" ${ro ? 'disabled' : ''}>${t}</button>`).join('')}</div>`;
       el.innerHTML = `
         <div class="cad-insp-head">${gid
           ? `<input class="cad-name" data-gname value="${esc((this.data.groups[gid] || {}).name || 'Combined')}" ${ro ? 'disabled' : ''} spellcheck="false">`
-          : `<div class="cad-name">${ids.length} objects</div>`}<button type="button" class="cad-icon-btn" data-close title="Clear selection (Esc)">✕</button></div>
-        ${gid ? `<p class="cad-combo-tag">Combined object · ${ids.length} parts · exports as one part</p>` : ''}
+          : `<div class="cad-name">${parts.length} object${parts.length === 1 ? '' : 's'}</div>`}<button type="button" class="cad-icon-btn" data-close title="Clear selection (Esc)">✕</button></div>
+        ${gid ? `<p class="cad-combo-tag">Combined object · exports as one part</p>` : ''}
         ${gid && pieces > 1 ? `<p class="cad-msg">The parts don't touch — this prints as <b>${pieces} separate pieces</b>. Move them together (touching or overlapping) to make one piece.</p>` : ''}
         <div class="cad-roles" role="radiogroup">${C.ROLES.map((r) => `<button type="button" data-role="${r}" class="${roles.size === 1 && roles.has(r) ? 'on ' + r : ''}" title="Set all to ${ROLE_LABEL[r]}" ${ro ? 'disabled' : ''}>${ROLE_LABEL[r]}</button>`).join('')}</div>
         <div class="cad-dims" title="Size of the whole selection"></div>
@@ -2305,12 +3093,14 @@
             <button type="button" class="cad-wide-btn" data-pmake ${ro ? 'disabled' : ''}>Make copies</button>
           </details>
         </div>
-        <div class="cad-sec-t" style="margin-top:8px">${gid ? 'Parts — tap one to edit it' : 'Selected'}</div>
-        <div class="cad-sel-list">${items.map((i) => `<button type="button" data-only="${esc(i.id)}" title="${gid ? 'Edit just this part' : 'Select only this'}"><span class="cad-dot ${i.role}"></span>${esc(i.name)}</button>`).join('')}</div>
+        ${gid ? '' : `<div class="cad-sec-t" style="margin-top:8px">Selected</div>
+        <div class="cad-sel-list">${parts.map((i) => `<button type="button" data-only="${esc(i.id)}" title="Select only this"><span class="cad-dot ${i.role}"></span>${esc(i.name)}</button>`).join('')}</div>`}
         ${gid
           ? `<button type="button" class="cad-wide-btn" data-uncombine ${ro ? 'disabled' : ''}>Uncombine</button>`
           : `<button type="button" class="cad-wide-btn cad-combine" data-combine ${ro ? 'disabled' : ''} title="Make these one object — positions and sizes stay the same">Combine into one object</button>`}
         <div class="cad-actions">
+          <button type="button" data-copy ${ro ? 'disabled' : ''}>Copy</button>
+          <button type="button" data-paste ${ro || !this._clip ? 'disabled' : ''}>Paste</button>
           <button type="button" data-mdup ${ro ? 'disabled' : ''}>Duplicate</button>
           <button type="button" data-mdel class="danger" ${ro ? 'disabled' : ''}>Delete</button>
         </div>`;
@@ -2341,6 +3131,8 @@
       const gn = el.querySelector('[data-gname]');
       if (gn) { gn.onchange = () => { const v = gn.value.trim(); if (!v || !this.data.groups[gid]) return; this._snapshot(); this.data.groups[gid].name = v.slice(0, 80); this._changed(); this._renderList(); }; gn.onkeydown = (e) => { if (e.key === 'Enter') gn.blur(); }; }
       el.querySelector('[data-mdup]').onclick = () => this._duplicateMany(this.multi.slice());
+      const mcp = el.querySelector('[data-copy]'); if (mcp) mcp.onclick = () => this._copySel();
+      const mps = el.querySelector('[data-paste]'); if (mps) mps.onclick = () => this._paste();
       el.querySelector('[data-mdel]').onclick = () => this._deleteMany(this.multi.slice());
     }
     _renderMsgs() {
@@ -2411,6 +3203,8 @@
           const it = this._item(id); if (!it) return;
           e.preventDefault(); lab.setPointerCapture(e.pointerId);
           const x0 = e.clientX; const v0 = +getPath(it, f) || 0; let moved = false; let snapped = false;
+          const movePose = f.startsWith('pos') || f.startsWith('rot');
+          if (movePose) this._grabFeat(id);
           const inp = lab.parentElement.querySelector('input');
           lab.onpointermove = (ev) => {
             const dx = ev.clientX - x0;
@@ -2419,11 +3213,13 @@
             const v = Math.max(min, r3(Math.round((v0 + (dx / 4) * step) / step) * step));
             const cur = this._item(id); if (!cur) return;
             setPath(cur, f, v); Object.assign(cur, C.normalizeItem(cur)); inp.value = getPath(cur, f); snapped = true;
-            if (f.startsWith('pos') || f.startsWith('rot')) this._refreshItems();
+            if (movePose && this._featGrab && this._featGrab.id === id) this._replayFollow([this._featGrab]);
+            if (movePose) this._refreshItems();
             this._requestBuild(true);
           };
           lab.onpointerup = () => {
             lab.onpointermove = null; lab.onpointerup = null;
+            if (movePose) this._featGrab = null;
             if (!moved) { inp.focus(); return; }
             if (snapped) { this._changed(); this._renderChrome(); this._refreshItems(); }
           };
@@ -2485,6 +3281,9 @@
       const es = el.querySelector('[data-editsketch]');
       if (es) es.onclick = () => this._sketchStart(id);
       el.querySelector('[data-dup]').onclick = () => this._duplicate(id);
+      const cp = el.querySelector('[data-copy]'); if (cp) cp.onclick = () => this._copySel();
+      const ps = el.querySelector('[data-paste]'); if (ps) ps.onclick = () => this._paste();
+      const jn = el.querySelector('[data-joinone]'); if (jn) jn.onclick = () => this._joinAll();
       el.querySelector('[data-del]').onclick = () => this._delete(id);
     }
 
@@ -2503,7 +3302,7 @@
       if (!it) {
         const t = this.target || { x: 0, y: 0 };
         const sn = (v) => (this.snapOn && this.data.settings.snap ? Math.round(v / this.data.settings.snap) * this.data.settings.snap : r3(v));
-        it = C.newItem('sketch', onFace ? { name: this._uniqueName('Sketch'), pos: onFace.pos, rot: onFace.rot, height: 0.05, draft: true } : { name: this._uniqueName('Sketch'), pos: [sn(t.x), sn(t.y), 0], height: 0.05, draft: true });
+        it = C.newItem('sketch', onFace ? { name: this._uniqueName('Sketch'), pos: onFace.pos, rot: onFace.rot, height: 0.05, draft: true, ...(onFace.outer ? { faceCut: { outer: onFace.outer, holes: onFace.holes || [] } } : {}) } : { name: this._uniqueName('Sketch'), pos: [sn(t.x), sn(t.y), 0], height: 0.05, draft: true });
         this.data.items.push(it);
         isNew = true;
       }
@@ -2524,7 +3323,7 @@
       this._markView(null);
       this.root.classList.add('cad-sketching');
       this.root.querySelectorAll('[data-skplane]').forEach((b) => b.classList.toggle('on', b.dataset.skplane === (onFace ? '' : (this._skPlane || 'xy'))));
-      this.sk.onFace = !!(onFace && !onFace.plane && !this._planeSwitching);
+      this.sk.onFace = !!it.faceCut || !!(onFace && !onFace.plane && !this._planeSwitching);
       this.root.querySelector('.cad-skbar').classList.remove('hidden');
       this._sketchTool(this.sk.tool);
       this._renderChrome();
@@ -2661,8 +3460,36 @@
       this.root.classList.toggle('cad-skcut', !!sk.cut);
     }
     _sketchMove(e) { this.sk.hover = this._sketchPoint(e); this._sketchDraw(); }
+    // The point a new segment is measured from: the open chain's last point, or the drag start.
+    _sketchAnchor(fallback) {
+      const sk = this.sk; if (!sk) return fallback || null;
+      if (sk.tool === 'line' && sk.pts.length) { const q = sk.pts[sk.pts.length - 1]; return { x: q[0], y: q[1] }; }
+      if (sk.pts.length === 1) return { x: sk.pts[0][0], y: sk.pts[0][1] };
+      return fallback || null;
+    }
+    // Near the horizontal or vertical, the line locks. Same idea as a sketch snap, written here.
+    _sketchLock(a, p) {
+      if (!a || !p) return p;
+      const deg = Math.abs(Math.atan2(p.y - a.y, p.x - a.x) * 180 / Math.PI);
+      const toH = Math.min(deg, Math.abs(180 - deg));
+      const toV = Math.abs(90 - deg);
+      if (toH <= 8 && toH <= toV) return { x: p.x, y: r3(a.y), snapped: true, lock: 'H' };
+      if (toV <= 8) return { x: r3(a.x), y: p.y, snapped: true, lock: 'V' };
+      return p;
+    }
+    _sketchSquare(a, p) {
+      if (!a || !p) return p;
+      const s = Math.max(Math.abs(p.x - a.x), Math.abs(p.y - a.y));
+      return { x: r3(a.x + Math.sign(p.x - a.x || 1) * s), y: r3(a.y + Math.sign(p.y - a.y || 1) * s), snapped: p.snapped };
+    }
+    // A drag is one shape: the press is the first point, the release is the second.
+    _sketchDragCommit(a, b, e) {
+      const sk = this.sk; if (!sk || !b) return;
+      if (!sk.pts.length) sk.pts.push([a.x, a.y]);
+      this._sketchClick({ _pt: b, shiftKey: !!(e && e.shiftKey) });
+    }
     _sketchClick(e) {
-      const p = this._sketchPoint(e);
+      const p = e && e._pt ? e._pt : this._sketchPoint(e);
       if (!p) return;
       const it = this._sketchItem(); const sk = this.sk;
       const add = (prof) => { const pr = C.normalizeProfile(Object.assign(prof, sk.cut ? { cut: true } : {})); if (pr) it.profiles.push(pr); sk.pts = []; sk.pend = null; };
@@ -2681,7 +3508,12 @@
       else {
         const [ax, ay] = sk.pts[0];
         const dist = Math.hypot(p.x - ax, p.y - ay), ang = Math.atan2(p.y - ay, p.x - ax) / DEG;
-        if (sk.tool === 'rect') { const w = Math.abs(p.x - ax), h = Math.abs(p.y - ay); if (w > 0.04 && h > 0.04) add({ k: 'rect', x: (ax + p.x) / 2, y: (ay + p.y) / 2, w, h }); }
+        if (sk.tool === 'rect') {
+          let x2 = p.x, y2 = p.y;
+          if (e && e.shiftKey) { const q = this._sketchSquare({ x: ax, y: ay }, p); x2 = q.x; y2 = q.y; }
+          const w = Math.abs(x2 - ax), h = Math.abs(y2 - ay);
+          if (w > 0.04 && h > 0.04) add({ k: 'rect', x: (ax + x2) / 2, y: (ay + y2) / 2, w, h });
+        }
         else if (sk.tool === 'circle') { if (dist > 0.04) add({ k: 'circle', x: ax, y: ay, r: dist }); }
         else if (sk.tool === 'slot') { const W = this._skSlotW || 6; if (dist > 0.04) add({ k: 'slot', x: (ax + p.x) / 2, y: (ay + p.y) / 2, w: r3(dist + W), h: W, a: r3(ang) }); }
         else if (sk.tool === 'ngon') { if (dist > 0.04) add({ k: 'ngon', x: ax, y: ay, r: r3(dist), n: this._skSides || 6, a: r3(ang - 90) }); }
@@ -2714,6 +3546,9 @@
       }
       ls(solid, lineMat(this.colors.accent, 1));
       ls(cuts, lineMat(this.colors.hole, 1));
+      const splitSegs = [];
+      for (const line of it.splits || []) for (let i = 0; i < line.length - 1; i++) splitSegs.push(line[i][0], line[i][1], 0.05, line[i + 1][0], line[i + 1][1], 0.05);
+      ls(splitSegs, lineMat(this.colors.hole, 1));
       // Rubber band to the pointer.
       const h = sk.hover; let draft = []; let hint = '';
       const col = sk.cut ? this.colors.hole : this.colors.accent;
@@ -2726,7 +3561,7 @@
         draft = loopSegs(open, false);
         const last = open[open.length - 1];
         if (sk.pend) { const arc = [last, ...this._arcPts(last, [h.x, h.y], sk.pend)]; draft.push(...loopSegs(arc, false)); hint = 'Tap where the arc bends through'; }
-        else { draft.push(last[0], last[1], 0.05, h.x, h.y, 0.05); hint = r3(Math.hypot(h.x - last[0], h.y - last[1])) + ' mm' + (sk.arc ? ' · arc: tap its end' : '') + (sk.pts.length >= 3 || (sk.arc && sk.pts.length >= 2) ? ' · tap the first point to close' : ''); }
+        else { draft.push(last[0], last[1], 0.05, h.x, h.y, 0.05); hint = r3(Math.hypot(h.x - last[0], h.y - last[1])) + ' mm' + (h.lock === 'H' ? ' · horizontal' : h.lock === 'V' ? ' · vertical' : '') + (sk.arc ? ' · arc: tap its end' : '') + (sk.pts.length >= 3 || (sk.arc && sk.pts.length >= 2) ? ' · tap the first point to close' : ''); }
       } else if (h && sk.pts.length) {
         const [ax, ay] = sk.pts[0]; const dist = Math.hypot(h.x - ax, h.y - ay), ang = Math.atan2(h.y - ay, h.x - ax) / DEG;
         let o = null;
@@ -2743,19 +3578,84 @@
         const pm = new T.Points(g, new T.PointsMaterial({ color: h && h.snapped ? this.colors.hole : col, size: 9, sizeAttenuation: false, depthTest: false }));
         pm.renderOrder = 12; sk.group.add(pm);
       }
-      const tips = { line: 'Tap points — tap the first point to close', rect: 'Tap two corners', circle: 'Tap the centre, then the edge', slot: 'Tap the centre of one end, then the other', ngon: 'Tap the centre, then a corner' };
+      const tips = { line: sk.onFace ? 'Drag or tap points across the face to cut it — then Extrude one part' : 'Drag a line, or tap points — tap the first point to close', rect: 'Drag two corners, or tap them. Shift keeps it square', circle: 'Drag from the centre to the edge, or tap both', slot: 'Drag from one end to the other, or tap both', ngon: 'Drag from the centre to a corner, or tap both' };
       const n = it.profiles.length;
       this.root.querySelector('.cad-skhint').textContent = hint || ((sk.cut ? 'Cut: ' : '') + tips[sk.tool] + (n ? ' · ' + n + ' shape' + (n > 1 ? 's' : '') : ''));
       this._sketchChrome();
+      this._sketchDims();
+    }
+    _sketchScreen(x, y) {
+      const m = this.sk.frame.matrixWorld;
+      const v = new this.T.Vector3(x, y, 0).applyMatrix4(m).project(this.camera);
+      const r = this.renderer.domElement.getBoundingClientRect();
+      const layer = this.root.querySelector('.cad-mlayer').getBoundingClientRect();
+      return [(v.x + 1) / 2 * r.width + r.left - layer.left, (1 - v.y) / 2 * r.height + r.top - layer.top];
+    }
+    _sketchDimClear() { (this._skDims || []).forEach((el) => el.remove()); this._skDims = []; }
+    // A size on each shape. Click it and type; the shape updates. Lines show each edge.
+    _sketchDims() {
+      if (this._skDimEditing) return;
+      this._sketchDimClear();
+      const it = this._sketchItem(); if (!it || !this.sk) return;
+      const layer = this.root.querySelector('.cad-mlayer');
+      const place = (x, y, text, apply) => {
+        const el = document.createElement('button');
+        el.type = 'button'; el.className = 'cad-dimlabel cad-skdim'; el.textContent = text;
+        const sp = this._sketchScreen(x, y);
+        el.style.transform = 'translate(' + Math.round(sp[0]) + 'px,' + Math.round(sp[1]) + 'px) translate(-50%, -140%)';
+        const stop = (ev) => ev.stopPropagation();
+        el.addEventListener('pointerdown', stop);
+        el.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); this._sketchDimEdit(el, apply); });
+        layer.appendChild(el); this._skDims.push(el);
+      };
+      it.profiles.forEach((p) => {
+        if (p.k === 'rect') {
+          place(p.x, p.y - p.h / 2, r3(p.w) + ' mm', (v) => { if (v > 0.05) p.w = r3(v); });
+          place(p.x + p.w / 2, p.y, r3(p.h) + ' mm', (v) => { if (v > 0.05) p.h = r3(v); });
+        } else if (p.k === 'circle') place(p.x + p.r, p.y, 'Ø ' + r3(p.r * 2), (v) => { if (v > 0.05) p.r = r3(v / 2); });
+        else if (p.k === 'slot') {
+          place(p.x, p.y, r3(p.w) + ' mm', (v) => { if (v > p.h) p.w = r3(v); });
+          place(p.x, p.y + p.h / 2, r3(p.h) + ' wide', (v) => { if (v > 0.05 && v < p.w) p.h = r3(v); });
+        } else if (p.k === 'ngon') place(p.x, p.y, 'Ø ' + r3(p.r * 2), (v) => { if (v > 0.05) p.r = r3(v / 2); });
+        else if (p.k === 'poly' && p.pts && p.pts.length >= 2) {
+          for (let k = 0; k < p.pts.length; k++) {
+            const a = p.pts[k], b = p.pts[(k + 1) % p.pts.length];
+            const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 0.2) continue;
+            place((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, r3(len) + ' mm', (v) => {
+              if (!(v > 0.05)) return;
+              const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+              b[0] = r3(a[0] + dx / L * v); b[1] = r3(a[1] + dy / L * v);
+            });
+          }
+        }
+      });
+    }
+    _sketchDimEdit(el, apply) {
+      if (this._skDimEditing) return;
+      this._skDimEditing = true;
+      const found = String(el.textContent).match(/[\d.]+/);
+      const inp = document.createElement('input');
+      inp.className = 'cad-dim-in'; inp.value = found ? found[0] : '';
+      el.textContent = ''; el.appendChild(inp); inp.focus(); inp.select();
+      let done = false;
+      const finish = (keep) => {
+        if (done) return; done = true; this._skDimEditing = false;
+        if (keep) { const v = evalNum(inp.value, NaN); if (v > 0) apply(v); }
+        this._sketchDraw();
+      };
+      inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); });
+      inp.addEventListener('blur', () => finish(true));
     }
     _sketchEnd(keep, quiet) {
       const sk = this.sk; if (!sk) return;
       const it = this._sketchItem();
       this.scene.remove(sk.group); sk.group.traverse((o) => o.geometry && o.geometry.dispose());
-      this.sk = null;
+      this.sk = null; this._skDrag = null; this._sketchDimClear();
       this.root.classList.remove('cad-sketching', 'cad-skcut');
       this.root.querySelector('.cad-skbar').classList.add('hidden');
-      if (it && (!keep || !it.profiles.length)) {
+      if (it && keep && sk.onFace && sk.tool === 'line' && sk.pts.length >= 2 && !sk.pend) it.splits = (it.splits || []).concat([sk.pts.map((p) => [p[0], p[1]])]);
+      const cutFace = !!(it && it.faceCut && ((it.splits && it.splits.length) || it.profiles.length));
+      if (it && (!keep || (!it.profiles.length && !cutFace))) {
         if (sk.isNew) this.data.items = this.data.items.filter((x) => x.id !== it.id);
         else it.profiles = JSON.parse(sk.before);
         this.undoStack.pop();
@@ -2767,19 +3667,26 @@
       const vs = [];
       it.profiles.filter((p) => !p.cut).forEach((p) => this._outline(p).forEach((q) => vs.push(q)));
       if (!vs.length) it.profiles.forEach((p) => this._outline(p).forEach((q) => vs.push(q)));
-      const cx = r3((Math.min(...vs.map((v) => v[0])) + Math.max(...vs.map((v) => v[0]))) / 2);
-      const cy = r3((Math.min(...vs.map((v) => v[1])) + Math.max(...vs.map((v) => v[1]))) / 2);
-      if (cx || cy) {
-        it.profiles.forEach((p) => { if (p.k === 'poly') p.pts = p.pts.map((q) => (q.length >= 4 ? [r3(q[0] - cx), r3(q[1] - cy), r3(q[2] - cx), r3(q[3] - cy)] : [r3(q[0] - cx), r3(q[1] - cy)])); else { p.x = r3(p.x - cx); p.y = r3(p.y - cy); } });
-        const off = new this.T.Vector3(cx, cy, 0).applyQuaternion(sk.frame.quaternion);
-        it.pos = [r3(it.pos[0] + off.x), r3(it.pos[1] + off.y), r3(it.pos[2] + off.z)];
+      if (!vs.length) (it.splits || []).forEach((line) => line.forEach((q) => vs.push(q)));
+      if (vs.length) {
+        const cx = r3((Math.min(...vs.map((v) => v[0])) + Math.max(...vs.map((v) => v[0]))) / 2);
+        const cy = r3((Math.min(...vs.map((v) => v[1])) + Math.max(...vs.map((v) => v[1]))) / 2);
+        if (cx || cy) {
+          const sh = (p) => [r3(p[0] - cx), r3(p[1] - cy)];
+          it.profiles.forEach((p) => { if (p.k === 'poly') p.pts = p.pts.map((q) => (q.length >= 4 ? [r3(q[0] - cx), r3(q[1] - cy), r3(q[2] - cx), r3(q[3] - cy)] : sh(q))); else { p.x = r3(p.x - cx); p.y = r3(p.y - cy); } });
+          if (it.splits) it.splits = it.splits.map((line) => line.map(sh));
+          if (it.faceCut) it.faceCut = { outer: it.faceCut.outer.map(sh), holes: (it.faceCut.holes || []).map((h) => h.map(sh)) };
+          const off = new this.T.Vector3(cx, cy, 0).applyQuaternion(sk.frame.quaternion);
+          it.pos = [r3(it.pos[0] + off.x), r3(it.pos[1] + off.y), r3(it.pos[2] + off.z)];
+        }
       }
       Object.assign(it, C.normalizeItem(it));
       this.sel = it.id;
-      this._view('iso');
+      // Keep the angle the sketch was drawn from. Snapping back to isometric
+      // threw away the view, especially after a sketch on a face.
       this._commit();
       this._refreshItems();
-      this._toast(it.draft ? 'Sketch saved — tap Extrude… to turn its areas into shapes' : 'Set the height in the panel — or drag the Height label', 'ok');
+      this._toast(it.draft ? (it.faceCut && it.splits && it.splits.length ? 'Face cut — Extrude, then tap the part of the face you want' : 'Sketch saved — tap Extrude… to turn its areas into shapes') : 'Set the height in the panel — or drag the Height label', 'ok');
     }
 
     // ---------- script editor ----------
@@ -2893,36 +3800,123 @@
       this._faceSet(null);
       this.root.classList.toggle('cad-facing', this.faceOn);
       const b = this.root.querySelector('[data-face]'); if (b) b.classList.toggle('on', this.faceOn);
-      if (this.faceOn) this._toast('Tap a flat face of your part');
+      if (this.faceOn) this._toast('Tap faces — each tap adds one, tap it again to remove it');
     }
     _faceAdjacency() {
       if (this._faceAdj) return this._faceAdj;
       const r = this.result; if (!r) return null;
-      const v = r.vertices, t = r.triangles, n = t.length / 3;
-      const normals = new Float64Array(n * 3); const edge = new Map();
-      // vertices at the same spot count as one (the mesh may repeat them along seams)
-      const canon = new Int32Array(v.length / 3); const at = new Map();
-      for (let i = 0; i < canon.length; i++) { const k = Math.round(v[i * 3] * 1e4) + ',' + Math.round(v[i * 3 + 1] * 1e4) + ',' + Math.round(v[i * 3 + 2] * 1e4); const j = at.get(k); if (j === undefined) { at.set(k, i); canon[i] = i; } else canon[i] = j; }
-      for (let i = 0; i < n; i++) {
-        const a = t[i * 3] * 3, b = t[i * 3 + 1] * 3, c = t[i * 3 + 2] * 3;
-        const ux = v[b] - v[a], uy = v[b + 1] - v[a + 1], uz = v[b + 2] - v[a + 2], wx = v[c] - v[a], wy = v[c + 1] - v[a + 1], wz = v[c + 2] - v[a + 2];
-        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; const l = Math.hypot(nx, ny, nz) || 1;
-        normals[i * 3] = nx / l; normals[i * 3 + 1] = ny / l; normals[i * 3 + 2] = nz / l;
-        for (let k = 0; k < 3; k++) { const p = canon[t[i * 3 + k]], q = canon[t[i * 3 + (k + 1) % 3]]; const key = p < q ? p + ',' + q : q + ',' + p; (edge.get(key) || edge.set(key, []).get(key)).push(i); }
-      }
-      this._faceAdj = { normals, edge, canon };
+      this._faceAdj = this._adjOf(r.vertices, r.triangles);
       return this._faceAdj;
     }
-    // Flat region containing triangle `tri`, with its outline loops in plane coordinates.
+    _adjOf(v, t) {
+      const n = t.length / 3;
+      const normals = new Float64Array(n * 3);
+      // Only the two copies of one corner are the same vertex. Welding every
+      // point within 0.05 mm chained along a dense mesh and erased the outline,
+      // so a tap on the part came back as "no face".
+      const canon = new Int32Array(v.length / 3);
+      for (let i = 0; i < canon.length; i++) canon[i] = i;
+      const find = (x) => { let r = x; while (canon[r] !== r) r = canon[r]; while (canon[x] !== x) { const nx = canon[x]; canon[x] = r; x = nx; } return r; };
+      const union = (a, b) => { a = find(a); b = find(b); if (a !== b) canon[b] = a; };
+      const edges = new Int32Array(n * 6);
+      for (let i = 0; i < n; i++) {
+        const a = t[i * 3] | 0, b = t[i * 3 + 1] | 0, c = t[i * 3 + 2] | 0;
+        const ax = v[a * 3], ay = v[a * 3 + 1], az = v[a * 3 + 2], bx = v[b * 3], by = v[b * 3 + 1], bz = v[b * 3 + 2], cx = v[c * 3], cy = v[c * 3 + 1], cz = v[c * 3 + 2];
+        const ux = bx - ax, uy = by - ay, uz = bz - az, wx = cx - ax, wy = cy - ay, wz = cz - az;
+        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; const l = Math.hypot(nx, ny, nz) || 1;
+        normals[i * 3] = nx / l; normals[i * 3 + 1] = ny / l; normals[i * 3 + 2] = nz / l;
+        edges[i * 6] = a; edges[i * 6 + 1] = b; edges[i * 6 + 2] = b; edges[i * 6 + 3] = c; edges[i * 6 + 4] = c; edges[i * 6 + 5] = a;
+      }
+      const cell = 0.05, buckets = new Map(), ne = n * 3;
+      const v3 = (i) => [v[i * 3], v[i * 3 + 1], v[i * 3 + 2]];
+      const put = (ei, p) => {
+        const [x, y, z] = v3(p);
+        const k = Math.floor(x / cell) + ',' + Math.floor(y / cell) + ',' + Math.floor(z / cell);
+        let list = buckets.get(k); if (!list) buckets.set(k, list = []); list.push(ei);
+      };
+      for (let ei = 0; ei < ne; ei++) { put(ei, edges[ei * 2]); put(ei, edges[ei * 2 + 1]); }
+      const gap = (p, q) => Math.hypot(v[p * 3] - v[q * 3], v[p * 3 + 1] - v[q * 3 + 1], v[p * 3 + 2] - v[q * 3 + 2]);
+      const around = (p) => {
+        const [x, y, z] = v3(p);
+        const ix = Math.floor(x / cell), iy = Math.floor(y / cell), iz = Math.floor(z / cell), out = [];
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+          const list = buckets.get((ix + dx) + ',' + (iy + dy) + ',' + (iz + dz)); if (list) out.push(...list);
+        }
+        return out;
+      };
+      const best = new Int32Array(ne).fill(-1), bestD = new Float64Array(ne).fill(Infinity);
+      for (let ei = 0; ei < ne; ei++) {
+        const tri = (ei / 3) | 0, p = edges[ei * 2], q = edges[ei * 2 + 1];
+        const seen = new Set();
+        for (const ej of around(p)) {
+          if (ej <= ei || seen.has(ej) || ((ej / 3) | 0) === tri) continue;
+          seen.add(ej);
+          const r = edges[ej * 2], s = edges[ej * 2 + 1];
+          const d = Math.min(Math.max(gap(p, s), gap(q, r)), Math.max(gap(p, r), gap(q, s)));
+          if (d > cell) continue;
+          if (d < bestD[ei]) { bestD[ei] = d; best[ei] = ej; }
+          if (d < bestD[ej]) { bestD[ej] = d; best[ej] = ei; }
+        }
+      }
+      for (let ei = 0; ei < ne; ei++) {
+        const ej = best[ei]; if (!(ej > ei && best[ej] === ei)) continue;
+        const p = edges[ei * 2], q = edges[ei * 2 + 1], r = edges[ej * 2], s = edges[ej * 2 + 1];
+        if (gap(p, s) + gap(q, r) <= gap(p, r) + gap(q, s)) { union(p, s); union(q, r); }
+        else { union(p, r); union(q, s); }
+      }
+      for (let i = 0; i < canon.length; i++) canon[i] = find(i);
+      const edge = new Map();
+      for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) {
+        const p = canon[t[i * 3 + k] | 0], q = canon[t[i * 3 + (k + 1) % 3] | 0]; if (p === q) continue;
+        const key = p < q ? p + ',' + q : q + ',' + p; (edge.get(key) || edge.set(key, []).get(key)).push(i);
+      }
+      return { normals, edge, canon };
+    }
+    // A loop that crosses itself, or touches itself away from a corner, cannot be
+    // extruded: the solid comes back non-manifold and the pull never appears.
+    _loopBad(pts) {
+      const n = pts && pts.length; if (n < 3) return true;
+      const cross = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+      const onEdge = (a, b, c) => {
+        const abx = b[0] - a[0], aby = b[1] - a[1], l2 = abx * abx + aby * aby; if (l2 < 1e-8) return false;
+        const t = ((c[0] - a[0]) * abx + (c[1] - a[1]) * aby) / l2; if (t <= 0.01 || t >= 0.99) return false;
+        const dx = a[0] + t * abx - c[0], dy = a[1] + t * aby - c[1];
+        return dx * dx + dy * dy < 0.02 * 0.02;
+      };
+      for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        for (let j = i + 1; j < n; j++) {
+          if (j === (i + 1) % n || (i === 0 && j === n - 1)) continue;
+          const c = pts[j], d = pts[(j + 1) % n];
+          if ((j + 1) % n !== i) {
+            const o1 = cross(a, b, c), o2 = cross(a, b, d), o3 = cross(c, d, a), o4 = cross(c, d, b);
+            if (o1 * o2 < 0 && o3 * o4 < 0) return true;
+          }
+          if (onEdge(a, b, c)) return true;
+        }
+      }
+      return false;
+    }
+    // Flat region of the printed result containing triangle `tri`.
     _faceRegion(tri) {
-      const A = this._faceAdjacency(); if (!A) return null;
-      const v = this.result.vertices, t0 = this.result.triangles, N = A.normals;
+      const A = this._faceAdjacency(); if (!A || !this.result) return null;
+      return this._regionFrom(tri, this.result.vertices, this.result.triangles, A, null);
+    }
+    // Flat region containing triangle `tri`. `allow`, when set, keeps the flood
+    // inside that set — used so a combined solid's coplanar faces stay split
+    // into the piece that belongs to the body under the pointer.
+    _regionFrom(tri, v, t0, A, allow) {
+      if (!A || tri == null || (allow && !allow.has(tri))) return null;
+      const N = A.normals;
       const C0 = A.canon; const tv = (i) => C0[t0[i]]; // welded triangle corners
       const n0 = [N[tri * 3], N[tri * 3 + 1], N[tri * 3 + 2]];
       const p0 = [v[tv(tri * 3) * 3], v[tv(tri * 3) * 3 + 1], v[tv(tri * 3) * 3 + 2]];
+      // Mesh booleans leave wrinkles of a few degrees and a fraction of a millimetre
+      // across a face the user drew as one. Those still belong to this face.
+      // A real corner (~90°) or a step taller than 0.2 mm does not.
       const onPlane = (i) => {
-        if (N[i * 3] * n0[0] + N[i * 3 + 1] * n0[1] + N[i * 3 + 2] * n0[2] < 0.99999) return false;
-        for (let k = 0; k < 3; k++) { const q = tv(i * 3 + k) * 3; if (Math.abs((v[q] - p0[0]) * n0[0] + (v[q + 1] - p0[1]) * n0[1] + (v[q + 2] - p0[2]) * n0[2]) > 2e-3) return false; }
+        if (N[i * 3] * n0[0] + N[i * 3 + 1] * n0[1] + N[i * 3 + 2] * n0[2] < Math.cos(8 * DEG)) return false;
+        for (let k = 0; k < 3; k++) { const q = tv(i * 3 + k) * 3; if (Math.abs((v[q] - p0[0]) * n0[0] + (v[q + 1] - p0[1]) * n0[1] + (v[q + 2] - p0[2]) * n0[2]) > 0.2) return false; }
         return true;
       };
       const inR = new Set([tri]); const stack = [tri];
@@ -2930,13 +3924,23 @@
         const i = stack.pop();
         for (let k = 0; k < 3; k++) {
           const p = tv(i * 3 + k), q = tv(i * 3 + (k + 1) % 3); const key = p < q ? p + ',' + q : q + ',' + p;
-          for (const j of A.edge.get(key) || []) if (!inR.has(j) && onPlane(j)) { inR.add(j); stack.push(j); }
+          for (const j of A.edge.get(key) || []) if (!inR.has(j) && onPlane(j) && (!allow || allow.has(j))) { inR.add(j); stack.push(j); }
         }
       }
       // Boundary edges keep the triangles' winding: outer loop CCW, holes CW (seen from outside).
+      // Islands that do not share an edge stay separate faces, even when they are
+      // coplanar and close. Cut-away surface is absent from this mesh, so it is
+      // never part of the face.
       const count = new Map(); const dir = [];
-      for (const i of inR) for (let k = 0; k < 3; k++) { const p = tv(i * 3 + k), q = tv(i * 3 + (k + 1) % 3); const key = p < q ? p + ',' + q : q + ',' + p; count.set(key, (count.get(key) || 0) + 1); dir.push([p, q, key]); }
-      const next = new Map(); for (const [p, q, key] of dir) if (count.get(key) === 1) next.set(p, q);
+      for (const i of inR) for (let k = 0; k < 3; k++) { const p = tv(i * 3 + k), q = tv(i * 3 + (k + 1) % 3); if (p === q) continue; const key = p < q ? p + ',' + q : q + ',' + p; count.set(key, (count.get(key) || 0) + 1); dir.push([p, q, key]); }
+      const outs = new Map();
+      for (const [p, q, key] of dir) if (count.get(key) === 1) { let list = outs.get(p); if (!list) outs.set(p, list = []); if (!list.includes(q)) list.push(q); }
+      const usedE = new Set();
+      const turn = (prev, cur, nxt) => {
+        const ax = v[cur * 3] - v[prev * 3], ay = v[cur * 3 + 1] - v[prev * 3 + 1], az = v[cur * 3 + 2] - v[prev * 3 + 2];
+        const bx = v[nxt * 3] - v[cur * 3], by = v[nxt * 3 + 1] - v[cur * 3 + 1], bz = v[nxt * 3 + 2] - v[cur * 3 + 2];
+        return (ay * bz - az * by) * n0[0] + (az * bx - ax * bz) * n0[1] + (ax * by - ay * bx) * n0[2];
+      };
       // A facet of a curved surface (cylinder side, sphere…) meets its neighbours at
       // shallow angles all round: that is not a flat face of the part.
       let shallow = 0, total = 0;
@@ -2952,53 +3956,268 @@
       const ref = Math.abs(nv.z) < 0.9 ? new T.Vector3(0, 0, 1) : new T.Vector3(0, 1, 0);
       const u = new T.Vector3().crossVectors(ref, nv).normalize(); const w = new T.Vector3().crossVectors(nv, u).normalize();
       const P = (i) => new T.Vector3(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]);
-      const loops = []; const seen = new Set();
-      for (const start of next.keys()) {
-        if (seen.has(start)) continue;
-        const loop = []; let c = start; let guard = 0;
-        while (!seen.has(c) && guard++ < 1e6) { seen.add(c); loop.push(c); c = next.get(c); if (c === undefined) break; }
+      const loops = [];
+      for (const [p0, qs] of outs) for (const q0 of qs) {
+        const k0 = p0 + '>' + q0; if (usedE.has(k0)) continue;
+        usedE.add(k0);
+        const loop = [p0]; let prev = p0, cur = q0, guard = 0, closed = false;
+        while (guard++ < 1e6) {
+          loop.push(cur);
+          if (cur === p0) { closed = true; break; }
+          const opts = (outs.get(cur) || []).filter((n) => n !== prev && !usedE.has(cur + '>' + n));
+          if (!opts.length) break;
+          let nxt = opts[0], bs = -Infinity;
+          if (opts.length > 1) for (const o of opts) { const s = turn(prev, cur, o); if (s > bs) { bs = s; nxt = o; } }
+          usedE.add(cur + '>' + nxt); prev = cur; cur = nxt;
+        }
+        if (closed) loop.pop();
         if (loop.length >= 3) loops.push(loop);
       }
+      // A failed walk must not fall back to the convex hull: that fills every
+      // notch and the gap between islands, so the preview covers surface that
+      // is not there. The triangles themselves are the face in that case.
+      let forced = !loops.length;
+      if (!loops.length) { const ids = [0, 1, 2].map((k) => tv(tri * 3 + k)); if (new Set(ids).size >= 3) loops.push(ids); }
       if (!loops.length) return null;
       const origin = new T.Vector3(...p0);
       const to2 = (i) => { const d = P(i).sub(origin); return [d.dot(u), d.dot(w)]; };
       const area = (pts) => { let a = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; };
       const simplify = (pts) => pts.filter((p, i) => { const a = pts[(i + pts.length - 1) % pts.length], b = pts[(i + 1) % pts.length]; return Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) > 1e-6 * (1 + Math.hypot(b[0] - a[0], b[1] - a[1])); });
       let L = loops.map((l) => { const pts = simplify(l.map(to2)); return { pts, area: area(pts) }; }).filter((l) => l.pts.length >= 3);
-      const outer = L.reduce((m, l) => (l.area > (m ? m.area : -Infinity) ? l : m), null);
-      if (!outer || outer.area <= 0) return null;
-      const holes = L.filter((l) => l !== outer && l.area < 0);
+      let outer = L.reduce((m, l) => (l.area > (m ? m.area : -Infinity) ? l : m), null);
+      // A boundary walked clockwise is the same face. Flip it instead of dropping the tap.
+      if (outer && outer.area < 0) { for (const l of L) { l.pts.reverse(); l.area = -l.area; } outer = L.reduce((m, l) => (l.area > (m ? m.area : -Infinity) ? l : m), null); }
+      if (!outer || outer.area <= 0) {
+        forced = true;
+        const ids = [0, 1, 2].map((k) => tv(tri * 3 + k));
+        const pts = simplify(ids.map(to2));
+        if (!pts || pts.length < 3 || area(pts) === 0) return null;
+        if (area(pts) < 0) pts.reverse();
+        L = [{ pts, area: Math.abs(area(pts)) }]; outer = L[0];
+      }
+      const holes = forced ? [] : L.filter((l) => l !== outer && l.area < 0);
+      const tri2 = [];
+      let meshA = 0;
+      for (const i of inR) {
+        const triP = [0, 1, 2].map((k) => to2(tv(i * 3 + k)));
+        tri2.push(triP); meshA += Math.abs(area(triP));
+      }
       if (smoothAround) {
         // A flat face can blend smoothly into rounded edges (fillets). Only a thin
         // strip (cylinder side) or a tiny patch (sphere) is a facet of a curved surface.
-        const xs0 = outer.pts.map((p) => p[0]), ys0 = outer.pts.map((p) => p[1]);
+        const flat = tri2.flat();
+        const xs0 = flat.map((p) => p[0]), ys0 = flat.map((p) => p[1]);
         const w0 = Math.max(...xs0) - Math.min(...xs0), h0 = Math.max(...ys0) - Math.min(...ys0);
-        const r = this.result.vertices; let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-        for (let i = 0; i < r.length; i += 3) for (let q = 0; q < 3; q++) { lo[q] = Math.min(lo[q], r[i + q]); hi[q] = Math.max(hi[q], r[i + q]); }
+        let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < v.length; i += 3) for (let q = 0; q < 3; q++) { lo[q] = Math.min(lo[q], v[i + q]); hi[q] = Math.max(hi[q], v[i + q]); }
         const diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
         if (Math.min(w0, h0) < 0.2 * Math.max(w0, h0) || Math.max(w0, h0) < 0.2 * diag) return { curved: true };
       }
-      // centre the sketch on the outer loop's bounding box
-      const xs = outer.pts.map((p) => p[0]), ys = outer.pts.map((p) => p[1]);
+      // Drop collinear points, shallow wrinkles, and thin spikes that double
+      // back. A spike left in the outline makes the extruded solid non-manifold.
+      const clean = (pts) => {
+        const o = [];
+        for (const p of pts) { const l = o[o.length - 1]; if (!l || Math.hypot(p[0] - l[0], p[1] - l[1]) >= 1e-3) o.push([p[0], p[1]]); }
+        while (o.length > 3 && Math.hypot(o[0][0] - o[o.length - 1][0], o[0][1] - o[o.length - 1][1]) < 1e-3) o.pop();
+        for (let ch = true; ch && o.length > 3;) {
+          ch = false;
+          for (let i = 0; i < o.length && o.length > 3; i++) {
+            const a0 = o[(i + o.length - 1) % o.length], b0 = o[i], c0 = o[(i + 1) % o.length];
+            const cr = (b0[0] - a0[0]) * (c0[1] - a0[1]) - (b0[1] - a0[1]) * (c0[0] - a0[0]);
+            const e1x = b0[0] - a0[0], e1y = b0[1] - a0[1], e2x = c0[0] - b0[0], e2y = c0[1] - b0[1];
+            const l1 = Math.hypot(e1x, e1y), l2 = Math.hypot(e2x, e2y);
+            const chord = Math.hypot(c0[0] - a0[0], c0[1] - a0[1]);
+            const off = chord > 1e-6 ? Math.abs(cr) / chord : 0;
+            const sinTurn = l1 * l2 > 1e-6 ? Math.abs(cr) / (l1 * l2) : 0;
+            const dot = e1x * e2x + e1y * e2y;
+            const hairpin = l1 > 1e-6 && l2 > 1e-6 && dot < -0.9 * l1 * l2 && chord < 0.25;
+            const spike = dot < 0 && off < 0.15 && Math.min(l1, l2) < 0.3;
+            if (Math.abs(cr) <= 1e-6 * Math.max(1, (chord + l1) * (chord + l1)) || (off < 0.2 && sinTurn < 0.05) || hairpin || spike) { o.splice(i, 1); ch = true; i--; }
+          }
+        }
+        return o;
+      };
+      const outerPts = clean(outer.pts);
+      const holePts = holes.map((h) => clean(h.pts)).filter((h) => h.length >= 3 && Math.abs(area(h)) > 0.02);
+      if (outerPts.length < 3) return null;
+      const polyA = Math.abs(area(outerPts)) - holePts.reduce((s, h) => s + Math.abs(area(h)), 0);
+      // The outline is only usable when it covers the visible triangles and
+      // nothing else. A loop around a gap, or one that touches itself, is
+      // replaced by those triangles so the pull matches what is on screen.
+      const covers = meshA > 0.05 && polyA <= meshA * 1.08 + 0.25 && polyA >= meshA * 0.9;
+      const faithful = !forced && covers && !this._loopBad(outerPts) && holePts.every((h) => !this._loopBad(h));
+      const triPts = tri2.flat();
+      const src = faithful ? outerPts : triPts;
+      const xs = src.map((p) => p[0]), ys = src.map((p) => p[1]);
       const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-      // rounded to 0.001 mm, near-together corners can become the same point: drop repeats
-      const sh = (pts) => { const o = []; for (const p of pts) { const q = [r3(p[0] - cx), r3(p[1] - cy)]; const l = o[o.length - 1]; if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) >= 1e-3) o.push(q); } while (o.length > 3 && Math.hypot(o[0][0] - o[o.length - 1][0], o[0][1] - o[o.length - 1][1]) < 1e-3) o.pop();
-        // drop points on the line through their neighbours (incl. spikes that double back)
-        for (let ch = true; ch && o.length > 3;) { ch = false; for (let i = 0; i < o.length && o.length > 3; i++) { const a0 = o[(i + o.length - 1) % o.length], b0 = o[i], c0 = o[(i + 1) % o.length]; const cr = (b0[0] - a0[0]) * (c0[1] - a0[1]) - (b0[1] - a0[1]) * (c0[0] - a0[0]); const L = Math.hypot(c0[0] - a0[0], c0[1] - a0[1]) + Math.hypot(b0[0] - a0[0], b0[1] - a0[1]); if (Math.abs(cr) <= 1e-6 * Math.max(1, L * L)) { o.splice(i, 1); ch = true; i--; } } }
-        return o; };
+      const shift = (pts) => {
+        const o = [];
+        for (const p of pts) { const q = [r3(p[0] - cx), r3(p[1] - cy)]; const l = o[o.length - 1]; if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) >= 1e-3) o.push(q); }
+        while (o.length > 3 && Math.hypot(o[0][0] - o[o.length - 1][0], o[0][1] - o[o.length - 1][1]) < 1e-3) o.pop();
+        return o;
+      };
+      let patches = null;
+      if (!faithful) {
+        patches = [];
+        for (const triP of tri2) { const pts = shift(triP); if (pts.length === 3 && Math.abs(area(pts)) > 0.02) patches.push(pts); }
+        if (patches.length > 300) patches.length = 300;
+        if (!patches.length) patches = null;
+      }
       const center = origin.clone().addScaledVector(u, cx).addScaledVector(w, cy);
       const m = new T.Matrix4().makeBasis(u, w, nv); const eu = new T.Euler().setFromRotationMatrix(m, 'ZYX');
-      return { tris: inR, n: nv, u, w, center, rot: [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)], outer: sh(outer.pts), holes: holes.map((h) => sh(h.pts)), size: [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)] };
+      const draw = [];
+      for (const i of inR) for (let k = 0; k < 3; k++) { const q = t0[i * 3 + k] * 3; draw.push(v[q], v[q + 1], v[q + 2]); }
+      const outerOut = shift(outerPts);
+      if (outerOut.length < 3 && !patches) return null;
+      return { tris: inR, n: nv, u, w, center, rot: [r3(eu.x / DEG), r3(eu.y / DEG), r3(eu.z / DEG)], outer: outerOut.length >= 3 ? outerOut : patches[0], holes: faithful ? holePts.map(shift).filter((h) => h.length >= 3) : [], size: [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)], draw, patches: patches || undefined, part: faithful ? undefined : true };
+    }
+    // World-space copy of an object's mesh, cached until it moves or is rebuilt.
+    _worldMesh(obj) {
+      const mesh = obj && obj.mesh; if (!mesh || !mesh.geometry) return null;
+      if (obj.group) obj.group.updateMatrixWorld(true); else mesh.updateMatrixWorld(true);
+      const key = mesh.geometry.uuid + '|' + mesh.matrixWorld.elements.join(',');
+      if (obj._wmKey === key && obj._wm) return obj._wm;
+      const pos = mesh.geometry.attributes.position; const idx = mesh.geometry.index;
+      const T = this.T; const p = new T.Vector3(); const M = mesh.matrixWorld;
+      const v = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) { p.fromBufferAttribute(pos, i).applyMatrix4(M); v[i * 3] = p.x; v[i * 3 + 1] = p.y; v[i * 3 + 2] = p.z; }
+      const t = idx ? idx.array : Uint32Array.from({ length: pos.count }, (_, i) => i);
+      obj._wmKey = key; obj._wm = { v, t, A: this._adjOf(v, t) };
+      return obj._wm;
+    }
+    // The face of one object, in world space — as if that object were alone.
+    _faceOnObject(obj, faceIndex) {
+      const wm = this._worldMesh(obj); if (!wm) return null;
+      return this._regionFrom(faceIndex, wm.v, wm.t, wm.A, null);
+    }
+    _pointInTri(x, y, a, b, c) {
+      const ax = b[0] - a[0], ay = b[1] - a[1], bx = c[0] - a[0], by = c[1] - a[1];
+      const den = ax * by - ay * bx; if (Math.abs(den) < 1e-8) return false;
+      const px = x - a[0], py = y - a[1];
+      const u = (px * by - py * bx) / den, v = (py * ax - px * ay) / den;
+      const slack = 0.05;
+      return u >= -slack && v >= -slack && u + v <= 1 + slack;
+    }
+    // Which solid's own surface is under this hit on the printed part.
+    _bodyUnder(ray, hit, resultMesh) {
+      const rn = hit.face.normal.clone().transformDirection(resultMesh.matrixWorld);
+      let best = null;
+      for (const it of this.data.items) {
+        if (it.role !== 'solid' || it.hidden || it.draft || it.type === 'image') continue;
+        const o = this.objs[it.id]; if (!o || !o.mesh || o.image || o.draft) continue;
+        o.group.updateMatrixWorld(true);
+        const hits = ray.intersectObject(o.mesh, false);
+        for (const h of hits) {
+          if (Math.abs(h.distance - hit.distance) > 0.5) continue;
+          const n = h.face.normal.clone().transformDirection(o.mesh.matrixWorld);
+          if (n.dot(rn) < Math.cos(8 * DEG)) continue;
+          const score = Math.abs(h.distance - hit.distance);
+          if (!best || score < best.score - 1e-6) best = { it, obj: o, hit: h, score };
+        }
+      }
+      return best;
+    }
+    // Combined solid: the visible piece of the body under the pointer, not the
+    // whole coplanar face the join glued together.
+    _combinedPiece(hit, body) {
+      const full = this._faceRegion(hit.faceIndex);
+      if (!full || full.curved) return full;
+      const member = this._faceOnObject(body.obj, body.hit.faceIndex);
+      if (!member || member.curved || !member.draw) return full;
+      const o = full.center, u = full.u, w = full.w, n = full.n;
+      const proj = (x, y, z) => [(x - o.x) * u.x + (y - o.y) * u.y + (z - o.z) * u.z, (x - o.x) * w.x + (y - o.y) * w.y + (z - o.z) * w.z];
+      const mtris = [];
+      for (let i = 0; i < member.draw.length; i += 9) mtris.push([proj(member.draw[i], member.draw[i + 1], member.draw[i + 2]), proj(member.draw[i + 3], member.draw[i + 4], member.draw[i + 5]), proj(member.draw[i + 6], member.draw[i + 7], member.draw[i + 8])]);
+      const v = this.result.vertices, t = this.result.triangles;
+      const allow = new Set();
+      for (const ti of full.tris) {
+        let cx = 0, cy = 0, cz = 0;
+        for (let k = 0; k < 3; k++) { const q = t[ti * 3 + k] * 3; cx += v[q]; cy += v[q + 1]; cz += v[q + 2]; }
+        cx /= 3; cy /= 3; cz /= 3;
+        if (Math.abs((cx - o.x) * n.x + (cy - o.y) * n.y + (cz - o.z) * n.z) > 0.25) continue;
+        const p = proj(cx, cy, cz);
+        if (mtris.some((tr) => this._pointInTri(p[0], p[1], tr[0], tr[1], tr[2]))) allow.add(ti);
+      }
+      if (!allow.has(hit.faceIndex) || allow.size === full.tris.size) return full;
+      return this._regionFrom(hit.faceIndex, v, t, this._faceAdjacency(), allow) || full;
     }
     _faceHit(e) {
       const mesh = this.designGroup.children.find((o) => o.isMesh); if (!mesh) return null;
-      const hit = this._ray(e).intersectObject(mesh, false)[0];
-      const f = hit ? this._faceRegion(hit.faceIndex) : null;
+      mesh.updateWorldMatrix(true, false);
+      const ray = this._ray(e);
+      const T = this.T;
+      let hit = ray.intersectObject(mesh, false)[0];
+      // A cut can flip a triangle. The near surface is still the face under the pointer.
+      if (!hit && mesh.material && mesh.material.side !== T.DoubleSide) {
+        const side = mesh.material.side; mesh.material.side = T.DoubleSide;
+        hit = ray.intersectObject(mesh, false)[0];
+        mesh.material.side = side;
+      }
+      if (!hit) return null;
+      const body = this._bodyUnder(ray, hit, mesh);
+      const others = body && this.data.items.some((x) => x !== body.it && x.role === 'solid' && !x.hidden && !x.draft && x.type !== 'image');
+      // Combined: split the joined face into the visible piece of that member.
+      // Not combined (a cap and a bottle, side by side): the face of that one
+      // object, the same as if the other were not there.
+      // The printed mesh (after cuts) is the fallback, so a broken original solid
+      // does not swallow the tap.
+      // Always the printed surface. The body's own mesh still contains faces a
+      // cut removed; using it as the outline is why the preview showed them.
+      // Beside another solid, or inside a combined one, keep only this body's
+      // piece so unconnected faces stay independent.
+      let f = this._faceRegion(hit.faceIndex);
+      if (body && (body.it.group || others)) {
+        const piece = this._combinedPiece(hit, body);
+        if (piece && !piece.curved) f = piece;
+        else if (!f) f = piece;
+      }
+      if (f && !f.curved) this._faceCut(f, hit.point);
       return f && f.curved ? (e.type === 'pointermove' ? null : f) : f;
+    }
+    // A sketch drawn on this face cuts it. The piece under the pointer is what
+    // push / pull and the highlight use, so extruding takes part of the face.
+    _faceCut(f, world) {
+      const T = this.T; const lines = [];
+      for (const it of this.data.items) {
+        if (it.type !== 'sketch' || it.hidden || !it.faceCut) continue;
+        if (!(it.profiles && it.profiles.length) && !(it.splits && it.splits.length)) continue;
+        const frame = new T.Object3D(); frame.rotation.order = 'ZYX'; this._placeObj(frame, it); frame.updateMatrixWorld(true);
+        const n = new T.Vector3(0, 0, 1).transformDirection(frame.matrixWorld);
+        if (Math.abs(Math.abs(n.dot(f.n)) - 1) > 1e-3) continue;
+        const origin = new T.Vector3().setFromMatrixPosition(frame.matrixWorld);
+        if (Math.abs(origin.clone().sub(f.center).dot(f.n)) > 0.5) continue;
+        const M = frame.matrixWorld;
+        const toFace = (x, y) => { const w = new T.Vector3(x, y, 0).applyMatrix4(M).sub(f.center); return [w.dot(f.u), w.dot(f.w)]; };
+        for (const p of it.profiles || []) lines.push({ pts: this._outline(p).map((q) => toFace(q[0], q[1])), closed: true });
+        for (const s of it.splits || []) lines.push({ pts: s.map((q) => toFace(q[0], q[1])), closed: false });
+      }
+      if (!lines.length) return f;
+      const pieces = this._facePieces(f.outer, f.holes || [], lines);
+      if (pieces.length < 2) return f;
+      const d = world.clone().sub(f.center);
+      const x = d.dot(f.u), y = d.dot(f.w);
+      const piece = pieces.find((pc) => this._pin(x, y, pc.poly) && !(pc.holes || []).some((h) => this._pin(x, y, h) && !this._onRing(x, y, h)));
+      if (!piece) return f;
+      const full = Math.abs(this._polyArea(f.outer)) - (f.holes || []).reduce((s, h) => s + Math.abs(this._polyArea(h)), 0);
+      if (!(piece.area < full - Math.max(0.5, full * 0.01))) return f;
+      let a = 0, cx = 0, cy = 0; const poly = piece.poly;
+      for (let i = 0; i < poly.length; i++) { const p = poly[i], q = poly[(i + 1) % poly.length], c = p[0] * q[1] - q[0] * p[1]; a += c; cx += (p[0] + q[0]) * c; cy += (p[1] + q[1]) * c; }
+      a *= 0.5; if (Math.abs(a) > 1e-8) { cx /= 6 * a; cy /= 6 * a; } else { cx = poly[0][0]; cy = poly[0][1]; }
+      const sh = (p) => [r3(p[0] - cx), r3(p[1] - cy)];
+      f.center = f.center.clone().addScaledVector(f.u, cx).addScaledVector(f.w, cy);
+      f.outer = poly.map(sh); f.holes = (piece.holes || []).map((h) => h.map(sh)); f.part = true; f.patches = null;
+      const xs = f.outer.map((p) => p[0]), ys = f.outer.map((p) => p[1]);
+      f.size = [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+      const shape = new T.Shape(f.outer.map((q) => new T.Vector2(q[0], q[1])));
+      f.holes.forEach((h) => shape.holes.push(new T.Path(h.map((q) => new T.Vector2(q[0], q[1])))));
+      const g = new T.ShapeGeometry(shape); const pos = g.attributes.position; const draw = [];
+      for (let i = 0; i < pos.count; i++) { const w = f.center.clone().addScaledVector(f.u, pos.getX(i)).addScaledVector(f.w, pos.getY(i)); draw.push(w.x, w.y, w.z); }
+      g.dispose(); f.draw = draw;
+      return f;
     }
     _faceHover(e) {
       const f = this._faceHit(e);
-      const key = f ? [...f.tris].slice(0, 3).join(',') + f.tris.size : '';
+      const key = f ? [f.center.x.toFixed(3), f.center.y.toFixed(3), f.center.z.toFixed(3), f.tris.size, f.outer.length, f.size[0], f.size[1]].join(',') : '';
       if (key === this._faceHovKey) return;
       this._faceHovKey = key;
       this._faceDrawRegion(f, 'hover');
@@ -3008,8 +4227,10 @@
       const prop = kind === 'hover' ? '_faceHovMesh' : '_faceSelMesh';
       if (this[prop]) { this.scene.remove(this[prop]); this[prop].traverse((o) => o.geometry && o.geometry.dispose()); this[prop] = null; }
       if (!f) return;
-      const v = this.result.vertices, t = this.result.triangles; const pos = [];
-      for (const i of f.tris) for (let k = 0; k < 3; k++) { const q = t[i * 3 + k] * 3; pos.push(v[q] + f.n.x * 0.03, v[q + 1] + f.n.y * 0.03, v[q + 2] + f.n.z * 0.03); }
+      const pos = [];
+      const src = f.draw;
+      if (src) { for (let i = 0; i < src.length; i += 3) pos.push(src[i] + f.n.x * 0.03, src[i + 1] + f.n.y * 0.03, src[i + 2] + f.n.z * 0.03); }
+      else { const v = this.result.vertices, t = this.result.triangles; for (const i of f.tris) for (let k = 0; k < 3; k++) { const q = t[i * 3 + k] * 3; pos.push(v[q] + f.n.x * 0.03, v[q + 1] + f.n.y * 0.03, v[q + 2] + f.n.z * 0.03); } }
       const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
       const grp = new T.Group();
       const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: kind === 'hover' ? this.colors.accent : this.colors.sel, transparent: true, opacity: kind === 'hover' ? 0.25 : 0.72, side: T.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -8 }));
@@ -3023,16 +4244,63 @@
     }
     // Face operations log to the browser console as "[3D face] …" (DevTools → Console).
     _flog(...a) { try { console.info('[3D face]', ...a); } catch (_) { /* ignore */ } }
+    _faceSame(a, b) {
+      if (!a || !b || a.curved || b.curved) return false;
+      if (a.n.dot(b.n) < 0.999) return false;
+      if (a.center.distanceTo(b.center) > 0.8) return false;
+      const aa = Math.abs(a.size[0] * a.size[1]), bb = Math.abs(b.size[0] * b.size[1]);
+      return Math.abs(aa - bb) < Math.max(1, aa * 0.02);
+    }
+    // How the pointer maps onto this face's normal. One millimetre on screen is
+    // one millimetre of extrude, so the preview follows the cursor instead of
+    // jumping when the view looks straight at the face.
+    _faceScreenAxis(f) {
+      const r = this.renderer.domElement.getBoundingClientRect();
+      const toS = (p) => { const q = p.clone().project(this.camera); return [(q.x + 1) / 2 * r.width + r.left, (1 - q.y) / 2 * r.height + r.top]; };
+      const a = toS(f.center), b = toS(f.center.clone().addScaledVector(f.n, 1));
+      const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+      if (len >= 2) return { ax: dx / len, ay: dy / len, mmPerPx: 1 / len };
+      const dist = this.camera.position.distanceTo(f.center) || 1;
+      const span = this.camera.isOrthographicCamera ? Math.abs(this.ortho.top - this.ortho.bottom) / (this.camera.zoom || 1) : 2 * Math.tan((this.persp.fov * Math.PI / 180) / 2) * dist;
+      return { ax: 0, ay: -1, mmPerPx: span / (r.height || 1) };
+    }
+    // Which selected face's arrow is under the pointer (within 40 px of its shaft).
+    _faceArrowAt(e, canvas) {
+      const faces = this.faces || []; if (!faces.length || !this.faceOn) return null;
+      const r = (canvas || this.renderer.domElement).getBoundingClientRect();
+      const toS = (p) => { const q = p.clone().project(this.camera); return [(q.x + 1) / 2 * r.width + r.left, (1 - q.y) / 2 * r.height + r.top]; };
+      let best = null, bestD = 40;
+      for (const f of faces) {
+        const len = Math.max(8, Math.min(30, (f.size[0] + f.size[1]) / 3)) + 4 + (this._faceDist > 0 ? this._faceDist : 0);
+        const a = toS(f.center), b = toS(f.center.clone().addScaledVector(f.n, len));
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        const t = Math.max(0, Math.min(1, ((e.clientX - a[0]) * dx + (e.clientY - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+        const dist = Math.hypot(a[0] + dx * t - e.clientX, a[1] + dy * t - e.clientY);
+        if (dist < bestD) { bestD = dist; best = f; }
+      }
+      return best;
+    }
     _facePick(e) {
       const f = this._faceHit(e);
       if (!f) { this._flog('tap: no face under the pointer (missed the part, or the build is not ready)', { hasResult: !!this.result }); return; }
-      this._flog(f.curved ? 'tap: curved surface — not a flat face' : 'tap: face', f.curved ? {} : { size: f.size.map(r3), triangles: f.tris.size, outerPoints: f.outer.length, holes: f.holes.length, normal: [f.n.x, f.n.y, f.n.z].map((v) => r3(v)) });
+      this._flog(f.curved ? 'tap: curved surface — not a flat face' : 'tap: face', f.curved ? {} : { size: f.size.map(r3), triangles: f.tris.size, outerPoints: f.outer.length, holes: f.holes.length, profile: f.patches ? f.patches.length + ' visible triangles' : 'outline', normal: [f.n.x, f.n.y, f.n.z].map((v) => r3(v)) });
       if (f.curved) { this._toast('That is a curved surface — Push / Pull works on flat faces', 'err'); return; }
-      this._faceSet(f);
+      const faces = (this.faces || []).slice();
+      const i = faces.findIndex((g) => this._faceSame(g, f));
+      if (this._faceItem || (this._faceIds && this._faceIds.length)) { this._faceBake(); this._faceItem = null; this._faceIds = null; this._faceDist = 0; this._faceAt = null; this._facePreview(0); }
+      if (i >= 0) faces.splice(i, 1); else faces.push(f);
+      this.faces = faces;
+      this.face = faces.length ? faces[faces.length - 1] : null;
+      this._faceOwn = faces.length === 1 ? this._faceOwner(faces[0]) : null;
+      if (this.face) this._flog('selected:', faces.length, 'face' + (faces.length > 1 ? 's' : ''), this._faceOwn ? 'resizes ' + ((this._item(this._faceOwn.id) || {}).name) : 'extrude');
+      this._faceDrawRegion(null, 'hover'); this._faceHovKey = '';
+      this._faceDrawSel();
+      this._renderFacePanel();
     }
     // Is this face the actual side of a box / sketch / cylinder (along one of its own
     // axes)? Then push / pull resizes that shape, so rounded or chamfered edges move with it.
     _faceOwner(f) {
+      if (f.part) return null; // a piece cut out of the face extrudes on its own
       const T = this.T;
       for (const it of this.data.items) {
         // a combined object's faces are faces of the merged solid, not of one member
@@ -3052,7 +4320,7 @@
         // the face must be just this shape's side: if it runs on into a touching part, extrude the face instead
         { const fa = this._polyArea(f.outer) - f.holes.reduce((a, h) => a + Math.abs(this._polyArea(h)), 0);
           const sa = it.type === 'box' ? [it.size.y * it.size.z, it.size.x * it.size.z, it.size.x * it.size.y][k] : it.type === 'cylinder' ? Math.PI * it.size.d * it.size.d / 4 : null;
-          if (sa != null && fa > sa * 1.002 + 0.01) continue;
+          if (sa != null && (fa > sa * 1.002 + 0.01 || fa < sa * 0.98)) continue;
           if (sa == null) { const b = this._boundsOf([it.id]); const z = b.getSize(new T.Vector3()); if (Math.max(f.size[0], f.size[1]) > Math.max(z.x, z.y, z.z) + 0.01) continue; } }
         const what = it.type === 'box' ? ['width (X)', 'depth (Y)', 'height (Z)'][k] : 'height';
         return { id: it.id, k, sign, what, base: JSON.parse(JSON.stringify({ size: it.size, height: it.height, pos: it.pos })), M };
@@ -3068,43 +4336,71 @@
     }
     _faceSet(f) {
       if (this._fPrev) this._facePreview(0);
-      if (f && this._faceItem) this._faceBake();
-      this.face = f; this._faceItem = null; this._faceDist = 0;
+      if ((f || (this.faces || []).length) && (this._faceItem || (this._faceIds && this._faceIds.length))) this._faceBake();
+      this.faces = f ? [f] : [];
+      this.face = f; this._faceItem = null; this._faceIds = null; this._faceDist = 0; this._faceAt = null;
       this._faceOwn = f ? this._faceOwner(f) : null;
       if (f) this._flog('selected:', this._faceOwn ? 'resizes ' + ((this._item(this._faceOwn.id) || {}).name) + ' (' + this._faceOwn.what + ')' : 'extrudes the face shape' + (this._faceGroup(f) ? ' into combined object ' + this._faceGroup(f) : ''));
       this._faceDrawRegion(null, 'hover'); this._faceHovKey = '';
-      this._faceDrawRegion(f, 'sel');
-      if (!f) this._faceArrow = null;
+      this._faceDrawSel();
       this._renderFacePanel();
+    }
+    // Highlight every selected face, with an arrow on each so any of them can be dragged.
+    _faceDrawSel() {
+      const T = this.T;
+      if (this._faceSelMesh) { this.scene.remove(this._faceSelMesh); this._faceSelMesh.traverse((o) => o.geometry && o.geometry.dispose()); this._faceSelMesh = null; }
+      const faces = this.faces || [];
+      this._faceArrow = null; this._faceArrows = [];
+      if (!faces.length) return;
+      const grp = new T.Group();
+      for (const f of faces) {
+        const pos = [];
+        const src = f.draw;
+        if (src) { for (let i = 0; i < src.length; i += 3) pos.push(src[i] + f.n.x * 0.03, src[i + 1] + f.n.y * 0.03, src[i + 2] + f.n.z * 0.03); }
+        else { const v = this.result.vertices, t = this.result.triangles; for (const i of f.tris) for (let k = 0; k < 3; k++) { const q = t[i * 3 + k] * 3; pos.push(v[q] + f.n.x * 0.03, v[q + 1] + f.n.y * 0.03, v[q + 2] + f.n.z * 0.03); } }
+        const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+        const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: this.colors.sel, transparent: true, opacity: 0.72, side: T.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -8 }));
+        m.renderOrder = 6; grp.add(m);
+        const arrow = new T.ArrowHelper(f.n, f.center, Math.max(8, Math.min(30, (f.size[0] + f.size[1]) / 3)), this.colors.accent.getHex(), 4, 3);
+        arrow.traverse((o) => { if (o.material) { o.material.depthTest = false; o.renderOrder = 9; } });
+        grp.add(arrow); this._faceArrows.push({ arrow, f });
+      }
+      this._faceArrow = this._faceArrows[this._faceArrows.length - 1].arrow;
+      this.scene.add(grp); this._faceSelMesh = grp;
     }
     _renderFacePanel() {
       const el = this.inspEl; const f = this.face;
       if (!this.faceOn) { if (this._facePanel) { this._facePanel = false; this._inspFor = null; this._renderInspector(); } return; }
       this._facePanel = true; this._inspFor = 'face';
       el.classList.remove('hidden');
-      if (!f) { el.innerHTML = `<div class="cad-insp-head"><div class="cad-name">Face</div><button type="button" class="cad-icon-btn" data-fclose title="Done (Esc)">✕</button></div><p class="cad-hint">Tap a flat face of your part. Then push / pull it, sketch on it, or lay it flat on the build plate.</p>`; el.querySelector('[data-fclose]').onclick = () => this._faceMode(false); return; }
-      const d = this._faceDist || 0;
+      if (!f) { el.innerHTML = `<div class="cad-insp-head"><div class="cad-name">Face</div><button type="button" class="cad-icon-btn" data-fclose title="Done (Esc)">✕</button></div><p class="cad-hint">Tap flat faces of your part. Each tap adds a face; tap a face again to remove it. Then push / pull them all, or sketch on one.</p>`; el.querySelector('[data-fclose]').onclick = () => this._faceMode(false); return; }
+      const nFaces = (this.faces || []).length;
+      const levelOn = nFaces > 1 && !!this._faceLevel;
+      const ax = this._faceAxis();
+      const shown = levelOn ? (this._faceAt != null ? this._faceAt : this._faceOuter()) : (this._faceDist || 0);
       el.innerHTML = `
         <div class="cad-insp-head"><div class="cad-name">Face</div><button type="button" class="cad-icon-btn" data-fclose title="Done (Esc)">✕</button></div>
-        <p class="cad-hint">Flat face · about ${r3(f.size[0])} × ${r3(f.size[1])} mm${f.holes.length ? ' · ' + f.holes.length + ' hole' + (f.holes.length > 1 ? 's' : '') : ''}</p>
+        <p class="cad-hint">${nFaces > 1 ? nFaces + ' faces selected · tap another to add, tap one again to remove' : 'Flat face · about ' + r3(f.size[0]) + ' × ' + r3(f.size[1]) + ' mm' + (f.holes.length ? ' · ' + f.holes.length + ' hole' + (f.holes.length > 1 ? 's' : '') : '')}</p>
         <div class="cad-sec"><div class="cad-sec-t">Push / Pull</div>
-          <div class="cad-grid"><label class="cad-field wide"><span class="cad-scrub" data-fscrub>Distance</span><input type="text" inputmode="decimal" data-fdist value="${d}"><em>mm</em></label></div>
-          <p class="cad-hint">${this._faceOwn ? 'Resizes <b>' + esc((this._item(this._faceOwn.id) || {}).name || '') + '</b> (' + this._faceOwn.what + ') — its rounded / chamfered edges move with the face. + grows, − shrinks.' : '+ pulls out (adds material in the face\'s shape), − pushes in (cuts a pocket). Or drag the arrow.'}</p>
-          <div class="cad-quick">${[-5, -1, 1, 5].map((x) => `<button type="button" data-fstep="${x}">${x > 0 ? '+' : ''}${x}</button>`).join('')}</div>
+          ${nFaces > 1 ? `<div class="cad-seg2"><button type="button" data-fhow="dist" class="${levelOn ? '' : 'on'}" title="Move every face by the same amount">Distance</button><button type="button" data-fhow="level" class="${levelOn ? 'on' : ''}" title="Move every face until it sits on the same ${'XYZ'[ax]}">Level</button></div>` : ''}
+          <div class="cad-grid"><label class="cad-field wide"><span class="cad-scrub" data-fscrub>${levelOn ? 'Level ' + 'XYZ'[ax] : 'Distance'}</span><input type="text" inputmode="decimal" data-fdist value="${shown}"><em>mm</em></label></div>
+          <p class="cad-hint">${nFaces > 1 ? (levelOn ? 'Each face moves along its own direction until it reaches this ' + 'XYZ'[ax] + '. One that is already there stays put. A face that does not point along ' + 'XYZ'[ax] + ' is left alone. Drag moves 0.1 mm; hold Shift for 0.01.' : '+ pulls every selected face out along its own direction by the same amount, − pushes each one in. Drag moves 0.1 mm; hold Shift for 0.01.') : this._faceOwn ? 'Resizes <b>' + esc((this._item(this._faceOwn.id) || {}).name || '') + '</b> (' + this._faceOwn.what + ') — its rounded / chamfered edges move with the face. + grows, − shrinks. Drag moves 0.1 mm; hold Shift for 0.01.' : '+ pulls out (adds material in the face\'s shape), − pushes in (cuts a pocket). Drag the arrow in 0.1 mm steps; hold Shift for 0.01.'}</p>
+          <div class="cad-quick">${[-5, -1, -0.1, 0.1, 1, 5].map((x) => `<button type="button" data-fstep="${x}">${x > 0 ? '+' : ''}${x}</button>`).join('')}</div>
         </div>
         <div class="cad-sec"><div class="cad-quick">
           <button type="button" data-ffill title="Fill the gap in front of this face: pull it until it meets the facing surface (closes a slot / pocket)">Fill to opposite face</button>
-          <button type="button" data-fsketch title="Start a sketch on this face">Sketch on face</button>
+          <button type="button" data-fsketch title="Draw on this face. Points cut it into parts you can extrude one at a time">Sketch on face</button>
           <button type="button" data-fflat title="Turn the whole design so this face rests on the build plate">Lay flat</button>
         </div></div>
         ${this._faceItem ? `<button type="button" class="cad-wide-btn" data-fdone>Done — keep it</button>` : ''}`;
       el.querySelector('[data-fclose]').onclick = () => this._faceMode(false);
       const inp = el.querySelector('[data-fdist]');
-      inp.onchange = () => this._faceApply(evalNum(inp.value, this._faceDist || 0), true);
+      inp.onchange = () => { const level = (this.faces || []).length > 1 && this._faceLevel; const cur = level ? (this._faceAt != null ? this._faceAt : this._faceOuter()) : (this._faceDist || 0); this._faceApply(evalNum(inp.value, cur), true); };
       inp.onkeydown = (e) => { if (e.key === 'Enter') { inp.dispatchEvent(new Event('change')); inp.select(); } };
       inp.onfocus = () => setTimeout(() => inp.select(), 0);
-      el.querySelectorAll('[data-fstep]').forEach((b) => { b.onclick = () => this._faceApply(r3((this._faceDist || 0) + +b.dataset.fstep), true); });
-      el.querySelector('[data-fsketch]').onclick = () => { const ff = this.face; this._faceMode(false); this._sketchStart(null, { pos: [r3(ff.center.x), r3(ff.center.y), r3(ff.center.z)], rot: ff.rot });
+      el.querySelectorAll('[data-fstep]').forEach((b) => { b.onclick = () => { const step = +b.dataset.fstep; const level = (this.faces || []).length > 1 && this._faceLevel; this._faceApply(r3((level ? (this._faceAt != null ? this._faceAt : this._faceOuter()) : (this._faceDist || 0)) + step), true); }; });
+      el.querySelectorAll('[data-fhow]').forEach((b) => { b.onclick = () => { const on = b.dataset.fhow === 'level'; if (on === !!this._faceLevel) return; this._faceLevel = on; if (on && this._faceAt == null) this._faceAt = this._faceOuter(); this._facePreview(0); if (this._faceIds && this._faceIds.some(Boolean)) this._faceApply(on ? this._faceAt : (this._faceDist || 0), true); else this._renderFacePanel(); }; });
+      el.querySelector('[data-fsketch]').onclick = () => { const ff = this.face; this._faceMode(false); this._sketchStart(null, { pos: [r3(ff.center.x), r3(ff.center.y), r3(ff.center.z)], rot: ff.rot, outer: ff.outer.map((p) => p.slice()), holes: (ff.holes || []).map((h) => h.map((p) => p.slice())) });
         if (this.sk) { // the face's corners and edge midpoints are snap points
           const pts = []; [ff.outer].concat(ff.holes).forEach((L) => L.forEach((p, i) => { const q = L[(i + 1) % L.length]; pts.push(p, [r3((p[0] + q[0]) / 2), r3((p[1] + q[1]) / 2)]); }));
           this.sk.facePts = pts; } };
@@ -3114,30 +4410,223 @@
       // drag the Distance label, like other fields
       const lab = el.querySelector('[data-fscrub]');
       lab.onpointerdown = (e) => {
-        e.preventDefault(); lab.setPointerCapture(e.pointerId); const x0 = e.clientX; const d0 = this._faceDist || 0; let moved = false;
-        lab.onpointermove = (ev2) => { const dx = ev2.clientX - x0; if (!moved && Math.abs(dx) < 3) return; moved = true; this._faceApply(r3(Math.round((d0 + dx / 8) * 2) / 2), false); inp.value = this._faceDist; };
-        lab.onpointerup = () => { lab.onpointermove = null; lab.onpointerup = null; if (moved) this._faceApply(this._faceDist, true); else inp.focus(); };
+        e.preventDefault(); lab.setPointerCapture(e.pointerId); const x0 = e.clientX; let moved = false;
+        const level0 = (this.faces || []).length > 1 && this._faceLevel;
+        const base0 = level0 ? (this._faceAt != null ? this._faceAt : this._faceOuter()) : (this._faceDist || 0);
+        lab.onpointermove = (ev2) => { const dx = ev2.clientX - x0; if (!moved && Math.abs(dx) < 3) return; moved = true; const step = ev2.shiftKey ? 0.01 : 0.1; this._faceApply(r3(Math.round((base0 + dx / 12) / step) * step), false); inp.value = level0 ? this._faceAt : this._faceDist; };
+        lab.onpointerup = () => { lab.onpointermove = null; lab.onpointerup = null; if (moved) this._faceApply(level0 ? this._faceAt : this._faceDist, true); else inp.focus(); };
       };
+    }
+    // The ghost is the visible triangles when the outline would cover more than
+    // them. A clean face keeps one prism, so its preview stays a single shape.
+    _faceGhostGeom(f) {
+      const T = this.T;
+      if (f.patches && f.draw && f.draw.length >= 9) {
+        const pos = []; const idx = [];
+        const nTri = (f.draw.length / 9) | 0;
+        for (let i = 0; i < nTri; i++) {
+          const base = pos.length / 3;
+          for (let k = 0; k < 3; k++) {
+            const x = f.draw[i * 9 + k * 3], y = f.draw[i * 9 + k * 3 + 1], z = f.draw[i * 9 + k * 3 + 2];
+            const dx = x - f.center.x, dy = y - f.center.y, dz = z - f.center.z;
+            const lx = dx * f.u.x + dy * f.u.y + dz * f.u.z, ly = dx * f.w.x + dy * f.w.y + dz * f.w.z;
+            pos.push(lx, ly, 0, lx, ly, 1);
+          }
+          const a = base, b = base + 2, c = base + 4, A = base + 1, B = base + 3, C = base + 5;
+          idx.push(a, c, b, A, B, C, a, b, B, a, B, A, b, c, C, b, C, B, c, a, A, c, A, C);
+        }
+        const g = new T.BufferGeometry();
+        g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+        g.setIndex(idx);
+        return g;
+      }
+      const sh = new T.Shape((f.outer || []).map((q) => new T.Vector2(q[0], q[1])));
+      (f.holes || []).forEach((h) => sh.holes.push(new T.Path(h.map((q) => new T.Vector2(q[0], q[1])))));
+      return new T.ExtrudeGeometry(sh, { depth: 1, bevelEnabled: false });
     }
     // Instant preview of a push / pull: the face's outline extruded by d, drawn by
     // the page (no rebuild), so dragging is smooth even on heavy designs.
+    _facePreviewClear() {
+      const p = this._fPrev; if (!p) return;
+      this.scene.remove(p); p.traverse((o) => o.geometry && o.geometry.dispose()); this._fPrev = null;
+    }
+    // Live push / pull. The prism is built once for this face; dragging only
+    // scales it along the normal, so the pointer is never waiting on a rebuild.
     _facePreview(d) {
       const T = this.T; const f = this.face;
-      if (this._fPrev) { this.scene.remove(this._fPrev); this._fPrev.traverse((o) => o.geometry && o.geometry.dispose()); this._fPrev = null; }
-      if (!f || !d) return;
-      const sh = new T.Shape(f.outer.map((q) => new T.Vector2(q[0], q[1])));
-      f.holes.forEach((h) => sh.holes.push(new T.Path(h.map((q) => new T.Vector2(q[0], q[1])))));
-      const g = new T.ExtrudeGeometry(sh, { depth: Math.abs(d), bevelEnabled: false });
-      if (d < 0) g.translate(0, 0, -Math.abs(d));
-      const col = d > 0 ? this.colors.accent : this.colors.hole;
-      const grp = new T.Group();
-      const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, depthWrite: false, side: T.DoubleSide }));
-      const e = new T.LineSegments(new T.EdgesGeometry(g, 20), new T.LineBasicMaterial({ color: col, depthTest: false, transparent: true }));
-      m.renderOrder = 7; e.renderOrder = 8; grp.add(m, e);
-      grp.matrixAutoUpdate = false;
-      grp.matrix.makeBasis(f.u, f.w, f.n).setPosition(f.center); // the sketch frame of the face (centre, u, w, normal)
-      this.scene.add(grp); this._fPrev = grp;
+      if (!f || !d) { this._facePreviewClear(); return; }
+      const sign = d > 0 ? 1 : -1;
+      if (!this._fPrev || this._fPrev.userData.face !== f) {
+        this._facePreviewClear();
+        const g = this._faceGhostGeom(f);
+        const col = this.colors.accent;
+        const wrap = new T.Group();
+        const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35, depthWrite: false, depthTest: false, side: T.DoubleSide }));
+        const e = new T.LineSegments(new T.EdgesGeometry(g, 20), new T.LineBasicMaterial({ color: col, depthTest: false, transparent: true }));
+        m.renderOrder = 7; e.renderOrder = 8; wrap.add(m, e);
+        const grp = new T.Group(); grp.matrixAutoUpdate = false;
+        grp.matrix.makeBasis(f.u, f.w, f.n).setPosition(f.center); // the sketch frame of the face (centre, u, w, normal)
+        grp.add(wrap); grp.userData.face = f; grp.userData.wrap = wrap; grp.userData.sign = 1;
+        this.scene.add(grp); this._fPrev = grp;
+      }
+      const wrap = this._fPrev.userData.wrap; const ad = Math.abs(d);
+      wrap.scale.z = ad; wrap.position.z = d < 0 ? -ad : 0;
+      if (this._fPrev.userData.sign !== sign) {
+        const col = d > 0 ? this.colors.accent : this.colors.hole;
+        wrap.traverse((o) => { if (o.material && o.material.color) o.material.color.copy(col); });
+        this._fPrev.userData.sign = sign;
+      }
       if (this._faceArrow) { this._faceArrow.position.copy(f.center).addScaledVector(f.n, Math.max(0, d)); }
+    }
+    // World axis the selected faces mostly point along (0 X, 1 Y, 2 Z).
+    _faceAxis() {
+      const faces = this.faces || []; if (!faces.length) return 2;
+      const s = [0, 0, 0]; faces.forEach((f) => { s[0] += f.n.x; s[1] += f.n.y; s[2] += f.n.z; });
+      let k = 0; if (Math.abs(s[1]) > Math.abs(s[k])) k = 1; if (Math.abs(s[2]) > Math.abs(s[k])) k = 2;
+      return k;
+    }
+    // The level already reached by the face that sticks out furthest.
+    _faceOuter() {
+      const faces = this.faces || []; if (!faces.length) return 0;
+      const k = this._faceAxis();
+      let sign = 0; faces.forEach((f) => { sign += f.n.getComponent(k); }); sign = sign >= 0 ? 1 : -1;
+      let at = faces[0].center.getComponent(k);
+      faces.forEach((f) => { const c = f.center.getComponent(k); if (c * sign > at * sign) at = c; });
+      return r3(at);
+    }
+    // How far this face travels. Distance mode: the same amount. Level mode: whatever
+    // reaches the shared coordinate along the faces' axis. 0 if it already sits there,
+    // or if it does not point along that axis.
+    _faceTravel(f) {
+      if (!(this._faceLevel && (this.faces || []).length > 1)) return this._faceDist || 0;
+      const k = this._faceAxis(); const n = f.n.getComponent(k);
+      if (Math.abs(n) < 0.35) return 0;
+      const at = this._faceAt != null ? this._faceAt : this._faceOuter();
+      return r3((at - f.center.getComponent(k)) / n);
+    }
+    // One prism per selected face. `dists` is how far each one travels along its normal.
+    _facePreviewMany(dists) {
+      const T = this.T; const faces = this.faces || [];
+      if (!faces.length || !dists || !dists.some((d) => Math.abs(d) >= 0.05)) { this._facePreview(0); return; }
+      const key = faces.map((f) => f.center.x.toFixed(2) + ',' + f.center.y.toFixed(2) + ',' + f.center.z.toFixed(2)).join(';');
+      if (!this._fPrev || this._fPrev.userData.key !== key) {
+        this._facePreviewClear();
+        const root = new T.Group(); root.userData.key = key;
+        faces.forEach((f) => {
+          const g = this._faceGhostGeom(f);
+          const basis = new T.Group(); basis.matrixAutoUpdate = false;
+          basis.matrix.makeBasis(f.u, f.w, f.n).setPosition(f.center);
+          const wrap = new T.Group();
+          const m = new T.Mesh(g, new T.MeshBasicMaterial({ color: this.colors.accent, transparent: true, opacity: 0.35, depthWrite: false, depthTest: false, side: T.DoubleSide }));
+          const e = new T.LineSegments(new T.EdgesGeometry(g, 20), new T.LineBasicMaterial({ color: this.colors.accent, depthTest: false, transparent: true }));
+          m.renderOrder = 7; e.renderOrder = 8; wrap.add(m, e); basis.add(wrap); root.add(basis);
+        });
+        this.scene.add(root); this._fPrev = root;
+      }
+      this._fPrev.children.forEach((basis, i) => {
+        const d = dists[i] || 0; const ad = Math.abs(d); const wrap = basis.children[0];
+        wrap.visible = ad >= 0.05; wrap.scale.z = ad || 0.0001; wrap.position.z = d < 0 ? -ad : 0;
+        const col = d >= 0 ? this.colors.accent : this.colors.hole;
+        wrap.traverse((o) => { if (o.material && o.material.color) o.material.color.copy(col); });
+      });
+      (this._faceArrows || []).forEach(({ arrow, f }, i) => { const d = dists[i] || 0; arrow.position.copy(f.center).addScaledVector(f.n, d > 0 ? d : 0); });
+    }
+    // Push a loop out (CCW) or a hole in (CW) so a delete overlaps the side walls
+    // instead of stopping exactly on them and leaving those faces behind.
+    _offsetLoop(pts, dist) {
+      const n = pts.length;
+      if (n < 3 || !(dist > 0)) return pts;
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const a = pts[(i + n - 1) % n], b = pts[i], c = pts[(i + 1) % n];
+        const e1x = b[0] - a[0], e1y = b[1] - a[1], e2x = c[0] - b[0], e2y = c[1] - b[1];
+        const l1 = Math.hypot(e1x, e1y) || 1, l2 = Math.hypot(e2x, e2y) || 1;
+        const n1x = e1y / l1, n1y = -e1x / l1, n2x = e2y / l2, n2y = -e2x / l2;
+        const p1x = a[0] + n1x * dist, p1y = a[1] + n1y * dist;
+        const p2x = b[0] + n2x * dist, p2y = b[1] + n2y * dist;
+        const den = e1x * e2y - e1y * e2x;
+        let x, y;
+        if (Math.abs(den) < 1e-8) { x = b[0] + n1x * dist; y = b[1] + n1y * dist; }
+        else { const t = ((p2x - p1x) * e2y - (p2y - p1y) * e2x) / den; x = p1x + t * e1x; y = p1y + t * e1y; }
+        if (Math.hypot(x - b[0], y - b[1]) > dist * 3) {
+          const lx = n1x + n2x, ly = n1y + n2y, ll = Math.hypot(lx, ly) || 1;
+          x = b[0] + (lx / ll) * dist; y = b[1] + (ly / ll) * dist;
+        }
+        const q = [r3(x), r3(y)];
+        const prev = out[out.length - 1];
+        if (!prev || Math.hypot(q[0] - prev[0], q[1] - prev[1]) >= 1e-3) out.push(q);
+      }
+      return out.length >= 3 ? out : pts;
+    }
+    // Visible triangles, in the face's own plane, when one outline would be wrong.
+    _faceTriProfiles(f) {
+      const out = []; if (!f.draw) return out;
+      const nTri = (f.draw.length / 9) | 0;
+      for (let i = 0; i < nTri && out.length < 300; i++) {
+        const pts = [];
+        for (let k = 0; k < 3; k++) {
+          const x = f.draw[i * 9 + k * 3], y = f.draw[i * 9 + k * 3 + 1], z = f.draw[i * 9 + k * 3 + 2];
+          const dx = x - f.center.x, dy = y - f.center.y, dz = z - f.center.z;
+          const q = [r3(dx * f.u.x + dy * f.u.y + dz * f.u.z), r3(dx * f.w.x + dy * f.w.y + dz * f.w.z)];
+          const l = pts[pts.length - 1];
+          if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) >= 1e-3) pts.push(q);
+        }
+        if (pts.length === 3 && Math.abs(this._polyArea(pts)) > 0.02) out.push({ k: 'poly', pts });
+      }
+      return out;
+    }
+    _faceFields(f, d) {
+      const eps = 0.02;
+      const depth = Math.abs(d);
+      const n = f.n; const base = d >= 0 ? f.center.clone().addScaledVector(n, -eps) : f.center.clone().addScaledVector(n, -depth);
+      // The outline is the face. A wider cut (the old 0.35 mm outset) removed a
+      // band around the face; reversing it built a new solid of that same band.
+      let profiles;
+      if (f.patches && f.patches.length) profiles = f.patches.slice(0, 300).map((pts) => ({ k: 'poly', pts }));
+      else if (f.outer && this._loopBad(f.outer)) profiles = this._faceTriProfiles(f);
+      else {
+        const holes = (f.holes || []).map((h) => ({ k: 'poly', pts: h, cut: true }));
+        profiles = [{ k: 'poly', pts: f.outer }].concat(holes);
+      }
+      if (!profiles.length) profiles = [{ k: 'poly', pts: f.outer }];
+      return {
+        role: d >= 0 ? 'solid' : 'hole',
+        height: r3(depth + eps),
+        pos: [r3(base.x), r3(base.y), r3(base.z)], rot: f.rot.slice(),
+        profiles,
+      };
+    }
+    _faceSpawn(f, dist) {
+      const it = C.newItem('sketch', Object.assign({ name: this._uniqueName(dist >= 0 ? 'Pull' : 'Push') }, this._faceFields(f, dist)));
+      const gid = this._faceGroup(f); if (gid) it.group = gid;
+      it.feature = true; this._tagFaceHost(it, f); this.data.items.push(it); return it.id;
+    }
+    _faceApplyMany(d, final) {
+      const list = this.faces || []; if (!list.length || this.readOnly) return;
+      d = r3(d);
+      const level = !!(this._faceLevel && list.length > 1);
+      if (level) this._faceAt = d; else this._faceDist = d;
+      const dists = list.map((f) => this._faceTravel(f));
+      const moving = dists.some((x) => Math.abs(x) >= 0.05);
+      if (!final) {
+        this._facePreviewMany(dists);
+        const i = this.inspEl && this.inspEl.querySelector('[data-fdist]'); if (i && document.activeElement !== i) i.value = d;
+        return;
+      }
+      this._facePreview(0);
+      if (!this._faceIds && !moving) return;
+      const write = (f, dist, id) => {
+        if (Math.abs(dist) < 0.05) { if (id) this.data.items = this.data.items.filter((x) => x.id !== id); return null; }
+        if (!id) return this._faceSpawn(f, dist);
+        const it = this._item(id); if (!it) return this._faceSpawn(f, dist);
+        const name = /^(Pull|Push)( \d+)?$/.test(it.name) ? it.name.replace(/^(Pull|Push)/, dist >= 0 ? 'Pull' : 'Push') : it.name;
+        Object.assign(it, C.normalizeItem(Object.assign(it, this._faceFields(f, dist), { name })));
+        this._tagFaceHost(it, f);
+        return id;
+      };
+      if (!this._faceIds) { this._snapshot(); this._fLive = !final; this._faceIds = list.map((f, i) => write(f, dists[i], null)); }
+      else { this._faceSnap(final); this._faceIds = list.map((f, i) => write(f, dists[i], this._faceIds[i])); if (this._faceIds.every((id) => !id)) this._faceIds = null; }
+      if (final) { this._refreshItems(); this._changed(); this._requestBuild(); this._renderFacePanel(); }
     }
     // Fill: how far in front of the face is the facing surface? Rays from the face's
     // centre and from points just inside its corners go along the normal; the nearest
@@ -3167,10 +4656,19 @@
     }
     // Create / update the push-pull shape for distance d (mm along the face normal).
     _faceApply(d, final) {
+      if ((this.faces || []).length > 1) return this._faceApplyMany(d, final);
       const f = this.face; if (!f || this.readOnly) { this._flog('push/pull ignored:', !f ? 'no face selected' : 'read-only'); return; }
       d = r3(d);
-      if (final) this._flog('push/pull', d, 'mm', this._faceOwn ? '(resize)' : '(face shape)', 'item:', this._faceItem || 'new');
-      this._facePreview(final ? 0 : d);
+      // While the pointer is down, only the preview moves. The solid is written
+      // once, on release, so a drag never rebuilds the part.
+      if (!final) {
+        if (d === this._faceDist && this._fPrev) return;
+        this._faceDist = d; this._facePreview(d);
+        const i = this.inspEl && this.inspEl.querySelector('[data-fdist]'); if (i) i.value = d;
+        return;
+      }
+      this._flog('push/pull', d, 'mm', this._faceOwn ? '(resize)' : '(face shape)', 'item:', this._faceItem || 'new');
+      this._facePreview(0);
       const own = this._faceOwn;
       if (own) { // resize the shape the face belongs to
         const it = this._item(own.id); if (!it) return;
@@ -3191,15 +4689,7 @@
         return;
       }
       if (!this._faceItem && !d) return;
-      const eps = 0.02; // overlap the part a hair so the new shape joins / cuts cleanly
-      const depth = Math.abs(d);
-      const n = f.n; const base = d >= 0 ? f.center.clone().addScaledVector(n, -eps) : f.center.clone().addScaledVector(n, -depth);
-      const fields = {
-        role: d >= 0 ? 'solid' : 'hole',
-        height: r3(depth + eps),
-        pos: [r3(base.x), r3(base.y), r3(base.z)], rot: f.rot.slice(),
-        profiles: [{ k: 'poly', pts: f.outer }].concat(f.holes.map((h) => ({ k: 'poly', pts: h, cut: true }))),
-      };
+      const fields = this._faceFields(f, d);
       if (!this._faceItem) {
         if (!d) return;
         this._snapshot(); this._fLive = !final;
@@ -3207,11 +4697,12 @@
         const gid = this._faceGroup(f); if (gid) it.group = gid; // stays part of the combined object
         it.feature = true; // a face push / pull: its cut shape is not drawn as an outline
         if (this._fillNext && d > 0) { it.fill = true; it.name = this._uniqueName('Fill'); }
+        this._tagFaceHost(it, f);
         this.data.items.push(it); this._faceItem = it.id;
       } else {
         const it = this._item(this._faceItem); if (!it) return;
         if (!d) { this.data.items = this.data.items.filter((x) => x.id !== it.id); this._faceItem = null; }
-        else { this._faceSnap(final); Object.assign(it, C.normalizeItem(Object.assign(it, fields, { name: /^(Pull|Push)( \d+)?$/.test(it.name) ? it.name.replace(/^(Pull|Push)/, d >= 0 ? 'Pull' : 'Push') : it.name }))); }
+        else { this._faceSnap(final); Object.assign(it, C.normalizeItem(Object.assign(it, fields, { name: /^(Pull|Push)( \d+)?$/.test(it.name) ? it.name.replace(/^(Pull|Push)/, d >= 0 ? 'Pull' : 'Push') : it.name }))); this._tagFaceHost(it, f); }
       }
       this._faceDist = d;
       if (final) { this._refreshItems(); this._changed(); this._requestBuild(); this._renderFacePanel(); }
@@ -3699,6 +5190,8 @@
       if (mod && k === 'g') { e.preventDefault(); if (e.shiftKey) this._uncombine(this._soleGroup() || this._gid(this.sel)); else this._combine(); return; }
       if (mod && k === 'd' && this.multi.length) { e.preventDefault(); this._duplicateMany(this.multi.slice()); return; }
       if (mod && k === 'd' && this.sel) { e.preventDefault(); this._duplicate(this.sel); return; }
+      if (mod && k === 'c') { e.preventDefault(); this._copySel(); return; }
+      if (mod && k === 'v') { e.preventDefault(); this._paste(); return; }
       if (mod) return;
       if ((k === 'delete' || k === 'backspace') && this.multi.length && !this.readOnly) { e.preventDefault(); this._deleteMany(this.multi.slice()); return; }
       if ((k === 'delete' || k === 'backspace') && this.sel && !this.readOnly) { e.preventDefault(); this._delete(this.sel); return; }
@@ -3720,7 +5213,7 @@
         const st = (this.data.settings.snap || 1) * (e.shiftKey ? 10 : 1);
         const dv = { arrowleft: [-st, 0, 0], arrowright: [st, 0, 0], arrowup: [0, st, 0], arrowdown: [0, -st, 0], pageup: [0, 0, st], pagedown: [0, 0, -st] }[k];
         this._nudgeSnap();
-        this.multi.slice().forEach((id) => { const it = this._item(id); if (it) it.pos = it.pos.map((v, i) => r3(v + dv[i])); });
+        this._shiftIds(this.multi.slice(), dv);
         this._refreshItems(); this._commit();
         return;
       }
@@ -3729,7 +5222,7 @@
         const s = (this.data.settings.snap || 1) * (e.shiftKey ? 10 : 1);
         const d = { arrowleft: [-s, 0, 0], arrowright: [s, 0, 0], arrowup: [0, s, 0], arrowdown: [0, -s, 0], pageup: [0, 0, s], pagedown: [0, 0, -s] }[k];
         this._nudgeSnap();
-        const it0 = this._item(this.sel); if (it0) it0.pos = it0.pos.map((v, i) => r3(v + d[i]));
+        this._shiftIds([this.sel], d);
         this._refreshItems(); this._commit();
         this._fillTransform();
       }

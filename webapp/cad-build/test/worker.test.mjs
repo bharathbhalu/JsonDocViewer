@@ -105,6 +105,8 @@ section('Sketches');
   check('sketch thickness 1', near(size(r.result)[2], 1, 1e-6), size(r.result));
   r = await build([item({ name: 'tri', type: 'sketch', height: 2, profiles: [{ k: 'poly', pts: [[0, 0], [20, 0], [0, 10]] }] })]);
   check('triangle 20×10, height 2 → 200', near(vol(r.result), 200, 0.01), vol(r.result));
+  r = await build([item({ name: 'quad', type: 'sketch', height: 2, profiles: [{ k: 'poly', pts: [[-5, -5], [5, -5], [5, 5]] }, { k: 'poly', pts: [[-5, -5], [5, 5], [-5, 5]] }] })]);
+  check('two coplanar triangles fuse into a 10×10×2 slab', near(vol(r.result), 200, 1) && !(r.errors && r.errors.quad), JSON.stringify(r.errors) + ' vol ' + vol(r.result));
   r = await build([item({ name: 'e', type: 'sketch', height: 1, profiles: [] })]);
   check('empty sketch → clear error', /empty/.test(r.errors.e || ''), JSON.stringify(r.errors));
   r = await build([item({ name: 'sk', type: 'sketch', height: 5, hollow: 1, profiles: [{ k: 'rect', x: 0, y: 0, w: 20, h: 20 }] })]);
@@ -401,6 +403,58 @@ section('Scripts');
   check('script with a syntax error → error, no crash', r.type === 'result' && !!r.errors.S, JSON.stringify(r.errors));
   r = await build([item({ name: 'S', type: 'code', code: 'const x = 1;' })]);
   check('script without main() → tells you to define it', /main/.test(r.errors.S || ''), JSON.stringify(r.errors));
+}
+
+section('A later + extrude fills a − extrude');
+{
+  const box = item({ name: 'Body', type: 'box', size: { x: 30, y: 20, z: 10, corner: 0 } });
+  const push = item({ name: 'Push', type: 'sketch', role: 'hole', feature: true, height: 2.02, pos: [0, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 30, h: 20 }] });
+  const pull = item({ name: 'Pull', type: 'sketch', role: 'solid', feature: true, height: 2.02, pos: [0, 0, 7.98], profiles: [{ k: 'rect', x: 0, y: 0, w: 30, h: 20 }] });
+  let r = await build([box, push]);
+  check('− extrude cuts a 2 mm pocket off the top', near(vol(r.result), 6000 - 1200, 2), vol(r.result));
+  check('− extrude stays a few clean faces', r.result.triangles.length < 80, r.result.triangles.length);
+  const cutBody = F.meshBounds(r.items.Body.vertices);
+  check('the body’s mesh is the 8 mm that is left, not the uncut box', near(vol(r.items.Body), 4800, 30) && near(cutBody.hi[2], 8, 0.4) && near(cutBody.lo[2], 0, 0.2), vol(r.items.Body) + ' z ' + cutBody.lo[2] + '…' + cutBody.hi[2]);
+  r = await build([box, push, pull]);
+  check('+ extrude afterwards fills that pocket back', near(vol(r.result), 6000, 2), vol(r.result));
+  const bore = item({ name: 'Bore', type: 'cylinder', role: 'hole', size: { d: 6, z: 30 }, pos: [0, 0, -5] });
+  r = await build([box, push, pull, bore]);
+  check('a real hole still cuts the filled part', near(vol(r.result), 6000 - Math.PI * 9 * 10, 8), vol(r.result));
+}
+
+section('A later − extrude cuts a fill');
+{
+  const box = item({ name: 'Body', type: 'box', size: { x: 30, y: 20, z: 10, corner: 0 } });
+  const push = item({ name: 'Push', type: 'sketch', role: 'hole', feature: true, height: 2.02, pos: [0, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 30, h: 20 }] });
+  const fill = item({ name: 'Fill', type: 'sketch', role: 'solid', feature: true, fill: true, height: 2.02, pos: [0, 0, 7.98], profiles: [{ k: 'rect', x: 0, y: 0, w: 30, h: 20 }] });
+  const again = item({ name: 'Push 2', type: 'sketch', role: 'hole', feature: true, height: 2.02, pos: [0, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 10, h: 10 }] });
+  let r = await build([box, push, fill]);
+  check('a fill after a − extrude puts that material back', near(vol(r.result), 6000, 2), vol(r.result));
+  r = await build([box, push, fill, again]);
+  check('a later − extrude cuts the fill', near(vol(r.result), 6000 - 200, 8), vol(r.result));
+}
+
+section('A moved, rotated cut is meshed back in its own frame');
+{
+  const moved = item({ name: 'Moved', type: 'box', size: { x: 30, y: 20, z: 10, corner: 0 }, pos: [40, 0, 0], rot: [0, 0, 90] });
+  const cut = item({ name: 'PushM', type: 'sketch', role: 'hole', feature: true, height: 2.02, pos: [40, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 20, h: 30 }] });
+  const r = await build([moved, cut]);
+  const b = F.meshBounds(r.items.Moved.vertices);
+  check('rotated cut body stays in its own frame', near(b.lo[0], -15, 0.8) && near(b.hi[0], 15, 0.8) && near(b.lo[1], -10, 0.8) && near(b.hi[1], 10, 0.8) && near(b.hi[2], 8, 0.5), JSON.stringify({ lo: b.lo, hi: b.hi }));
+  check('rotated cut body volume is the pocket that is left', near(vol(r.items.Moved), 4800, 40), vol(r.items.Moved));
+}
+
+section('A face cut does not change a separate object');
+{
+  const a = item({ name: 'A', type: 'box', size: { x: 20, y: 20, z: 10, corner: 0 }, pos: [0, 0, 0] });
+  const b = item({ name: 'B', type: 'box', size: { x: 20, y: 20, z: 10, corner: 0 }, pos: [80, 0, 0] });
+  const push = item({ name: 'Push', type: 'sketch', role: 'hole', feature: true, height: 2.02, pos: [0, 0, 8], profiles: [{ k: 'rect', x: 0, y: 0, w: 20, h: 20 }] });
+  const r = await build([a, b, push]);
+  const bb = F.meshBounds(r.result.vertices);
+  check('the other box keeps its full volume', near(vol(r.items.B), 4000, 1), vol(r.items.B));
+  check('only the bitten box loses the pocket', near(vol(r.items.A), 3200, 30), vol(r.items.A));
+  check('the printed pair is both boxes, pocket only on the first', near(vol(r.result), 7200, 8), vol(r.result));
+  check('the other box stays where it was', near(bb.lo[0], -10, 0.5) && near(bb.hi[0], 90, 0.5), JSON.stringify(bb));
 }
 
 section('Speed');

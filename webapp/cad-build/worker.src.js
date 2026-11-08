@@ -292,8 +292,14 @@ function profileDrawing(p) {
         for (let i = 0; i < P.length && P.length > 3; i++) {
           const a0 = at(P[(i + P.length - 1) % P.length]), b0 = at(P[i]), c0 = at(P[(i + 1) % P.length]);
           const cr = (b0[0] - a0[0]) * (c0[1] - a0[1]) - (b0[1] - a0[1]) * (c0[0] - a0[0]);
-          const L = Math.hypot(c0[0] - a0[0], c0[1] - a0[1]) + Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
-          if (Math.abs(cr) <= 1e-6 * Math.max(1, L * L) || Math.hypot(b0[0] - a0[0], b0[1] - a0[1]) < 1e-3) { P.splice(i, 1); changed = true; i--; }
+          const chord = Math.hypot(c0[0] - a0[0], c0[1] - a0[1]);
+          const legs = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]) * Math.hypot(c0[0] - b0[0], c0[1] - b0[1]);
+          const L = chord + Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+          const off = chord > 1e-6 ? Math.abs(cr) / chord : 0;
+          const sinTurn = legs > 1e-6 ? Math.abs(cr) / legs : 0;
+          // collinear points, and shallow wrinkles a boolean left on a straight edge.
+          // a corner or a fillet sample turns, so it is kept
+          if (Math.abs(cr) <= 1e-6 * Math.max(1, L * L) || Math.hypot(b0[0] - a0[0], b0[1] - a0[1]) < 1e-3 || (off < 0.2 && sinTurn < 0.05)) { P.splice(i, 1); changed = true; i--; }
         }
       }
     }
@@ -314,7 +320,7 @@ function sketchShape(it) {
   let drawing = null;
   for (const p of solid) { const d = profileDrawing(p); drawing = drawing ? drawing.fuse(d) : d; }
   for (const p of cuts) drawing = drawing.cut(profileDrawing(p));
-  const h = num(it.height, 0.05), depth = Math.max(0.05, Math.abs(h));
+  const h = num(it.height, 0.05), depth = Math.max(0.001, Math.abs(h));
   const solidShape = drawing.sketchOnPlane('XY').extrude(depth);
   // negative height: extrude into the face the sketch sits on (below its plane)
   return finishShape(h < 0 ? solidShape.translate([0, 0, -depth]) : solidShape, it, it._info);
@@ -441,6 +447,65 @@ function placeManifold(man, it) {
   step(m.translate([num(p[0], 0), num(p[1], 0), num(p[2], 0)]));
   return m;
 }
+// Inverse of the viewer's placement (flip, then ZYX rotation, then translate),
+// so a world-space mesh lands back in the item's own frame.
+function unplaceMesh(mesh, it) {
+  const r = (it.rot || [0, 0, 0]).map((x) => num(x, 0) * Math.PI / 180);
+  const p = it.pos || [0, 0, 0];
+  const fl = Array.isArray(it.flip) ? it.flip : [];
+  const cx = Math.cos(r[0]), sx = Math.sin(r[0]);
+  const cy = Math.cos(r[1]), sy = Math.sin(r[1]);
+  const cz = Math.cos(r[2]), sz = Math.sin(r[2]);
+  const px = num(p[0], 0), py = num(p[1], 0), pz = num(p[2], 0);
+  const v = mesh.vertices;
+  const o = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i += 3) {
+    let x = v[i] - px, y = v[i + 1] - py, z = v[i + 2] - pz;
+    const x1 = cz * x + sz * y, y1 = -sz * x + cz * y, z1 = z;
+    const x2 = cy * x1 + sy * z1, y2 = y1, z2 = -sy * x1 + cy * z1;
+    let x3 = x2, y3 = cx * y2 + sx * z2, z3 = -sx * y2 + cx * z2;
+    if (fl[0]) x3 = -x3;
+    if (fl[1]) y3 = -y3;
+    if (fl[2]) z3 = -z3;
+    o[i] = x3; o[i + 1] = y3; o[i + 2] = z3;
+  }
+  return { vertices: o, triangles: mesh.triangles };
+}
+function boxesOverlap(a, b, pad) {
+  const p = pad || 0;
+  return !(a.max[0] + p < b.min[0] || b.max[0] + p < a.min[0] || a.max[1] + p < b.min[1] || b.max[1] + p < a.min[1] || a.max[2] + p < b.min[2] || b.max[2] + p < a.min[2]);
+}
+// A body that a hole has cut is meshed from that one remaining solid, in the
+// body's own frame. An uncut body keeps the mesh it was drawn with.
+function refreshVisible(design, solidInfo, items, holes, itemMeshes, keep, transfer) {
+  if (!design || !solidInfo.length || !holes.length) return;
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const holeBoxes = holes.map((h) => { try { return h.boundingBox(); } catch (e) { return null; } }).filter(Boolean);
+  if (!holeBoxes.length) return;
+  for (const si of solidInfo) {
+    const it = byId.get(si.id);
+    if (!it || !si.man) continue;
+    let box = null;
+    try { box = si.man.boundingBox(); } catch (e) { continue; }
+    if (!holeBoxes.some((b) => boxesOverlap(box, b, 0.05))) continue;
+    let vis = null;
+    try {
+      vis = design.intersect(si.man);
+      if (!vis || vis === si.man || vis === design) { vis = null; continue; }
+      const vol = Math.abs(si.man.volume());
+      const left = vis.isEmpty() ? 0 : vis.volume();
+      if (left > vol - Math.max(0.5, vol * 0.002)) continue;
+      const mesh = left < 0.05 ? { vertices: new Float32Array(0), triangles: new Uint32Array(0) } : unplaceMesh(fromManifold(vis), it);
+      itemMeshes[si.id] = mesh;
+      if (mesh.vertices.byteLength) transfer.push(mesh.vertices.buffer);
+      if (mesh.triangles.byteLength) transfer.push(mesh.triangles.buffer);
+      const i = keep.indexOf(si.id);
+      if (i >= 0) keep.splice(i, 1);
+      sentSig.set(si.id, sig(it) + '|vis');
+    } catch (e) { /* the mesh from before the cut still draws */ }
+    finally { if (vis && vis !== si.man && vis !== design) del(vis); }
+  }
+}
 function placeShape(shape, it) {
   let s = shape.clone();
   const fl = Array.isArray(it.flip) ? it.flip : [];
@@ -452,6 +517,165 @@ function placeShape(shape, it) {
   if (num(r[1], 0)) s = s.rotate(num(r[1], 0), [0, 0, 0], [0, 1, 0]);
   if (num(r[2], 0)) s = s.rotate(num(r[2], 0), [0, 0, 0], [0, 0, 1]);
   return s.translate([num(p[0], 0), num(p[1], 0), num(p[2], 0)]);
+}
+// Local mesh → world, the same flips / X-then-Y-then-Z / move as placeManifold.
+function placeMesh(mesh, it) {
+  const r = (it.rot || [0, 0, 0]).map((x) => num(x, 0) * Math.PI / 180);
+  const p = it.pos || [0, 0, 0];
+  const fl = Array.isArray(it.flip) ? it.flip : [];
+  const cx = Math.cos(r[0]), sx = Math.sin(r[0]);
+  const cy = Math.cos(r[1]), sy = Math.sin(r[1]);
+  const cz = Math.cos(r[2]), sz = Math.sin(r[2]);
+  const v = mesh.vertices;
+  const o = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i += 3) {
+    let x = v[i], y = v[i + 1], z = v[i + 2];
+    if (fl[0]) x = -x; if (fl[1]) y = -y; if (fl[2]) z = -z;
+    const y1 = cx * y - sx * z, z1 = sx * y + cx * z, x1 = x;
+    const x2 = cy * x1 + sy * z1, z2 = -sy * x1 + cy * z1, y2 = y1;
+    const x3 = cz * x2 - sz * y2, y3 = sz * x2 + cz * y2, z3 = z2;
+    o[i] = x3 + num(p[0], 0); o[i + 1] = y3 + num(p[1], 0); o[i + 2] = z3 + num(p[2], 0);
+  }
+  return { vertices: o, triangles: new Uint32Array(mesh.triangles) };
+}
+function concatMeshes(parts) {
+  let nv = 0, nt = 0;
+  for (const p of parts) { nv += p.vertices.length; nt += p.triangles.length; }
+  const vertices = new Float32Array(nv);
+  const triangles = new Uint32Array(nt);
+  let vo = 0, to = 0, base = 0;
+  for (const p of parts) {
+    vertices.set(p.vertices, vo);
+    const t = p.triangles;
+    for (let i = 0; i < t.length; i++) triangles[to + i] = t[i] + base;
+    base += p.vertices.length / 3;
+    vo += p.vertices.length;
+    to += t.length;
+  }
+  return { vertices, triangles };
+}
+// True when the two boxes share a slab thicker than a flush-face lip (0.02 mm).
+function bitesBox(a, b) {
+  const dx = Math.min(a.max[0], b.max[0]) - Math.max(a.min[0], b.min[0]);
+  const dy = Math.min(a.max[1], b.max[1]) - Math.max(a.min[1], b.min[1]);
+  const dz = Math.min(a.max[2], b.max[2]) - Math.max(a.min[2], b.min[2]);
+  return dx > 0.03 && dy > 0.03 && dz > 0.03;
+}
+// OpenCascade cut of one exact solid by the face pushes that land on it.
+function cutSolidExact(it, cutters) {
+  const c = itemCache.get(sig(it));
+  if (!c || !c.shape) return null;
+  const made = [];
+  const wipe = () => { for (const s of made) { try { s.delete(); } catch (e) { /* freed */ } } };
+  try {
+    let shape = placeShape(c.shape, it);
+    made.push(shape);
+    for (const cutter of cutters) {
+      const cc = itemCache.get(sig(cutter));
+      if (!cc || !cc.shape) { wipe(); return null; }
+      const placed = placeShape(cc.shape, cutter);
+      made.push(placed);
+      const n = shape.cut(placed);
+      made.push(n);
+      shape = n;
+    }
+    const mesh = shapeToMesh(shape);
+    wipe();
+    if (!mesh || !mesh.triangles || mesh.triangles.length < 3) return null;
+    return mesh;
+  } catch (e) {
+    wipe();
+    if (isFatal(e)) throw e;
+    return null;
+  }
+}
+// A face cut changes only the solids it bites. Everything else keeps the mesh
+// it was drawn with — it is not fused or remeshed.
+function buildFaceCuts(seq, solidInfo, items) {
+  const cuts = new Map();
+  const active = [];
+  const real = [];
+  for (const step of seq) {
+    if (step.kind === 'solid') { active.push(step); if (!cuts.has(step.rec.id)) cuts.set(step.rec.id, []); }
+    else if (step.kind === 'feat' && step.man) {
+      let box = null; try { box = step.man.boundingBox(); } catch (e) { box = null; }
+      if (!box) continue;
+      for (const s of active) {
+        let sb = null; try { sb = s.rec.man.boundingBox(); } catch (e) { continue; }
+        if (!bitesBox(sb, box)) continue;
+        cuts.get(s.rec.id).push(step);
+      }
+    } else if (step.kind === 'hole' && step.man) real.push(step);
+  }
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const pieces = [];
+  for (const si of solidInfo) {
+    const it = byId.get(si.id);
+    const list = cuts.get(si.id) || [];
+    let man = si.man;
+    let world = null;
+    if (list.length && it) {
+      world = cutSolidExact(it, list.map((s) => s.it));
+      if (world) {
+        try { man = own(toManifold(world)); } catch (e) { if (isFatal(e)) throw e; world = null; }
+      }
+      if (!world) for (const s of list) { try { man = own(man.subtract(s.man)); } catch (e) { if (isFatal(e)) throw e; } }
+    }
+    let box = null; try { box = man.boundingBox(); } catch (e) { box = null; }
+    let orig = null; try { orig = si.man.boundingBox(); } catch (e) { orig = box; }
+    pieces.push({ id: si.id, it, man, world, box, orig, cut: list.length > 0 });
+  }
+  for (const h of real) {
+    let hb = null; try { hb = h.man.boundingBox(); } catch (e) { hb = null; }
+    if (!hb) continue;
+    for (const p of pieces) {
+      if (!p.box || !bitesBox(p.box, hb)) continue;
+      try { p.man = own(p.man.subtract(h.man)); p.world = null; p.cut = true; p.box = p.man.boundingBox(); } catch (e) { if (isFatal(e)) throw e; }
+    }
+  }
+  // A fill sits inside the solid it repairs, so those two are one volume.
+  // Two different objects are never unioned: that join was growing a region
+  // that belongs to neither of them.
+  const inside = (a, b) => {
+    const t = 0.05;
+    if (!a || !b) return false;
+    return a.min[0] >= b.min[0] - t && a.max[0] <= b.max[0] + t
+      && a.min[1] >= b.min[1] - t && a.max[1] <= b.max[1] + t
+      && a.min[2] >= b.min[2] - t && a.max[2] <= b.max[2] + t;
+  };
+  const isFill = (p) => pieces.some((q) => q !== p && q.cut && inside(p.orig, q.orig) && !inside(q.orig, p.orig));
+  const hosts = pieces.filter((p) => p.cut && !isFill(p));
+  const taken = new Set();
+  const show = [];
+  const mans = [];
+  for (const h of hosts) {
+    const extra = pieces.filter((p) => p !== h && !taken.has(p.id) && isFill(p) && inside(p.orig, h.orig));
+    extra.forEach((p) => taken.add(p.id));
+    let man = h.man;
+    if (extra.length) {
+      try { man = own(MF.Manifold.union([h.man].concat(extra.map((p) => p.man)))); }
+      catch (e) { if (isFatal(e)) throw e; man = h.man; }
+    }
+    mans.push(man);
+    show.push(!extra.length && h.world ? h.world : fromManifold(man));
+  }
+  for (const p of pieces) {
+    if ((p.cut && !isFill(p)) || taken.has(p.id)) continue;
+    mans.push(p.man);
+    const c = p.it && itemCache.get(sig(p.it));
+    show.push(c && c.mesh ? placeMesh(c.mesh, p.it) : fromManifold(p.man));
+  }
+  const design = mans.length === 1 ? mans[0] : (mans.length ? own(MF.Manifold.union(mans)) : null);
+  const mesh = show.length === 1 ? show[0] : (show.length ? concatMeshes(show) : null);
+  const locals = new Map();
+  for (const p of pieces) {
+    if (!p.it || !p.cut || isFill(p)) continue;
+    const src = p.world || fromManifold(p.man);
+    const local = unplaceMesh(src, p.it);
+    local.triangles = new Uint32Array(local.triangles);
+    locals.set(p.it.id, local);
+  }
+  return { design, mesh, locals };
 }
 // A WebAssembly crash (out of memory, out-of-bounds access, abort) leaves the
 // libraries in an unknown state: the page must restart this worker.
@@ -522,7 +746,16 @@ function featureLines(mesh, deg) {
     const j = first.get(key);
     if (j === undefined) { first.set(key, i); continue; }
     first.set(key, -1);
-    if (j >= 0 && nrm[i * 3] * nrm[j * 3] + nrm[i * 3 + 1] * nrm[j * 3 + 1] + nrm[i * 3 + 2] * nrm[j * 3 + 2] < cosT) out.push(v[p * 3], v[p * 3 + 1], v[p * 3 + 2], v[q * 3], v[q * 3 + 1], v[q * 3 + 2]);
+    if (j < 0) continue;
+    const dot = nrm[i * 3] * nrm[j * 3] + nrm[i * 3 + 1] * nrm[j * 3 + 1] + nrm[i * 3 + 2] * nrm[j * 3 + 2];
+    if (dot >= cosT) continue;
+    // A wrinkle on one face: both triangles sit within 0.2 mm of the same plane,
+    // even when a sliver's normal looks steep. A real corner's far vertex does not.
+    const far = (tri) => { for (let s = 0; s < 3; s++) { const r = t[tri * 3 + s]; if (r !== p && r !== q) return r; } return p; };
+    const ra = far(i), rb = far(j);
+    const off = (r, tri, a) => Math.abs((v[r * 3] - v[a * 3]) * nrm[tri * 3] + (v[r * 3 + 1] - v[a * 3 + 1]) * nrm[tri * 3 + 1] + (v[r * 3 + 2] - v[a * 3 + 2]) * nrm[tri * 3 + 2]);
+    if (off(ra, j, p) < 0.2 && off(rb, i, p) < 0.2) continue;
+    out.push(v[p * 3], v[p * 3 + 1], v[p * 3 + 2], v[q * 3], v[q * 3 + 1], v[q * 3 + 2]);
   }
   return new Float32Array(out);
 }
@@ -564,6 +797,7 @@ async function build(msg) {
   const usedPlaced = new Set();
   const itemMeshes = {}; const errors = {}; const notes = {}; const transfer = []; const info = {}; const edgeInfo = {};
   const solids = []; const holes = []; const used = new Set(); const solidInfo = []; const holeInfo = [];
+  const seq = []; // build order: a later solid is added after an earlier face push, so it can fill that cut
   for (const it of items) {
     const s = sig(it); used.add(s);
     try {
@@ -587,8 +821,8 @@ async function build(msg) {
       const pkey = s + '|' + JSON.stringify([it.pos, it.rot, it.flip || null]);
       // placed shapes are kept between builds: only objects that moved / changed are placed again
       const placed = () => { if (!c.manifold) return null; let pm = placedCache.get(pkey); if (!pm) { pm = placeManifold(c.manifold, it); placedCache.set(pkey, pm); } usedPlaced.add(pkey); return pm; };
-      if (c.manifold && it.role === 'solid') { const pm = placed(); solids.push(pm); solidInfo.push({ id: it.id, name: it.name || it.type, man: pm, group: it.group || '', key: pkey, fill: !!it.fill }); }
-      if (c.manifold && it.role === 'hole') { holes.push(placed()); holeInfo.push({ id: it.id, key: pkey }); }
+      if (c.manifold && it.role === 'solid') { const pm = placed(); const rec = { id: it.id, name: it.name || it.type, man: pm, group: it.group || '', key: pkey, fill: !!it.fill }; solids.push(pm); solidInfo.push(rec); seq.push({ kind: 'solid', rec, it }); }
+      if (c.manifold && it.role === 'hole') { const pm = placed(); const feature = !!(it.feature || /^Push( \d+)?$/.test(it.name || '')); holes.push(pm); holeInfo.push({ id: it.id, key: pkey, feature }); seq.push({ kind: feature ? 'feat' : 'hole', man: pm, it }); }
     } catch (e) { if (isFatal(e)) throw e; errors[it.id] = errText(e); }
   }
   lap('items');
@@ -596,14 +830,21 @@ async function build(msg) {
   for (const [k, m] of placedCache) if (!usedPlaced.has(k)) { del(m); placedCache.delete(k); }
   for (const [s, c] of itemCache) if (!used.has(s)) { try { c.shape && c.shape.delete(); } catch (e) { /* freed */ } del(c.manifold); itemCache.delete(s); for (const [k, m] of placedCache) if (k.startsWith(s + '|')) { del(m); placedCache.delete(k); } }
 
-  let design = null; let holeUnion = null;
+  let design = null; let holeUnion = null; let faceShow = null; let faceLocals = null;
   try {
     const holesKey = holeInfo.map((h) => h.id + '=' + h.key).join('\n');
-    if (holes.length) holeUnion = holes.length === 1 ? holes[0] : own(MF.Manifold.union(holes));
-    // fills (Fill to opposite face) are added after holes are cut, so a cut can't remove them
-    const sMain = solidInfo.filter((x) => !x.fill), sFill = solidInfo.filter((x) => x.fill);
-    if (sMain.length) design = combineIncremental(sMain, holeInfo, holes, holeUnion, holesKey);
-    if (sFill.length) { const fu = sFill.length === 1 ? sFill[0].man : own(MF.Manifold.union(sFill.map((x) => x.man))); design = design ? own(design.add(fu)) : fu; }
+    const hasFeat = holeInfo.some((h) => h.feature);
+    if (hasFeat) {
+      // Each face cut stays on the solid it bites. Other solids are not fused into it.
+      const built = buildFaceCuts(seq, solidInfo, items);
+      design = built.design; faceShow = built.mesh; faceLocals = built.locals;
+      if (holes.length) holeUnion = holes.length === 1 ? holes[0] : own(MF.Manifold.union(holes));
+    } else {
+      if (holes.length) holeUnion = holes.length === 1 ? holes[0] : own(MF.Manifold.union(holes));
+      const sMain = solidInfo.filter((x) => !x.fill), sFill = solidInfo.filter((x) => x.fill);
+      if (sMain.length) design = combineIncremental(sMain, holeInfo, holes, holeUnion, holesKey);
+      if (sFill.length) { const fu = sFill.length === 1 ? sFill[0].man : own(MF.Manifold.union(sFill.map((x) => x.man))); design = design ? own(design.add(fu)) : fu; }
+    }
     if (design && design.isEmpty()) design = null;
   } catch (e) { if (isFatal(e)) throw e; postMessage({ type: 'error', id: msg.id, message: 'Combining shapes failed: ' + errText(e) }); return; }
   lap('combine');
@@ -617,12 +858,28 @@ async function build(msg) {
   const groupPieces = {};
   const byGroup = {};
   solidInfo.forEach((si) => { if (si.group) (byGroup[si.group] = byGroup[si.group] || []).push(si.man); });
+  const featCut = holeInfo.some((h) => h.feature);
   for (const [g, mans] of Object.entries(byGroup)) {
     try {
       const tmp = [];
-      let u = mans.length === 1 ? mans[0] : (tmp.push(MF.Manifold.union(mans)), tmp[tmp.length - 1]);
-      if (lastHoles) { u = u.subtract(lastHoles); tmp.push(u); }
-      if (u.isEmpty()) groupPieces[g] = 0;
+      const keep = (m) => { tmp.push(m); return m; };
+      let u;
+      if (!featCut) {
+        u = mans.length === 1 ? mans[0] : keep(MF.Manifold.union(mans));
+        if (lastHoles) u = keep(u.subtract(lastHoles));
+      } else {
+        // Same order as the printed solid: a push cuts, a later solid can fill it, a later push cuts that too.
+        u = null; const real = [];
+        for (const step of seq) {
+          if (u && u.isEmpty()) u = null;
+          if (step.kind === 'solid' && step.rec.group !== g) continue;
+          if (step.kind === 'solid') u = u ? keep(u.add(step.rec.man)) : step.rec.man;
+          else if (step.kind === 'feat' && u) u = keep(u.subtract(step.man));
+          else if (step.kind === 'hole') real.push(step.man);
+        }
+        if (u && real.length) u = keep(u.subtract(real.length === 1 ? real[0] : keep(MF.Manifold.union(real))));
+      }
+      if (!u || u.isEmpty()) groupPieces[g] = 0;
       else { const pcs = u.decompose(); groupPieces[g] = pcs.length; pcs.forEach(del); }
       tmp.forEach(del);
     } catch (e) { /* skip */ }
@@ -646,7 +903,17 @@ async function build(msg) {
     solidInfo.forEach((si, i) => { const z = low.get(find(i)); if (z > 0.05) floating[si.id] = Math.round(z * 100) / 100; });
   } catch (e) { /* informational only */ }
   lap('floating');
-  const result = design ? fromManifold(design) : null;
+  if (!faceShow) refreshVisible(design, solidInfo, items, holes, itemMeshes, keep, transfer);
+  const result = (faceShow && faceShow.triangles && faceShow.triangles.length) ? faceShow : (design ? fromManifold(design) : null);
+  if (faceLocals) for (const [id, local] of faceLocals) {
+    const it = items.find((x) => x.id === id); if (!it) continue;
+    itemMeshes[id] = local;
+    if (local.vertices.byteLength) transfer.push(local.vertices.buffer);
+    if (local.triangles.byteLength) transfer.push(local.triangles.buffer);
+    const i = keep.indexOf(id);
+    if (i >= 0) keep.splice(i, 1);
+    sentSig.set(id, sig(it) + '|vis');
+  }
   if (result) { result.lines = featureLines(result, 28); transfer.push(result.vertices.buffer, result.triangles.buffer, result.lines.buffer); }
   lap('resultMesh');
   const stepOk = items.every((it) => it.role === 'ref' || it.type !== 'model' || (fileMeshes.get(it.file.key) || {}).shape);
@@ -660,7 +927,7 @@ async function build(msg) {
   postMessage({ type: 'result', id: msg.id, timing: tm, pieces, result, items: itemMeshes, keep, errors, notes, stepOk, groupPieces, info, floating, edges: edgeInfo, ms: Math.round(performance.now() - t0) }, transfer);
 }
 
-// Fix body: the chosen solids of the latest build, as they look (holes cut), made
+// Join all: the chosen solids of the latest build, as they look (holes cut), made
 // into one clean solid. Loose slivers smaller than minVol mm³ are dropped.
 function bakeBody(msg) {
   const ids = new Set(msg.ids || []);
