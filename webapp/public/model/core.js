@@ -97,7 +97,14 @@
       }
       const delta = n(s.delta, 0, -1e4, 1e4);
       if (Math.abs(delta) < 0.05) return null;
-      return { op: 'length', scope, at, dir, delta };
+      const out = { op: 'length', scope, at, dir, delta };
+      // The labeled edge endpoints. Needed so the worker can move the free
+      // end even when mesh order points a→b into the attached face.
+      if (s.a && s.b) {
+        out.a = vec(s.a);
+        out.b = vec(s.b);
+      }
+      return out;
     }
     const loop = (Array.isArray(s.loop) ? s.loop : []).slice(0, 600).map((p) => vec(p));
     if (loop.length < 3) return null;
@@ -419,6 +426,187 @@
   function faceCutPlaneOn(tool) {
     return faceTool(tool) === 'cut';
   }
+  // Turn a face outline into an editable sketch profile when the edges allow it.
+  // Circles and axis-aligned rectangles stay exact shapes; a line loop becomes a poly.
+  function faceOutlineProfiles(wires) {
+    const list = Array.isArray(wires) ? wires : [];
+    if (!list.length) return [];
+    if (list.length === 1) {
+      const edges = (list[0] && list[0].edges) || [];
+      if (edges.length === 1 && edges[0].k === 'circle' && edges[0].c && edges[0].r > 0) {
+        return [{ k: 'circle', x: edges[0].c[0], y: edges[0].c[1], r: edges[0].r }];
+      }
+      if (edges.length === 4 && edges.every((e) => e && e.k === 'line' && e.a && e.b)) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        let axis = true;
+        for (const e of edges) {
+          if (Math.abs(e.b[0] - e.a[0]) > 0.02 && Math.abs(e.b[1] - e.a[1]) > 0.02) { axis = false; break; }
+          for (const p of [e.a, e.b]) {
+            minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+            minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
+          }
+        }
+        const w = maxX - minX, h = maxY - minY;
+        if (axis && w >= 0.05 && h >= 0.05) {
+          return [{ k: 'rect', x: (minX + maxX) / 2, y: (minY + maxY) / 2, w, h }];
+        }
+      }
+      if (edges.length >= 3 && edges.every((e) => e && e.k === 'line' && e.a && e.b)) {
+        const pts = [edges[0].a.slice()];
+        for (const e of edges) pts.push(e.b.slice());
+        if (pts.length >= 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 0.02) pts.pop();
+        if (pts.length >= 3) return [{ k: 'poly', pts }];
+      }
+    }
+    return [{ k: 'exact', wires: list }];
+  }
+  // Sketch guides: length, angle between lines, and easy 90° / axis snaps.
+  function sketchDir(a, b) {
+    const x = (b[0] || 0) - (a[0] || 0);
+    const y = (b[1] || 0) - (a[1] || 0);
+    const len = Math.hypot(x, y);
+    if (len < 1e-9) return [1, 0];
+    return [x / len, y / len];
+  }
+  function sketchSegLen(a, b) {
+    return Math.hypot((b[0] || 0) - (a[0] || 0), (b[1] || 0) - (a[1] || 0));
+  }
+  function sketchSignedAngle(d0, d1) {
+    const a = d0 || [1, 0];
+    const b = d1 || [1, 0];
+    return Math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]) * 180 / Math.PI;
+  }
+  function sketchAngleBetween(d0, d1) {
+    return Math.abs(sketchSignedAngle(d0, d1));
+  }
+  function sketchPointAt(origin, dir, len) {
+    const d = dir || [1, 0];
+    const L = Math.max(0, Number(len) || 0);
+    return [origin[0] + d[0] * L, origin[1] + d[1] * L];
+  }
+  function sketchRotateDir(dir, deg) {
+    const r = (Number(deg) || 0) * Math.PI / 180;
+    const c = Math.cos(r), s = Math.sin(r);
+    const d = dir || [1, 0];
+    return [d[0] * c - d[1] * s, d[0] * s + d[1] * c];
+  }
+  function sketchSetSegLen(a, b, len) {
+    return sketchPointAt(a, sketchDir(a, b), Math.max(0.05, Number(len) || 0.05));
+  }
+  function sketchSetAngle(origin, prevDir, deg, len) {
+    return sketchPointAt(origin, sketchRotateDir(prevDir || [1, 0], deg), Math.max(0.05, Number(len) || 0.05));
+  }
+  // Change one segment only. Shared coordinates in another path stay put.
+  function sketchEditSegLen(pts, i0, i1, len) {
+    const list = Array.isArray(pts) ? pts : [];
+    if (!list[i0] || !list[i1]) return list.map((p) => (p ? p.slice() : p));
+    const next = list.map((p) => p.slice());
+    next[i1] = sketchSetSegLen(list[i0], list[i1], len);
+    return next;
+  }
+  function sketchEditAngle(pts, iPrev, iCorner, iNext, deg) {
+    const list = Array.isArray(pts) ? pts : [];
+    if (!list[iPrev] || !list[iCorner] || !list[iNext]) return list.map((p) => (p ? p.slice() : p));
+    const len = sketchSegLen(list[iCorner], list[iNext]);
+    const signed = sketchSignedAngle(sketchDir(list[iPrev], list[iCorner]), sketchDir(list[iCorner], list[iNext]));
+    const next = list.map((p) => p.slice());
+    next[iNext] = sketchSetAngle(list[iCorner], sketchDir(list[iPrev], list[iCorner]), Math.sign(signed || 1) * deg, len);
+    return next;
+  }
+  function sketchPerpPoint(origin, prevDir, raw) {
+    const d = prevDir || [1, 0];
+    const dir = [-d[1], d[0]];
+    const t = ((raw[0] || 0) - origin[0]) * dir[0] + ((raw[1] || 0) - origin[1]) * dir[1];
+    return [origin[0] + dir[0] * t, origin[1] + dir[1] * t];
+  }
+  // Project a sketch point onto a segment. Used to land on an existing line.
+  function sketchProjectSeg(p, a, b) {
+    const ax = a[0] || 0, ay = a[1] || 0;
+    const dx = (b[0] || 0) - ax, dy = (b[1] || 0) - ay;
+    const L2 = dx * dx + dy * dy;
+    if (L2 < 1e-12) {
+      const point = [ax, ay];
+      return { point, t: 0, dist: sketchSegLen(p, point) };
+    }
+    let t = (((p[0] || 0) - ax) * dx + ((p[1] || 0) - ay) * dy) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const point = [ax + dx * t, ay + dy * t];
+    return { point, t, dist: sketchSegLen(p, point) };
+  }
+  function sketchSnapToLines(raw, segs, opts) {
+    const o = opts || {};
+    const tol = o.tol == null ? 1.2 : o.tol;
+    const endTol = o.endTol == null ? tol * 1.35 : o.endTol;
+    const list = Array.isArray(segs) ? segs : [];
+    let best = null;
+    const take = (hit) => {
+      if (!hit || !(hit.dist <= (hit.kind === 'end' || hit.kind === 'mid' ? endTol : tol))) return;
+      if (!best || hit.dist < best.dist - 1e-6 || (hit.kind === 'end' && best.kind !== 'end' && hit.dist <= best.dist + 0.05)) {
+        best = hit;
+      }
+    };
+    for (const s of list) {
+      if (!s || !s.a || !s.b) continue;
+      take({ point: [s.a[0], s.a[1]], dist: sketchSegLen(raw, s.a), snapped: true, kind: 'end' });
+      take({ point: [s.b[0], s.b[1]], dist: sketchSegLen(raw, s.b), snapped: true, kind: 'end' });
+      const hit = sketchProjectSeg(raw, s.a, s.b);
+      if (hit.t > 0.02 && hit.t < 0.98) {
+        const mid = Math.abs(hit.t - 0.5) <= 0.06;
+        take({
+          point: mid ? [(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2] : hit.point.slice(),
+          dist: mid ? sketchSegLen(raw, [(s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2]) : hit.dist,
+          snapped: true,
+          kind: mid ? 'mid' : 'line',
+          t: hit.t,
+        });
+      }
+    }
+    return best || { point: [raw[0], raw[1]], snapped: false, kind: 'free', dist: 0 };
+  }
+  function sketchSnapPoint(origin, prevDir, raw, opts) {
+    const o = opts || {};
+    const len = sketchSegLen(origin, raw);
+    if (len < 1e-6) {
+      return { point: [origin[0], origin[1]], angle: 0, snapped: false, kind: 'free' };
+    }
+    const base = prevDir && Math.hypot(prevDir[0] || 0, prevDir[1] || 0) > 1e-9 ? prevDir : [1, 0];
+    const cur = sketchDir(origin, raw);
+    const signed = sketchSignedAngle(base, cur);
+    const tol = o.tol == null ? 10 : o.tol;
+    const angles = (o.angles && o.angles.length) ? o.angles : [0, 90, -90, 180, -180, 45, -45, 135, -135];
+    let best = null;
+    let bestScore = tol;
+    const consider = (dir, ang, kind, bonus) => {
+      const score = Math.min(
+        Math.abs(sketchSignedAngle(cur, dir)),
+        360 - Math.abs(sketchSignedAngle(cur, dir))
+      ) - (bonus || 0);
+      if (score > bestScore) return;
+      bestScore = score;
+      best = {
+        point: sketchPointAt(origin, dir, len),
+        angle: sketchSignedAngle(base, dir),
+        snapped: true,
+        kind: kind || (Math.abs(Math.abs(ang) - 90) < 0.01 ? 'perp' : 'angle'),
+      };
+    };
+    for (const ang of angles) {
+      const dir = sketchRotateDir(base, ang);
+      // 0° / 90° / 180° catch a bit sooner so right angles are easy.
+      const bonus = (Math.abs(Math.abs(ang) - 90) < 0.01 || Math.abs(ang) < 0.01 || Math.abs(Math.abs(ang) - 180) < 0.01) ? 2 : 0;
+      consider(dir, ang, Math.abs(Math.abs(ang) - 90) < 0.01 ? 'perp' : 'angle', bonus);
+    }
+    if (o.axis !== false) {
+      for (const ang of [0, 90, -90, 180, -180]) {
+        const rad = ang * Math.PI / 180;
+        consider([Math.cos(rad), Math.sin(rad)], ang, 'axis', 2);
+      }
+    }
+    if (!best) {
+      return { point: [raw[0], raw[1]], angle: signed, snapped: false, kind: 'free' };
+    }
+    return best;
+  }
   // One label per drawn length. A hidden edge of that length must not be the
   // one that gets drawn, and a cut edge the camera can see is labeled even
   // when its face normal points to the side.
@@ -593,5 +781,13 @@
     try { return normalize(JSON.parse(m[1])); } catch (e) { return normalize({}); }
   }
 
-  return { normalize, createStarter, serializeToHtml, parseHtml, isModelHtml, normObject, cutRoles, placePoint, fitCircle, drawnSpan, lengthDelta, planeNormal, sameDirection, pickDim, drawnMeasure, dropBuiltCache, snapObjects, dimGroupKey, floorShift, setAllHidden, navIdle, dimPressEdits, faceTool, faceCutPlaneOn, DEFAULT_SIZE };
+  return {
+    normalize, createStarter, serializeToHtml, parseHtml, isModelHtml, normObject, cutRoles,
+    placePoint, fitCircle, drawnSpan, lengthDelta, planeNormal, sameDirection, pickDim, drawnMeasure,
+    dropBuiltCache, snapObjects, dimGroupKey, floorShift, setAllHidden, navIdle, dimPressEdits,
+    faceTool, faceCutPlaneOn, faceOutlineProfiles, sketchDir, sketchSegLen, sketchSignedAngle, sketchAngleBetween,
+    sketchPointAt, sketchRotateDir, sketchSetSegLen, sketchSetAngle, sketchEditSegLen, sketchEditAngle,
+    sketchPerpPoint, sketchProjectSeg, sketchSnapToLines, sketchSnapPoint,
+    DEFAULT_SIZE,
+  };
 });

@@ -2512,9 +2512,9 @@ function ensureCadAssets() {
 }
 
 function ensureModelAssets() {
-  ensureStylesheet('/model/engine.css?v=23', 'data-model-css');
-  return ensureScript('/model/core.js?v=27', 'data-model-core', () => !!window.ModelCore)
-    .then(() => ensureScript('/model/engine.js?v=60', 'data-model-js', () => typeof window.ModelEngine === 'function'));
+  ensureStylesheet('/model/engine.css?v=25', 'data-model-css');
+  return ensureScript('/model/core.js?v=33', 'data-model-core', () => !!window.ModelCore)
+    .then(() => ensureScript('/model/engine.js?v=71', 'data-model-js', () => typeof window.ModelEngine === 'function'));
 }
 
 function ensureSlidesAssets() {

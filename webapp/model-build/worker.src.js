@@ -39,7 +39,7 @@ function featStamp(f) {
   if (f && f.op === 'imprint') base.push(f.cuts);
   if (f && f.exact) base.push('exact');
   if (f && (f.op === 'fillet' || f.op === 'chamfer')) base.push(f.at, f.r);
-  if (f && f.op === 'length') base.push(f.scope, f.at, f.dir, f.delta, f.round ? 1 : 0, f.factor, f.loops);
+  if (f && f.op === 'length') base.push(f.scope, f.at, f.a, f.b, f.dir, f.delta, f.round ? 1 : 0, f.factor, f.loops);
   return JSON.stringify(base);
 }
 function bodyStamp(obj) {
@@ -922,32 +922,85 @@ function moveEdgeEnd(shape, edge, dir, delta, lines) {
   }
   return next;
 }
+function mid3(a, b) {
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+}
+function sameEdge(e, a, b) {
+  return (near3(e.a, a, 0.3) && near3(e.b, b, 0.3)) || (near3(e.a, b, 0.3) && near3(e.b, a, 0.3));
+}
+function lengthFromStay(shape, stay, axis) {
+  // The stay end does not move. After a big shorten the old midpoint can sit
+  // past the new free end, so measure from stay instead.
+  const lines = straightEdges(shape);
+  const parallel = lines.filter((e) => Math.abs(dot3(unit(sub3(e.b, e.a)), axis)) > 0.98);
+  let best = null;
+  let bestD = Infinity;
+  for (const e of parallel) {
+    const d = Math.min(
+      Math.hypot(stay[0] - e.a[0], stay[1] - e.a[1], stay[2] - e.a[2]),
+      Math.hypot(stay[0] - e.b[0], stay[1] - e.b[1], stay[2] - e.b[2])
+    );
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  return best && bestD <= 0.5 ? edgeLen(best) : null;
+}
 function applyEdgeLength(shape, feature) {
-  const dir = unit(feature.dir || [1, 0, 0]);
-  const at = xyz(feature.at || [0, 0, 0]);
   const delta = +feature.delta || 0;
   if (Math.abs(delta) < 0.05) return shape;
   const lines = straightEdges(shape);
-  const parallel = lines.filter((e) => Math.abs(dot3(unit(sub3(e.b, e.a)), dir)) > 0.98);
+  const hasEnds = feature.a && feature.b;
+  const at = xyz(feature.at || (hasEnds ? mid3(xyz(feature.a), xyz(feature.b)) : [0, 0, 0]));
+  const axis = unit(hasEnds
+    ? sub3(xyz(feature.b), xyz(feature.a))
+    : (feature.dir || [1, 0, 0]));
+  const parallel = lines.filter((e) => Math.abs(dot3(unit(sub3(e.b, e.a)), axis)) > 0.98);
   let picked = null;
-  let best = Infinity;
-  for (const e of parallel) {
-    const d = distToSeg(at, e.a, e.b);
-    if (d < best) { best = d; picked = e; }
+  if (hasEnds) {
+    const a = xyz(feature.a);
+    const b = xyz(feature.b);
+    picked = parallel.find((e) => sameEdge(e, a, b)) || null;
   }
-  if (!picked || best > 1.5) throw new Error('That edge could not be changed.');
-  if (feature.scope === 'edge') return moveEdgeEnd(shape, picked, dir, delta, lines);
-  // The far end of this direction. Every parallel edge that meets it changes
-  // by the same amount. An edge that stops on an earlier face stays.
-  let far = null;
-  let farDot = -Infinity;
-  for (const edge of parallel) {
-    for (const p of [edge.a, edge.b]) {
-      const d = dot3(p, dir);
-      if (d > farDot) { farDot = d; far = p; }
+  if (!picked) {
+    let best = Infinity;
+    for (const e of parallel) {
+      const d = distToSeg(at, e.a, e.b);
+      if (d < best) { best = d; picked = e; }
     }
+    if (!picked || best > 1.5) throw new Error('That edge could not be changed.');
   }
-  return moveCap(shape, far, dir, delta);
+  if (feature.scope === 'edge') return moveEdgeEnd(shape, picked, axis, delta, lines);
+  // Edge storage order is not the free end. Try both ends and keep the move
+  // that actually changes this labeled length by delta. Moving the attached
+  // end of a tower is a no-op on that length and must not win. When both ends
+  // lengthen the edge, prefer the end along the feature direction.
+  const before = edgeLen(picked);
+  const want = before + delta;
+  const prefer = unit(feature.dir || axis);
+  let best = null;
+  let bestErr = Infinity;
+  let bestAlong = -Infinity;
+  for (const far of [picked.a, picked.b]) {
+    const stay = far === picked.a ? picked.b : picked.a;
+    const outward = unit(sub3(far, stay));
+    let next;
+    try { next = moveCap(shape, far, outward, delta); }
+    catch (e) { continue; }
+    const got = lengthFromStay(next, stay, axis);
+    const err = got == null ? Infinity : Math.abs(got - want);
+    const along = dot3(outward, prefer);
+    const better = err < bestErr - 1e-6 || (Math.abs(err - bestErr) <= 1e-6 && along > bestAlong);
+    if (better) {
+      if (best) del(best);
+      best = next;
+      bestErr = err;
+      bestAlong = along;
+    } else del(next);
+  }
+  if (!best || bestErr > Math.max(0.5, Math.abs(delta) * 0.35)) {
+    if (best) del(best);
+    throw new Error('That edge could not be changed.');
+  }
+  return best;
 }
 function loopPrism(pts, axis, t0, t1) {
   const n = unit(axis);

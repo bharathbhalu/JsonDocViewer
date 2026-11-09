@@ -319,6 +319,7 @@
     this.root.innerHTML = `
       <div class="mdl-view" data-view>
         <div class="mdl-dims" data-dims></div>
+        <div class="mdl-skmeas" data-skmeas></div>
       </div>
       <div class="mdl-rail" role="toolbar" aria-label="Bodies">
         <button type="button" data-add="box" title="Box" aria-label="Box">${ICON.box}</button>
@@ -435,12 +436,12 @@
             <button type="button" class="mdl-ico" data-sktool="rect" aria-label="Rectangle">${ICON.rect}</button>
             <button type="button" class="mdl-ico" data-sktool="circle" aria-label="Circle">${ICON.circle}</button>
             <button type="button" class="mdl-ico" data-sktool="line" aria-label="Line">${ICON.line}</button>
-            <button type="button" class="mdl-ico" data-skperp aria-label="Line perpendicular to the last line" title="Perpendicular">${ICON.flip}</button>
+            <button type="button" class="mdl-ico" data-skperp aria-label="Lock 90° to the last line" title="Lock 90°">${ICON.flip}</button>
           </div>
         </div>
         <span class="mdl-vsep"></span>
         <div class="mdl-op">
-          <span class="mdl-opk">Size</span>
+          <span class="mdl-opk">Measure</span>
           <div class="mdl-oprow"><span data-skdims></span></div>
         </div>
         <span class="mdl-vsep"></span>
@@ -648,6 +649,7 @@
       if (this.isOrtho) this._orthoFrustum();
       this._cubeSync();
       this._layoutDims();
+      if (this.sk) this._syncSketchOverlay();
       renderer.render(scene, this.camera);
     };
     loop();
@@ -668,7 +670,7 @@
     const el = this.viewEl;
     let down = null;
     let finger = null;
-    const onDim = (e) => !!(e && e.target && e.target.closest && e.target.closest('.mdl-dim'));
+    const onDim = (e) => !!(e && e.target && e.target.closest && e.target.closest('.mdl-dim, .mdl-skm'));
     // iPad sends a mouse or touch pointer just after the pencil. That second
     // pointer lands on a different face and steals the selection.
     const notePen = (e) => { if (e.pointerType === 'pen') this._penAt = performance.now(); };
@@ -684,9 +686,13 @@
     this._on(el, 'pointerdown', (e) => {
       notePen(e);
       if (penEcho(e)) return;
-      // A dimension label keeps the primary press for editing. Right-drag and
-      // middle-drag still reach the view so the camera does not stick.
-      if (onDim(e) && C().dimPressEdits(e.button, e.pointerType)) return;
+      // Dimension chips edit on double-click. A primary press on a chip must not
+      // start a sketch or selection, or the second click never lands on the label.
+      if (onDim(e) && C().dimPressEdits(e.button, e.pointerType)) {
+        if (this._dimEdit || this._skDimEdit) return;
+        this._dimArmEdit(e);
+        return;
+      }
       this.root.focus({ preventScroll: true });
       if (e.button === 1) {
         const mod = e.shiftKey || e.ctrlKey || e.metaKey;
@@ -1143,7 +1149,7 @@
   };
 
   ModelEngine.prototype._initWorker = function () {
-    this.worker = new Worker(VENDOR + 'model-worker.js?v=' + encodeURIComponent(this.version) + '-24', { type: 'module' });
+    this.worker = new Worker(VENDOR + 'model-worker.js?v=' + encodeURIComponent(this.version) + '-28', { type: 'module' });
     this.worker.onmessage = (e) => this._onWorker(e.data || {});
     this.worker.onerror = (e) => {
       this.building = false;
@@ -2805,12 +2811,14 @@
     this._requestBuild();
   };
 
-  ModelEngine.prototype._openSketch = function (plane, profiles) {
+  ModelEngine.prototype._openSketch = function (plane, profiles, opts) {
+    const o = opts || {};
     if (this.mode !== 'object') this._setMode('object', true);
-    this.sk = { tool: 'rect', profiles: profiles || [], plane, chain: [], base: (profiles || []).length };
+    const list = (profiles || []).slice();
+    this.sk = { tool: o.tool || 'rect', profiles: list, plane, chain: [], base: o.base != null ? o.base : list.length };
     const bar = this.root.querySelector('[data-skbar]');
     if (bar) bar.classList.remove('hidden');
-    this._sketchTool('rect');
+    this._sketchTool(this.sk.tool);
     this._syncSketchDims();
     this._sketchSourceBar();
     this._syncGizmo();
@@ -2820,20 +2828,25 @@
     const plane = this._sketchPlane();
     this._openSketch(plane, []);
   };
-  // The face outline, in the sketch plane, as lines, circles, and arcs.
-  // A sampled loop would extrude inside the real curve and leave gaps.
-  ModelEngine.prototype._projectExact = function (face, slot) {
+  ModelEngine.prototype._sketchTo2 = function (plane, slot) {
     const T = this.T;
-    const plane = this._sketchPlane();
-    if (!plane || !face || !face.exact || !face.exact.length) return null;
+    if (!T || !plane || !slot) return null;
     const world = this._shapeMatrix(slot);
     const y = new T.Vector3().crossVectors(plane.normal, plane.xDir).normalize();
     if (y.lengthSq() < 1e-8) return null;
-    const to2 = (p) => {
-      const w = new T.Vector3(p[0], p[1], p[2]).applyMatrix4(world);
+    return (p) => {
+      const w = new T.Vector3(p[0] || 0, p[1] || 0, p[2] || 0).applyMatrix4(world);
       const d = w.sub(plane.origin);
       return [r3(d.dot(plane.xDir)), r3(d.dot(y))];
     };
+  };
+  // The face outline, in the sketch plane, as lines, circles, and arcs.
+  // Prefer exact edges; fall back to the face loop so a sketch always opens.
+  ModelEngine.prototype._projectExact = function (face, slot) {
+    const plane = this._sketchPlane();
+    if (!plane || !face || !face.exact || !face.exact.length) return null;
+    const to2 = this._sketchTo2(plane, slot);
+    if (!to2) return null;
     const wires = [];
     for (const w of face.exact) {
       const edges = [];
@@ -2848,14 +2861,39 @@
     }
     return { plane, wires };
   };
+  ModelEngine.prototype._projectLoop = function (face, slot, plane) {
+    const loop = face && face.loop;
+    if (!plane || !loop || loop.length < 3) return null;
+    const to2 = this._sketchTo2(plane, slot);
+    if (!to2) return null;
+    const pts = [];
+    for (const p of loop) {
+      const q = to2(p);
+      if (!pts.length || Math.hypot(q[0] - pts[pts.length - 1][0], q[1] - pts[pts.length - 1][1]) > 0.02) pts.push(q);
+    }
+    if (pts.length >= 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 0.02) pts.pop();
+    return pts.length >= 3 ? [{ k: 'poly', pts }] : null;
+  };
+  ModelEngine.prototype._faceSketchProfiles = function (face, slot) {
+    const plane = this._sketchPlane();
+    if (!plane || !face || !slot) return null;
+    const exact = this._projectExact(face, slot);
+    if (exact && exact.wires && exact.wires.length) {
+      return { plane: exact.plane, profiles: C().faceOutlineProfiles(exact.wires) };
+    }
+    const loop = this._projectLoop(face, slot, plane);
+    if (loop) return { plane, profiles: loop };
+    return null;
+  };
   ModelEngine.prototype._sketchFromFace = function () {
     const hit = this._faceHit;
     const slot = hit && this.objs[hit.id];
     const face = slot && slot.faces[hit.index];
     if (!slot || !face) { this._toast('Select a face first.'); return; }
-    const made = this._projectExact(face, slot);
-    if (!made) { this._toast('This face cannot be copied exactly yet.'); return; }
-    this._openSketch(made.plane, [{ k: 'exact', wires: made.wires }]);
+    const made = this._faceSketchProfiles(face, slot);
+    if (!made || !made.profiles.length) { this._toast('This face cannot be sketched yet.'); return; }
+    // Auto-create the face outline sketch, ready to edit and split into regions.
+    this._openSketch(made.plane, made.profiles, { tool: 'line', base: made.profiles.length });
     if (this.sk) {
       this.sk.source = {
         id: hit.id,
@@ -2866,7 +2904,8 @@
       this.sk.outlineKey = this._profileKey(this.sk.profiles[0]);
     }
     this._sketchSourceBar();
-    this._toast('Extrude grows or cuts this face. Draw on it and use Split face to extrude each region.');
+    this._syncSketchDims();
+    this._toast('Face sketch created. Draw a cut, then Split face. Tap a region to extrude.');
   };
   ModelEngine.prototype._planeBasis = function (normal) {
     const T = this.T;
@@ -2929,29 +2968,107 @@
     const d = hit.clone().sub(plane.origin);
     return [r3(d.dot(plane.xDir)), r3(d.dot(y))];
   };
+  ModelEngine.prototype._sketchSnapTol = function () {
+    const plane = this.sk && this.sk.plane;
+    const at = plane && plane.origin ? plane.origin : (this.target || { x: 0, y: 0, z: 0 });
+    const px = this._worldPerPx(at);
+    return Math.max(0.7, Math.min(5, px * 12));
+  };
+  ModelEngine.prototype._sketchSegments = function () {
+    const segs = [];
+    if (!this.sk) return segs;
+    const add = (a, b) => {
+      if (!a || !b) return;
+      if (C().sketchSegLen(a, b) < 0.05) return;
+      segs.push({ a: [a[0], a[1]], b: [b[0], b[1]] });
+    };
+    const addLoop = (pts, closed) => {
+      if (!pts || pts.length < 2) return;
+      const n = closed ? pts.length : pts.length - 1;
+      for (let i = 0; i < n; i++) add(pts[i], pts[(i + 1) % pts.length]);
+    };
+    for (const p of this.sk.profiles || []) {
+      if (p.k === 'rect') {
+        const x0 = p.x - p.w / 2, x1 = p.x + p.w / 2, y0 = p.y - p.h / 2, y1 = p.y + p.h / 2;
+        addLoop([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true);
+      } else if (p.k === 'poly') addLoop(p.pts, true);
+      else if (p.k === 'path') addLoop(p.pts, false);
+      else if (p.k === 'exact') {
+        for (const w of p.wires || []) {
+          for (const e of w.edges || []) {
+            if (e.k === 'line' && e.a && e.b) add(e.a, e.b);
+          }
+        }
+      }
+    }
+    addLoop(this.sk.chain, false);
+    return segs;
+  };
+  // Raw plane hit, then snap onto an existing sketch line / end / mid when close.
+  ModelEngine.prototype._sketchPick = function (e, opts) {
+    const raw = this._sketchPoint(e);
+    if (!raw) return null;
+    const o = opts || {};
+    const geom = C().sketchSnapToLines(raw, this._sketchSegments(), { tol: this._sketchSnapTol() });
+    if (geom.snapped && !o.skipGeom) {
+      return {
+        point: [r3(geom.point[0]), r3(geom.point[1])],
+        snapped: true,
+        kind: geom.kind || 'line',
+        raw,
+      };
+    }
+    return { point: raw, snapped: false, kind: 'free', raw };
+  };
   ModelEngine.prototype._sketchDown = function (e) {
-    const p0 = this._sketchPoint(e);
-    if (!p0 || !this.sk) return;
+    const picked = this._sketchPick(e);
+    if (!picked || !this.sk) return;
     const prev = this.sk.chain.length ? this.sk.chain[this.sk.chain.length - 1] : null;
-    const p = this.sk.perp && this.sk.tool === 'line' && prev ? this._sketchConstrain(prev, p0) : p0;
-    this._skDrag = { id: e.pointerId, p0: p, p, moved: false };
+    let guided;
+    if (this.sk.tool === 'line' && prev && !picked.snapped) guided = this._sketchGuide(prev, picked.point);
+    else guided = { point: picked.point, snapped: !!picked.snapped, kind: picked.kind || 'free' };
+    const p = guided.point;
+    this._skDrag = { id: e.pointerId, p0: p, p, moved: false, guide: guided };
+    this.sk.guide = guided;
     this.controls.enabled = false;
     try { this.viewEl.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
   };
   ModelEngine.prototype._sketchHover = function (e) {
     if (!this.sk) return;
-    this.sk.hover = this._sketchPoint(e);
+    const picked = this._sketchPick(e);
+    if (!picked) { this.sk.hover = null; this.sk.guide = null; this._sketchDraw(); return; }
+    if (this.sk.tool === 'line' && this.sk.chain.length && !picked.snapped) {
+      const guided = this._sketchGuide(this.sk.chain[this.sk.chain.length - 1], picked.point);
+      this.sk.hover = guided.point;
+      this.sk.guide = guided;
+    } else {
+      this.sk.hover = picked.point;
+      this.sk.guide = picked.snapped ? { point: picked.point, snapped: true, kind: picked.kind } : null;
+    }
     this._sketchDraw();
+    this._syncSketchDims();
   };
   ModelEngine.prototype._sketchMove = function (e) {
     const d = this._skDrag;
     if (!d || !this.sk) return;
-    const p = this._sketchPoint(e);
-    if (!p) return;
-    if (Math.hypot(p[0] - d.p0[0], p[1] - d.p0[1]) > 0.4) d.moved = true;
-    d.p = this.sk.tool === 'line' && this.sk.perp ? this._sketchConstrain(d.p0, p) : p;
+    const picked = this._sketchPick(e);
+    if (!picked) return;
+    if (Math.hypot(picked.point[0] - d.p0[0], picked.point[1] - d.p0[1]) > 0.4) d.moved = true;
+    if (this.sk.tool === 'line') {
+      const guided = picked.snapped
+        ? { point: picked.point, snapped: true, kind: picked.kind }
+        : this._sketchGuide(d.p0, picked.point);
+      d.p = guided.point;
+      d.guide = guided;
+      this.sk.guide = guided;
+    } else {
+      d.p = picked.point;
+      d.guide = picked.snapped ? { point: picked.point, snapped: true, kind: picked.kind } : null;
+      this.sk.guide = d.guide;
+    }
     this.sk.hover = d.p;
     this._sketchDraw();
+    this._syncSketchDims();
   };
   ModelEngine.prototype._sketchPerpToggle = function () {
     if (!this.sk) return;
@@ -2959,42 +3076,45 @@
     const b = this.root.querySelector('[data-skperp]');
     if (b) b.classList.toggle('on', !!this.sk.perp);
     if (this.sk.perp) this._sketchTool('line');
+    this._toast(this.sk.perp ? 'Next line is locked at 90°.' : 'Lines snap near 0° / 45° / 90°.');
   };
   ModelEngine.prototype._lastSketchDir = function () {
     const chain = this.sk.chain || [];
-    if (chain.length >= 2) {
-      const a = chain[chain.length - 2], b = chain[chain.length - 1];
-      const x = b[0] - a[0], y = b[1] - a[1];
-      const len = Math.hypot(x, y);
-      if (len > 1e-6) return [x / len, y / len];
-    }
+    if (chain.length >= 2) return C().sketchDir(chain[chain.length - 2], chain[chain.length - 1]);
     for (let i = this.sk.profiles.length - 1; i >= 0; i--) {
       const p = this.sk.profiles[i];
       const pts = p.k === 'path' || p.k === 'poly' ? p.pts : null;
-      if (pts && pts.length >= 2) {
-        const a = pts[pts.length - 2], b = pts[pts.length - 1];
-        const x = b[0] - a[0], y = b[1] - a[1];
-        const len = Math.hypot(x, y);
-        if (len > 1e-6) return [x / len, y / len];
-      }
+      if (pts && pts.length >= 2) return C().sketchDir(pts[pts.length - 2], pts[pts.length - 1]);
     }
     return [1, 0];
   };
-  ModelEngine.prototype._sketchConstrain = function (origin, p) {
-    const d = this._lastSketchDir();
-    const dir = [-d[1], d[0]];
-    const t = (p[0] - origin[0]) * dir[0] + (p[1] - origin[1]) * dir[1];
-    return [r3(origin[0] + dir[0] * t), r3(origin[1] + dir[1] * t)];
+  ModelEngine.prototype._sketchGuide = function (origin, raw) {
+    const prev = this._lastSketchDir();
+    if (this.sk && this.sk.perp) {
+      const point = C().sketchPerpPoint(origin, prev, raw).map(r3);
+      return { point, angle: 90, snapped: true, kind: 'perp' };
+    }
+    const hit = C().sketchSnapPoint(origin, prev, raw, { tol: 10 });
+    return {
+      point: [r3(hit.point[0]), r3(hit.point[1])],
+      angle: hit.angle,
+      snapped: !!hit.snapped,
+      kind: hit.kind || 'free',
+    };
   };
   ModelEngine.prototype._sketchClick = function (e) {
     if (!this.sk || this.sk.tool !== 'line') return;
-    const raw = this._sketchPoint(e);
-    if (!raw) return;
+    const picked = this._sketchPick(e);
+    if (!picked) return;
     const c = this.sk.chain;
-    if (c.length >= 3 && Math.hypot(raw[0] - c[0][0], raw[1] - c[0][1]) < 2) { this._sketchClose(); return; }
-    const p = this.sk.perp && c.length ? this._sketchConstrain(c[c.length - 1], raw) : raw;
+    if (c.length >= 3 && Math.hypot(picked.point[0] - c[0][0], picked.point[1] - c[0][1]) < 2) { this._sketchClose(); return; }
+    const p = (c.length && !picked.snapped)
+      ? this._sketchGuide(c[c.length - 1], picked.point).point
+      : picked.point;
     if (c.length >= 3 && Math.hypot(p[0] - c[0][0], p[1] - c[0][1]) < 2) { this._sketchClose(); return; }
     c.push(p);
+    this.sk.guide = null;
+    this._syncSketchDims();
     this._sketchDraw();
   };
   ModelEngine.prototype._sketchUp = function (e) {
@@ -3002,13 +3122,30 @@
     this._skDrag = null;
     this._freeNav();
     if (!d || !this.sk) return;
-    if (!d.moved) { this._sketchClick(e); return; }
+    // Lines are click-to-click: one press places one point. A drag must not
+    // invent the start and end together as a finished segment.
+    if (this.sk.tool === 'line') {
+      if (!d.moved) this._sketchClick(e);
+      else if (!this.sk.chain.length) {
+        this.sk.chain.push(d.p0.slice());
+        this.sk.hover = d.p;
+        this.sk.guide = d.guide || null;
+        this._syncSketchDims();
+        this._sketchDraw();
+      } else {
+        const p = this._sketchGuide(this.sk.chain[this.sk.chain.length - 1], d.p).point;
+        if (C().sketchSegLen(this.sk.chain[this.sk.chain.length - 1], p) >= 0.05) {
+          this.sk.chain.push(p);
+          this.sk.guide = null;
+          this._syncSketchDims();
+          this._sketchDraw();
+        }
+      }
+      return;
+    }
+    if (!d.moved) return;
     if (this.sk.tool === 'rect') this._sketchAddRect(d.p0, d.p);
     else if (this.sk.tool === 'circle') this._sketchAddCircle(d.p0, d.p);
-    else if (this.sk.tool === 'line') {
-      const a = d.p0, b = d.p;
-      if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= 0.05) this.sk.profiles.push({ k: 'path', pts: [a.slice(), b.slice()] });
-    }
     this._syncSketchDims();
     this._sketchDraw();
   };
@@ -3032,7 +3169,7 @@
   ModelEngine.prototype._sketchDraw = function () {
     const T = this.T;
     if (this._skLines) { this.scene.remove(this._skLines); this._skLines.geometry.dispose(); this._skLines = null; }
-    if (!this.sk) return;
+    if (!this.sk) { this._clearSketchOverlay(); return; }
     const plane = this.sk.plane;
     const y = new T.Vector3().crossVectors(plane.normal, plane.xDir).normalize();
     const at = (p) => plane.origin.clone().addScaledVector(plane.xDir, p[0]).addScaledVector(y, p[1]);
@@ -3069,14 +3206,25 @@
       }
     }
     const chain = this.sk.chain.slice();
+    // Preview the line from the pressed start before that point is committed.
+    if (this.sk.tool === 'line' && this._skDrag && !chain.length) chain.push(this._skDrag.p0);
     if (this.sk.hover && this.sk.tool === 'line') chain.push(this.sk.hover);
     for (let i = 1; i < chain.length; i++) add(chain[i - 1], chain[i]);
-    if (!pts.length) return;
-    const g = new T.BufferGeometry();
-    g.setAttribute('position', new T.Float32BufferAttribute(pts, 3));
-    this._skLines = new T.LineSegments(g, new T.LineBasicMaterial({ color: ORANGE, depthTest: false }));
-    this._skLines.renderOrder = 4;
-    this.scene.add(this._skLines);
+    // Mark when the cursor has snapped onto an existing line, end, or mid.
+    const snap = this.sk.guide;
+    if (snap && snap.snapped && (snap.kind === 'line' || snap.kind === 'end' || snap.kind === 'mid') && snap.point) {
+      const s = this._sketchSnapTol() * 0.45;
+      add([snap.point[0] - s, snap.point[1]], [snap.point[0] + s, snap.point[1]]);
+      add([snap.point[0], snap.point[1] - s], [snap.point[0], snap.point[1] + s]);
+    }
+    if (pts.length) {
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.Float32BufferAttribute(pts, 3));
+      this._skLines = new T.LineSegments(g, new T.LineBasicMaterial({ color: ORANGE, depthTest: false }));
+      this._skLines.renderOrder = 4;
+      this.scene.add(this._skLines);
+    }
+    this._syncSketchOverlay();
   };
   ModelEngine.prototype._planeOf = function (obj) {
     const T = this.T;
@@ -3121,21 +3269,77 @@
     const rect = this._axisRect(edges);
     return rect ? { kind: 'xrect', w: rect.w, h: rect.h, cx: rect.cx, cy: rect.cy } : null;
   };
+  ModelEngine.prototype._liveSketchSeg = function () {
+    if (!this.sk || this.sk.tool !== 'line') return null;
+    const chain = this.sk.chain || [];
+    const tip = (this._skDrag && this._skDrag.moved) ? this._skDrag.p : this.sk.hover;
+    if (!tip) return null;
+    const origin = chain.length ? chain[chain.length - 1] : (this._skDrag && this._skDrag.moved ? this._skDrag.p0 : null);
+    if (!origin) return null;
+    if (C().sketchSegLen(origin, tip) < 0.05) return null;
+    const guide = (this._skDrag && this._skDrag.guide) || this.sk.guide || null;
+    const prevDir = chain.length >= 2 ? C().sketchDir(chain[chain.length - 2], chain[chain.length - 1])
+      : (chain.length === 1 ? this._lastSketchDir() : [1, 0]);
+    const angle = guide && guide.angle != null ? guide.angle : C().sketchSignedAngle(prevDir, C().sketchDir(origin, tip));
+    return {
+      a: origin,
+      b: tip,
+      len: C().sketchSegLen(origin, tip),
+      angle,
+      snapped: !!(guide && guide.snapped),
+      kind: guide && guide.kind,
+    };
+  };
   ModelEngine.prototype._syncSketchDims = function () {
     const host = this.root.querySelector('[data-skdims]');
     if (!host) return;
+    if (this._skDimEdit || host.querySelector('input:focus')) return;
+    const live = this._liveSketchSeg();
+    if (live) {
+      const ang = Math.round(Math.abs(live.angle) * 10) / 10;
+      const guide = this.sk.guide;
+      const onLine = guide && guide.snapped && (guide.kind === 'line' || guide.kind === 'end' || guide.kind === 'mid');
+      const snapLabel = onLine
+        ? (guide.kind === 'end' ? 'On end' : guide.kind === 'mid' ? 'On mid' : 'On line')
+        : (live.snapped ? (Math.abs(Math.abs(live.angle) - 90) < 0.6 ? '90°' : 'Snap') : '');
+      host.innerHTML = '<label>Length<input data-skdim="live-len" inputmode="decimal" value="' + r3(live.len) + '"></label>'
+        + '<label>Angle<input data-skdim="live-ang" inputmode="decimal" value="' + ang + '"></label>'
+        + (snapLabel ? '<span class="mdl-chip on">' + snapLabel + '</span>' : '');
+      host.querySelectorAll('[data-skdim]').forEach((el) => el.addEventListener('change', () => this._applySketchDim(el)));
+      return;
+    }
+    const guide = this.sk && this.sk.guide;
+    if (guide && guide.snapped && (guide.kind === 'line' || guide.kind === 'end' || guide.kind === 'mid')) {
+      host.innerHTML = '<span class="mdl-chip on">' + (guide.kind === 'end' ? 'On end' : guide.kind === 'mid' ? 'On mid' : 'On line') + '</span>';
+      return;
+    }
     const m = this.sk && this._profileMeasure(this.sk.profiles[this.sk.profiles.length - 1]);
-    if (!m) { host.innerHTML = ''; return; }
+    if (!m) { host.innerHTML = '<span class="mdl-chip">Snap to a line, end, or mid</span>'; return; }
     if (m.kind === 'circle' || m.kind === 'xcircle') host.innerHTML = '<label>Ø<input data-skdim="d" inputmode="decimal" value="' + r3(m.r * 2) + '"></label>';
     else host.innerHTML = '<label>Width<input data-skdim="w" inputmode="decimal" value="' + r3(m.w) + '"></label><label>Height<input data-skdim="h" inputmode="decimal" value="' + r3(m.h) + '"></label>';
     host.querySelectorAll('[data-skdim]').forEach((el) => el.addEventListener('change', () => this._applySketchDim(el)));
   };
   ModelEngine.prototype._applySketchDim = function (el) {
-    if (!this.sk || !this.sk.profiles.length) return;
+    if (!this.sk) return;
+    const v = evalNum(el.value, NaN);
+    if (!Number.isFinite(v)) return;
+    if (el.dataset.skdim === 'live-len' || el.dataset.skdim === 'live-ang') {
+      const live = this._liveSketchSeg();
+      if (!live) return;
+      const next = el.dataset.skdim === 'live-len'
+        ? C().sketchSetSegLen(live.a, live.b, v)
+        : C().sketchSetAngle(live.a, this._lastSketchDir(), v * Math.sign(live.angle || 1) || v, live.len);
+      const p = [r3(next[0]), r3(next[1])];
+      if (this._skDrag) { this._skDrag.p = p; this._skDrag.moved = true; }
+      this.sk.hover = p;
+      this.sk.guide = { point: p, angle: el.dataset.skdim === 'live-ang' ? v : live.angle, snapped: true, kind: 'edit' };
+      this._sketchDraw();
+      return;
+    }
+    if (!this.sk.profiles.length) return;
     const p = this.sk.profiles[this.sk.profiles.length - 1];
     const m = this._profileMeasure(p);
-    const v = evalNum(el.value, NaN);
-    if (!m || !Number.isFinite(v)) return;
+    if (!m) return;
     if (el.dataset.skdim === 'd') {
       const r = r3(Math.max(0.05, v / 2));
       if (m.kind === 'circle') m.target.r = r;
@@ -3154,6 +3358,285 @@
       ];
     }
     this._sketchDraw();
+  };
+  ModelEngine.prototype._sketchWorld = function (p2) {
+    const T = this.T;
+    const plane = this.sk && this.sk.plane;
+    if (!T || !plane || !p2) return null;
+    const y = new T.Vector3().crossVectors(plane.normal, plane.xDir).normalize();
+    if (y.lengthSq() < 1e-8) return null;
+    return plane.origin.clone().addScaledVector(plane.xDir, p2[0]).addScaledVector(y, p2[1]);
+  };
+  ModelEngine.prototype._sketchScreen = function (p2) {
+    const w = this._sketchWorld(p2);
+    if (!w) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const p = w.clone().project(this.camera);
+    if (p.z < -1 || p.z > 1) return null;
+    return {
+      x: (p.x * 0.5 + 0.5) * rect.width,
+      y: (-p.y * 0.5 + 0.5) * rect.height,
+    };
+  };
+  ModelEngine.prototype._sketchMeasureList = function () {
+    if (!this.sk) return [];
+    const items = [];
+    const pushSeg = (a, b, key, editable, move) => {
+      const len = C().sketchSegLen(a, b);
+      if (len < 0.05) return;
+      items.push({
+        key: key + ':len',
+        kind: 'len',
+        text: String(r3(len)),
+        value: len,
+        at: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+        a, b, move: move || null, editable: !!editable,
+      });
+    };
+    const pushAng = (prev, corner, next, key, editable, snap, move) => {
+      const ang = C().sketchAngleBetween(C().sketchDir(prev, corner), C().sketchDir(corner, next));
+      if (!(ang >= 0.5)) return;
+      const d0 = C().sketchDir(prev, corner);
+      const d1 = C().sketchDir(corner, next);
+      const bis = C().sketchDir([0, 0], [d0[0] + d1[0], d0[1] + d1[1]]);
+      // Keep the number off the vertex so it does not cover the point.
+      const reach = Math.min(C().sketchSegLen(prev, corner), C().sketchSegLen(corner, next));
+      const along = Math.max(6, Math.min(16, reach * 0.28));
+      items.push({
+        key: key + ':ang',
+        kind: 'ang',
+        text: Math.round(ang * 10) / 10 + '°',
+        value: ang,
+        at: [corner[0] + bis[0] * along, corner[1] + bis[1] * along],
+        corner, prev, next, move: move || null, editable: !!editable, snap: !!snap,
+      });
+    };
+    (this.sk.profiles || []).forEach((p, pi) => {
+      if (p.k === 'rect') {
+        const x0 = p.x - p.w / 2, x1 = p.x + p.w / 2, y0 = p.y - p.h / 2, y1 = p.y + p.h / 2;
+        items.push({
+          key: 'p' + pi + 's0:len', kind: 'len', text: String(r3(p.w)), value: p.w,
+          at: [(x0 + x1) / 2, y0], rect: p, dim: 'w', editable: true,
+        });
+        items.push({
+          key: 'p' + pi + 's1:len', kind: 'len', text: String(r3(p.h)), value: p.h,
+          at: [x1, (y0 + y1) / 2], rect: p, dim: 'h', editable: true,
+        });
+      } else if (p.k === 'circle') {
+        items.push({
+          key: 'p' + pi + ':dia',
+          kind: 'len',
+          text: 'Ø ' + r3(p.r * 2),
+          value: p.r * 2,
+          at: [p.x, p.y + p.r],
+          circle: p, editable: true,
+        });
+      } else if (p.k === 'path' || p.k === 'poly') {
+        const pts = p.pts || [];
+        const n = p.k === 'poly' ? pts.length : pts.length - 1;
+        for (let i = 0; i < n; i++) {
+          const i1 = (i + 1) % pts.length;
+          const a = pts[i], b = pts[i1];
+          // Move only this segment's end so a snapped outline point stays put.
+          pushSeg(a, b, 'p' + pi + 's' + i, true, { kind: 'pts', pi, i0: i, i1 });
+          if (i >= 1 || p.k === 'poly') {
+            const iPrev = (i - 1 + pts.length) % pts.length;
+            const prev = pts[iPrev];
+            pushAng(prev, a, b, 'p' + pi + 'v' + i, true, Math.abs(C().sketchAngleBetween(C().sketchDir(prev, a), C().sketchDir(a, b)) - 90) < 0.6, { kind: 'pts', pi, iPrev, i0: i, i1 });
+          }
+        }
+      }
+    });
+    const chain = this.sk.chain || [];
+    for (let i = 1; i < chain.length; i++) {
+      pushSeg(chain[i - 1], chain[i], 'c' + i, true, { kind: 'chain', i0: i - 1, i1: i });
+      if (i >= 2) {
+        const ang = C().sketchAngleBetween(C().sketchDir(chain[i - 2], chain[i - 1]), C().sketchDir(chain[i - 1], chain[i]));
+        pushAng(chain[i - 2], chain[i - 1], chain[i], 'cv' + i, true, Math.abs(ang - 90) < 0.6, { kind: 'chain', iPrev: i - 2, i0: i - 1, i1: i });
+      }
+    }
+    const live = this._liveSketchSeg();
+    if (live) {
+      pushSeg(live.a, live.b, 'live', true, { kind: 'live' });
+      // Live angle stays in the measure bar so it does not cover the point.
+    }
+    const drag = this._skDrag && this._skDrag.moved ? this._skDrag : null;
+    if (drag && this.sk.tool === 'rect') {
+      pushSeg(drag.p0, [drag.p[0], drag.p0[1]], 'rw', false);
+      pushSeg([drag.p[0], drag.p0[1]], drag.p, 'rh', false);
+    } else if (drag && this.sk.tool === 'circle') {
+      const rad = C().sketchSegLen(drag.p0, drag.p);
+      items.push({
+        key: 'rc',
+        kind: 'len',
+        text: 'Ø ' + r3(rad * 2),
+        value: rad * 2,
+        at: [drag.p0[0], drag.p0[1] + rad],
+        editable: false,
+      });
+    }
+    return items;
+  };
+  ModelEngine.prototype._clearSketchOverlay = function () {
+    const host = this.root.querySelector('[data-skmeas]');
+    if (host) host.innerHTML = '';
+    this._skMeasMeta = null;
+  };
+  ModelEngine.prototype._syncSketchOverlay = function () {
+    const host = this.root.querySelector('[data-skmeas]');
+    if (!host || !this.sk || !this.renderer) { this._clearSketchOverlay(); return; }
+    if (this._skDimEdit) return;
+    const items = this._sketchMeasureList();
+    this._skMeasMeta = new Map();
+    const keep = new Set();
+    for (const it of items) {
+      const s = this._sketchScreen(it.at);
+      if (!s) continue;
+      keep.add(it.key);
+      this._skMeasMeta.set(it.key, it);
+      let el = host.querySelector('[data-skm="' + CSS.escape(it.key) + '"]');
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'mdl-skm';
+        el.dataset.skm = it.key;
+        el.addEventListener('dblclick', (e) => {
+          const meta = this._skMeasMeta && this._skMeasMeta.get(el.dataset.skm);
+          if (!meta || !meta.editable) return;
+          e.stopPropagation();
+          e.preventDefault();
+          this._openSketchMeasEdit(el);
+        });
+        el.addEventListener('pointerdown', (e) => {
+          // Let a single press place sketch points under the label.
+          if (el.classList.contains('editing')) e.stopPropagation();
+        });
+        host.appendChild(el);
+      }
+      // Only rewrite the label when the value changes. Setting text every frame
+      // resets the node and cancels double-click.
+      if (this._skDimEdit !== it.key && el.textContent !== it.text) el.textContent = it.text;
+      el.classList.toggle('ang', it.kind === 'ang');
+      el.classList.toggle('snap', !!it.snap || (it.kind === 'ang' && /90/.test(it.text)));
+      el.style.left = s.x + 'px';
+      el.style.top = s.y + 'px';
+      el.hidden = false;
+    }
+    host.querySelectorAll('[data-skm]').forEach((el) => {
+      if (el.dataset.skm === this._skDimEdit) return;
+      if (!keep.has(el.dataset.skm)) el.remove();
+    });
+  };
+  ModelEngine.prototype._dimArmEdit = function (e) {
+    const el = e && e.target && e.target.closest && e.target.closest('.mdl-dim, .mdl-skm');
+    if (!el || el.classList.contains('editing')) return;
+    const now = performance.now();
+    const prev = this._dimClickArm;
+    const near = prev && prev.el === el && (now - prev.t) < 400
+      && Math.hypot((e.clientX || 0) - prev.x, (e.clientY || 0) - prev.y) < 12;
+    if (near) {
+      this._dimClickArm = null;
+      e.preventDefault();
+      e.stopPropagation();
+      if (el.classList.contains('mdl-skm')) this._openSketchMeasEdit(el);
+      else this._openDimEdit(el);
+      return;
+    }
+    this._dimClickArm = { el, t: now, x: e.clientX || 0, y: e.clientY || 0 };
+  };
+  ModelEngine.prototype._openSketchMeasEdit = function (el) {
+    if (!el || el.querySelector('input') || !this._skMeasMeta) return;
+    const meta = this._skMeasMeta.get(el.dataset.skm);
+    if (!meta || !meta.editable) return;
+    this._skDimEdit = el.dataset.skm;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'decimal';
+    input.value = String(r3(meta.value));
+    input.setAttribute('aria-label', meta.kind === 'ang' ? 'Angle' : 'Length');
+    el.textContent = '';
+    el.classList.add('editing');
+    el.appendChild(input);
+    input.focus();
+    input.select();
+    let closed = false;
+    let live = false;
+    setTimeout(() => { live = true; }, 250);
+    const done = (commit) => {
+      if (closed) return;
+      closed = true;
+      if (this._skDimEdit === el.dataset.skm) this._skDimEdit = null;
+      el.classList.remove('editing');
+      if (commit) this._commitSketchMeas(meta, input.value);
+      else this._syncSketchOverlay();
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    });
+    input.addEventListener('blur', () => {
+      if (this._skDimEdit !== el.dataset.skm) return;
+      if (!live) { input.focus(); return; }
+      done(true);
+    });
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+  };
+  ModelEngine.prototype._commitSketchMeas = function (meta, raw) {
+    if (!this.sk || !meta) return;
+    const v = evalNum(raw, meta.value);
+    if (!(v >= 0)) { this._syncSketchOverlay(); return; }
+    if (meta.circle) {
+      meta.circle.r = r3(Math.max(0.05, v / 2));
+      this._sketchDraw();
+      return;
+    }
+    if (meta.rect && meta.dim) {
+      meta.rect[meta.dim] = r3(Math.max(0.05, v));
+      this._sketchDraw();
+      return;
+    }
+    if (meta.kind === 'len' && meta.move) {
+      this._applySketchMove(meta.move, 'len', v);
+      this._sketchDraw();
+      return;
+    }
+    if (meta.kind === 'ang' && meta.move) {
+      this._applySketchMove(meta.move, 'ang', v);
+      this._sketchDraw();
+    }
+  };
+  // Apply the edit only to the segment that was labeled. A cut snapped onto the
+  // face outline shares coordinates, so a global rewrite would move the outline too.
+  ModelEngine.prototype._applySketchMove = function (move, kind, value) {
+    if (!this.sk || !move) return;
+    if (move.kind === 'live') {
+      const live = this._liveSketchSeg();
+      if (!live) return;
+      const next = kind === 'ang'
+        ? C().sketchSetAngle(live.a, this._lastSketchDir(), value * Math.sign(live.angle || 1) || value, live.len)
+        : C().sketchSetSegLen(live.a, live.b, value);
+      const p = [r3(next[0]), r3(next[1])];
+      this.sk.hover = p;
+      if (this._skDrag) { this._skDrag.p = p; this._skDrag.moved = true; }
+      this.sk.guide = { point: p, snapped: true, kind: 'edit', angle: kind === 'ang' ? value : (live.angle || 0) };
+      return;
+    }
+    if (move.kind === 'chain') {
+      const pts = this.sk.chain;
+      if (!pts || pts[move.i0] == null || pts[move.i1] == null) return;
+      const next = kind === 'ang'
+        ? C().sketchEditAngle(pts, move.iPrev, move.i0, move.i1, value)
+        : C().sketchEditSegLen(pts, move.i0, move.i1, value);
+      this.sk.chain = next;
+      return;
+    }
+    if (move.kind === 'pts') {
+      const prof = this.sk.profiles && this.sk.profiles[move.pi];
+      if (!prof || !prof.pts) return;
+      prof.pts = kind === 'ang'
+        ? C().sketchEditAngle(prof.pts, move.iPrev, move.i0, move.i1, value)
+        : C().sketchEditSegLen(prof.pts, move.i0, move.i1, value);
+    }
   };
   ModelEngine.prototype._measureEdge = function (edge, world) {
     const T = this.T;
@@ -3295,6 +3778,8 @@
       op: 'length',
       scope: 'parallel',
       at: at.map((v) => r3(v)),
+      a: [r3(edge.a[0]), r3(edge.a[1]), r3(edge.a[2] || 0)],
+      b: [r3(edge.b[0]), r3(edge.b[1]), r3(edge.b[2] || 0)],
       dir: dir.map((v) => r3(v)),
       delta: r3(delta),
     });
@@ -3659,11 +4144,13 @@
         el.className = 'mdl-dim';
         el.dataset.dim = it.key;
         el.dataset.body = it.id;
-        el.addEventListener('pointerdown', (e) => {
-          if (!C().dimPressEdits(e.button, e.pointerType)) return;
+        el.addEventListener('dblclick', (e) => {
           e.stopPropagation();
           e.preventDefault();
           this._openDimEdit(el);
+        });
+        el.addEventListener('pointerdown', (e) => {
+          if (el.classList.contains('editing')) e.stopPropagation();
         });
         el.addEventListener('pointerenter', () => {
           this._dimHold = el.dataset.body;
@@ -3677,7 +4164,7 @@
         });
         host.appendChild(el);
       }
-      if (this._dimEdit !== it.key) el.textContent = it.text;
+      if (this._dimEdit !== it.key && el.textContent !== it.text) el.textContent = it.text;
       el.hidden = false;
       el.style.left = row.x + 'px';
       el.style.top = row.y + 'px';
@@ -3876,9 +4363,11 @@
   ModelEngine.prototype._sketchCancel = function () {
     this.sk = null;
     this._skDrag = null;
+    this._skDimEdit = null;
     const bar = this.root.querySelector('[data-skbar]');
     if (bar) bar.classList.add('hidden');
     if (this._skLines) { this.scene.remove(this._skLines); this._skLines.geometry.dispose(); this._skLines = null; }
+    this._clearSketchOverlay();
     this._sketchSourceBar();
     this._freeNav();
     this._syncGizmo();

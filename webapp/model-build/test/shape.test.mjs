@@ -270,7 +270,27 @@ function worldBounds(v, pos, rot, scale) {
   const dimLeavesOrbit = !ModelCore.dimPressEdits(2, 'mouse') && !ModelCore.dimPressEdits(1, 'mouse');
   check('a dimension label does not steal the view turn', dimEdits && dimLeavesOrbit);
   check('the view still turns when a drag ends on a dimension label', viewFree && dimLeavesOrbit && ModelCore.dimPressEdits(0, 'mouse'));
+  // Dimensions edit on double-click so a single press still places a sketch point.
+  const dimEditJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
+  check('a dimension edits on double-click only', dimEditJs.includes('_dimArmEdit') && dimEditJs.includes('_openDimEdit(el)') && dimEditJs.includes('_openSketchMeasEdit(el)') && dimEditJs.includes('el.textContent !== it.text') && !/addEventListener\('pointerdown'[\s\S]{0,180}_openDimEdit/.test(dimEditJs));
+  check('a sketch dimension edit stays on that segment', dimEditJs.includes('_applySketchMove') && dimEditJs.includes('shares coordinates') && !dimEditJs.includes('_rewriteSketchPoint'));
+  // A line press places one point. Drag must not write start and end together.
+  check('a sketch line places one point at a time', dimEditJs.includes('Lines are click-to-click') && dimEditJs.includes('invent the start and end together') && !/tool === 'line'\) \{\s*const a = d\.p0, b = d\.p;\s*if \(Math\.hypot\(b\[0\] - a\[0\], b\[1\] - a\[1\]\) >= 0\.05\) this\.sk\.profiles\.push\(\{ k: 'path'/.test(dimEditJs));
+  const onLine = ModelCore.sketchSnapToLines([3, 0.3], [{ a: [0, 0], b: [10, 0] }], { tol: 1 });
+  const onEnd = ModelCore.sketchSnapToLines([0.2, 0.2], [{ a: [0, 0], b: [10, 0] }], { tol: 1 });
+  const onMid = ModelCore.sketchSnapToLines([5.1, 0.2], [{ a: [0, 0], b: [10, 0] }], { tol: 1 });
+  check('a sketch point snaps onto a line', onLine.snapped && onLine.kind === 'line' && near(onLine.point[1], 0, 1e-6) && onEnd.snapped && onEnd.kind === 'end' && onMid.snapped && onMid.kind === 'mid' && near(onMid.point[0], 5, 1e-6));
   check('face mode defaults to extrude, not cut by plane', ModelCore.faceTool() === 'extrude' && ModelCore.faceTool('extrude') === 'extrude' && ModelCore.faceTool('cut') === 'cut' && !ModelCore.faceCutPlaneOn('extrude') && ModelCore.faceCutPlaneOn('cut') && !ModelCore.faceCutPlaneOn());
+  // Sketch from a face outline must open an editable sketch (rect/circle/poly), not fail closed.
+  const outlineRect = ModelCore.faceOutlineProfiles([{ edges: [
+    { k: 'line', a: [0, 0], b: [10, 0] }, { k: 'line', a: [10, 0], b: [10, 6] },
+    { k: 'line', a: [10, 6], b: [0, 6] }, { k: 'line', a: [0, 6], b: [0, 0] },
+  ] }]);
+  const outlineCircle = ModelCore.faceOutlineProfiles([{ edges: [{ k: 'circle', c: [1, 2], r: 4 }] }]);
+  const outlinePoly = ModelCore.faceOutlineProfiles([{ edges: [
+    { k: 'line', a: [0, 0], b: [4, 1] }, { k: 'line', a: [4, 1], b: [2, 5] }, { k: 'line', a: [2, 5], b: [0, 0] },
+  ] }]);
+  check('a face outline becomes an editable sketch', outlineRect[0].k === 'rect' && near(outlineRect[0].w, 10, 1e-6) && near(outlineRect[0].h, 6, 1e-6) && outlineCircle[0].k === 'circle' && near(outlineCircle[0].r, 4, 1e-6) && outlinePoly[0].k === 'poly' && outlinePoly[0].pts.length === 3);
   // Dimension values stay upright on a soft chip; the measure line shows direction.
   const dimCss = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.css'), 'utf8');
   const dimJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
@@ -288,14 +308,23 @@ function worldBounds(v, pos, rot, scale) {
   check('a round and a chamfer are saved on the edge', edgeFeatures.length === 2 && edgeFeatures[0].op === 'fillet' && edgeFeatures[0].r === 1 && edgeFeatures[1].op === 'chamfer' && edgeFeatures[1].r === 0.5);
   const hiddenDoc = ModelCore.normalize({ objects: [{ name: 'A', type: 'box', hidden: true }, { name: 'B', type: 'cylinder' }] });
   check('a hidden body stays hidden and the other stays visible', hiddenDoc.objects[0].hidden === true && !hiddenDoc.objects[1].hidden);
-  // The next sketch line is perpendicular to the previous one: project the pointer onto that direction.
-  const perpDir = [-0, 1];
-  const perpFrom = [10, 0];
-  const perpRaw = [14, 6];
-  const perpT = (perpRaw[0] - perpFrom[0]) * perpDir[0] + (perpRaw[1] - perpFrom[1]) * perpDir[1];
-  const perpAt = [perpFrom[0] + perpDir[0] * perpT, perpFrom[1] + perpDir[1] * perpT];
-  const prev = [10, 0];
-  check('a perpendicular line leaves the previous direction', near(perpAt[0], 10, 1e-6) && near(perpAt[1], 6, 1e-6) && Math.abs(prev[0] * (perpAt[0] - perpFrom[0]) + prev[1] * (perpAt[1] - perpFrom[1])) < 1e-6);
+  // Sketch lines show length and angle, snap near 90°, and can be edited.
+  const prevDir = [1, 0];
+  const perpAt = ModelCore.sketchPerpPoint([10, 0], prevDir, [14, 6]);
+  check('a perpendicular line leaves the previous direction', near(perpAt[0], 10, 1e-6) && near(perpAt[1], 6, 1e-6) && Math.abs(prevDir[0] * (perpAt[0] - 10) + prevDir[1] * (perpAt[1] - 0)) < 1e-6);
+  const ang = ModelCore.sketchAngleBetween([1, 0], [0, 1]);
+  check('the angle between sketch lines is measured', near(ang, 90, 1e-6) && near(ModelCore.sketchSegLen([0, 0], [3, 4]), 5, 1e-6));
+  const snap90 = ModelCore.sketchSnapPoint([0, 0], [1, 0], [0.2, 4], { tol: 10 });
+  check('a sketch line snaps near 90°', snap90.snapped && (snap90.kind === 'perp' || snap90.kind === 'axis') && near(snap90.point[0], 0, 0.05) && near(Math.abs(snap90.angle), 90, 0.6));
+  const lenEdit = ModelCore.sketchSetSegLen([0, 0], [3, 4], 10);
+  const angEdit = ModelCore.sketchSetAngle([0, 0], [1, 0], 90, 5);
+  check('a sketch length and angle can be edited', near(ModelCore.sketchSegLen([0, 0], lenEdit), 10, 1e-6) && near(angEdit[0], 0, 1e-6) && near(angEdit[1], 5, 1e-6));
+  // A cut snapped onto the outline shares a coordinate. Editing that cut must
+  // not rewrite the outline point that happens to sit at the same place.
+  const outline = [[0, 0], [10, 0], [10, 6], [0, 6]];
+  const cut = [[0, 0], [4, 3]];
+  const cutNext = ModelCore.sketchEditSegLen(cut, 0, 1, 10);
+  check('editing one sketch length leaves other paths alone', near(ModelCore.sketchSegLen(cutNext[0], cutNext[1]), 10, 1e-6) && outline[0][0] === 0 && outline[0][1] === 0 && cut[1][0] === 4 && cut[1][1] === 3 && (cutNext[1][0] !== 4 || cutNext[1][1] !== 3));
 }
 
 const inbox = [];
@@ -838,7 +867,10 @@ function lineEdges(body) {
       const d = [e.b[0] - e.a[0], e.b[1] - e.a[1], (e.b[2] || 0) - (e.a[2] || 0)];
       const len = Math.hypot(d[0], d[1], d[2]);
       if (len < 0.2) continue;
-      out.push({ len, d, mid: [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2, ((e.a[2] || 0) + (e.b[2] || 0)) / 2] });
+      out.push({
+        len, d, a: e.a, b: e.b,
+        mid: [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2, ((e.a[2] || 0) + (e.b[2] || 0)) / 2],
+      });
     }
   }
   return out;
@@ -889,6 +921,53 @@ function axisLens(body, axis) {
   const stepAllBody = stepAll && (stepAll.bodies || [])[0];
   const stepAllX = stepAllBody && axisLens(stepAllBody, 0);
   check('parallel edges of a step change together', stepAllBody && stepAllBody.vertices && !stepAllBody.error && !(stepAllBody.notes || []).length && hasLen(stepAllX, 14, 0.35) && hasLen(stepAllX, 24, 0.35), stepAllBody && (stepAllBody.error || ((stepAllBody.notes || []).join('; ')) || (stepAllX && stepAllX.map((v) => v.toFixed(1)).slice(0, 16).join(','))));
+
+  // Short step on the -x side: its +x end is an earlier face than the long
+  // base. Editing that short label must grow 10→14 and leave the 20 base.
+  const stepLeftParts = [
+    { id: 'a', kernel: 'brep', type: 'box', size: { x: 20, y: 10, z: 5 }, pos: [0, 0, 0], rot: [0, 0, 0], features: [] },
+    { id: 'b', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 5 }, pos: [-5, 0, 5], rot: [0, 0, 0], features: [] },
+  ];
+  const stepLeft = await send({ type: 'build', objects: [{ id: 'stepl', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0], features: [], parts: stepLeftParts }] });
+  const stepLeftBody = (stepLeft.bodies || [])[0];
+  const topLeft = lineEdges(stepLeftBody).find((e) => Math.abs(e.d[0]) > 0.98 * e.len && near(e.len, 10, 0.2) && e.mid[2] > 9);
+  const stepShort = topLeft && await send({ type: 'build', objects: [{
+    id: 'stepShort', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0],
+    features: [{ op: 'length', scope: 'parallel', at: topLeft.mid, dir: [1, 0, 0], delta: 4 }],
+    parts: stepLeftParts,
+  }] });
+  const stepShortBody = stepShort && (stepShort.bodies || [])[0];
+  const stepShortX = stepShortBody && axisLens(stepShortBody, 0);
+  check('editing a short step length leaves the longer parallel edges', stepShortBody && stepShortBody.vertices && !stepShortBody.error && !(stepShortBody.notes || []).length && hasLen(stepShortX, 14, 0.35) && hasLen(stepShortX, 20, 0.35) && !hasLen(stepShortX, 24, 0.35), stepShortBody && (stepShortBody.error || ((stepShortBody.notes || []).join('; ')) || (stepShortX && stepShortX.map((v) => v.toFixed(1)).slice(0, 16).join(','))));
+
+  // A tower on a base: mesh order can point a→b into the attached face.
+  // The free top must still move when that labeled height is edited.
+  const towerParts = [
+    { id: 'base', kernel: 'brep', type: 'box', size: { x: 20, y: 10, z: 5 }, pos: [0, 0, 0], rot: [0, 0, 0], features: [] },
+    { id: 'tower', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 20 }, pos: [0, 0, 12.5], rot: [0, 0, 0], features: [] },
+  ];
+  const tower = await send({ type: 'build', objects: [{ id: 'tower0', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0], features: [], parts: towerParts }] });
+  const towerBody = (tower.bodies || [])[0];
+  const tall = lineEdges(towerBody).find((e) => Math.abs(e.d[2]) > 0.98 * e.len && near(e.len, 20, 0.25) && e.mid[2] > 5);
+  const intoBase = tall && (tall.a[2] >= tall.b[2]
+    ? { a: tall.a, b: tall.b, mid: tall.mid, dir: [0, 0, -1] }
+    : { a: tall.b, b: tall.a, mid: tall.mid, dir: [0, 0, -1] });
+  const towerUp = intoBase && await send({ type: 'build', objects: [{
+    id: 'tower1', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0],
+    features: [{ op: 'length', scope: 'parallel', at: intoBase.mid, a: intoBase.a, b: intoBase.b, dir: intoBase.dir, delta: 4 }],
+    parts: towerParts,
+  }] });
+  const towerUpBody = towerUp && (towerUp.bodies || [])[0];
+  const towerUpZ = towerUpBody && axisLens(towerUpBody, 2);
+  check('a length edit moves the free end when a→b points into the body', towerUpBody && towerUpBody.vertices && !towerUpBody.error && !(towerUpBody.notes || []).length && hasLen(towerUpZ, 24, 0.35) && !hasLen(towerUpZ, 20, 0.35), towerUpBody && (towerUpBody.error || ((towerUpBody.notes || []).join('; ')) || (towerUpZ && towerUpZ.map((v) => v.toFixed(1)).slice(0, 16).join(','))));
+  const towerShort = intoBase && await send({ type: 'build', objects: [{
+    id: 'tower2', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0],
+    features: [{ op: 'length', scope: 'parallel', at: intoBase.mid, a: intoBase.a, b: intoBase.b, dir: intoBase.dir, delta: -12 }],
+    parts: towerParts,
+  }] });
+  const towerShortBody = towerShort && (towerShort.bodies || [])[0];
+  const towerShortZ = towerShortBody && axisLens(towerShortBody, 2);
+  check('a large shorten still changes the labeled length', towerShortBody && towerShortBody.vertices && !towerShortBody.error && !(towerShortBody.notes || []).length && hasLen(towerShortZ, 8, 0.35) && !hasLen(towerShortZ, 20, 0.35), towerShortBody && (towerShortBody.error || ((towerShortBody.notes || []).join('; ')) || (towerShortZ && towerShortZ.map((v) => v.toFixed(1)).slice(0, 16).join(','))));
 
   const hole = await send({ type: 'build', objects: [{
     id: 'hole', kernel: 'brep', type: 'cut', cut: 'delete', pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1.194, 1], features: [],
