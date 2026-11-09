@@ -157,6 +157,8 @@ function worldBounds(v, pos, rot, scale) {
   const joinedCuts = ModelCore.cutRoles(['Joined', 'Cylinder'], 0);
   const cylinderCuts = ModelCore.cutRoles(['Joined', 'Cylinder'], 1);
   check('the named cutter is the tool', joinedCuts.tool === 'Joined' && joinedCuts.target === 'Cylinder' && cylinderCuts.tool === 'Cylinder' && cylinderCuts.target === 'Joined');
+  const multiBarJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
+  check('multi-select bottom menu offers join with cut', multiBarJs.includes('data-barjoin') && multiBarJs.includes('mdl-cutgroup') && multiBarJs.includes('data-cutbar') && multiBarJs.includes('n >= 2') && multiBarJs.includes('n === 2'));
   const piece = ModelCore.normalize({ objects: [{ name: 'Piece', type: 'solid', pos: [1, 2, 3], brep: '0123456789abcdefEXTRA', brepHash: 'abc' }] });
   check('a split piece is saved as its own solid', piece.objects[0].type === 'solid' && piece.objects[0].pos[0] === 1 && piece.objects[0].brep === '0123456789abcdefEXTRA' && piece.objects[0].brepHash === 'abc');
   const dimDoc = ModelCore.normalize({ objects: [{ name: 'A', type: 'box', dims: true }, { name: 'B', type: 'box' }, { name: 'C', type: 'box', dims: false }] });

@@ -661,6 +661,52 @@ html[data-theme="dark"] .mdl-dim:hover {
 .mdl-skbar button.mdl-pick.on { background: var(--mdl-accent); color: #fff; }
 .mdl-skbar button.mdl-ghost { background: transparent; color: var(--mdl-ink); }
 .mdl-vsep { width: 1px; align-self: stretch; background: var(--mdl-line); margin: 6px 4px; }
+/* Multi-select: Join alone, Cut grouped so Overlap / Which body are clearly cut-only. */
+.mdl-multibar {
+  gap: 10px;
+  padding: 6px 8px;
+  align-items: stretch;
+}
+.mdl-multibar .mdl-joinop {
+  justify-content: center;
+  padding: 4px 8px;
+}
+.mdl-cutgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 8px 6px 10px;
+  border-radius: 12px;
+  background: var(--mdl-hover);
+  box-shadow: inset 0 0 0 1px var(--mdl-line);
+}
+.mdl-cutgroup.hidden { display: none; }
+.mdl-cutgroup-k {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mdl-muted);
+}
+.mdl-cutgroup-body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+.mdl-cutgroup .mdl-op { padding: 0 4px; }
+.mdl-skbar button.mdl-word.mdl-cutway {
+  background: var(--mdl-panel);
+  color: var(--mdl-ink);
+  box-shadow: inset 0 0 0 1px var(--mdl-line);
+}
+.mdl-skbar button.mdl-word.mdl-cutway:hover {
+  background: var(--mdl-accent-soft);
+  color: var(--mdl-accent);
+  box-shadow: none;
+}
 .mdl-chip {
   display: inline-flex;
   align-items: center;

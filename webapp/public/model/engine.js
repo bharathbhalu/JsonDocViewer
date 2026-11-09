@@ -330,7 +330,6 @@
         <button type="button" data-mode="object" class="on" title="Objects" aria-label="Objects">${ICON.bodies}</button>
         <button type="button" data-mode="face" title="Faces" aria-label="Faces">${ICON.face}</button>
         <button type="button" data-mode="edge" title="Edges" aria-label="Edges">${ICON.line}</button>
-        <button type="button" data-join title="Join selected bodies" aria-label="Join">${ICON.join}</button>
         <button type="button" data-import title="Import STL or OBJ" aria-label="Import">${ICON.import}</button>
         <div class="mdl-gap"></div>
         <button type="button" data-fit title="Fit" aria-label="Fit">${ICON.fit}</button>
@@ -412,20 +411,31 @@
         </div>
         <button type="button" class="mdl-word mdl-ghost" data-edgeobj>Objects</button>
       </div>
-      <div class="mdl-skbar hidden" data-cutbar>
-        <div class="mdl-op">
-          <span class="mdl-opk">Overlap</span>
-          <div class="mdl-oprow mdl-picks">
-            <button type="button" class="mdl-pick on" data-cuthow="delete" title="Remove the shared volume">Delete</button>
-            <button type="button" class="mdl-pick" data-cuthow="split" title="Divide into separate bodies">Split</button>
+      <div class="mdl-skbar mdl-multibar hidden" data-cutbar>
+        <div class="mdl-op mdl-joinop">
+          <span class="mdl-opk">Join</span>
+          <div class="mdl-oprow">
+            <button type="button" class="mdl-word" data-barjoin title="Join the selected bodies into one">Join bodies</button>
           </div>
         </div>
-        <span class="mdl-vsep"></span>
-        <div class="mdl-op">
-          <span class="mdl-opk">Which body</span>
-          <div class="mdl-oprow">
-            <button type="button" class="mdl-word" data-cuta>First cuts second</button>
-            <button type="button" class="mdl-word" data-cutb>Second cuts first</button>
+        <div class="mdl-cutgroup hidden" data-cutops>
+          <span class="mdl-cutgroup-k">Cut</span>
+          <div class="mdl-cutgroup-body">
+            <div class="mdl-op">
+              <span class="mdl-opk">Overlap</span>
+              <div class="mdl-oprow mdl-picks">
+                <button type="button" class="mdl-pick on" data-cuthow="delete" title="Remove the shared volume">Delete</button>
+                <button type="button" class="mdl-pick" data-cuthow="split" title="Divide into separate bodies">Split</button>
+              </div>
+            </div>
+            <span class="mdl-vsep"></span>
+            <div class="mdl-op">
+              <span class="mdl-opk">Which body</span>
+              <div class="mdl-oprow">
+                <button type="button" class="mdl-word mdl-cutway" data-cuta>First cuts second</button>
+                <button type="button" class="mdl-word mdl-cutway" data-cutb>Second cuts first</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -521,8 +531,9 @@
     this.root.querySelector('[data-cuta]').onclick = () => this._cutPair(0);
     this.root.querySelector('[data-cutb]').onclick = () => this._cutPair(1);
     this.root.querySelectorAll('[data-cuthow]').forEach((b) => { b.onclick = () => this._cutHowSet(b.dataset.cuthow); });
+    const barJoin = this.root.querySelector('[data-barjoin]');
+    if (barJoin) barJoin.onclick = () => this._join();
     this.root.querySelector('[data-skperp]').onclick = () => this._sketchPerpToggle();
-    this.root.querySelector('[data-join]').onclick = () => this._join();
     this.root.querySelector('[data-import]').onclick = () => this.root.querySelector('[data-file]').click();
     this.root.querySelector('[data-more]').onclick = () => this._setAdding(!this.adding);
     this.root.querySelector('[data-hideall]').onclick = () => this._setAllHidden(true);
@@ -2193,8 +2204,6 @@
     this.adding = !!on;
     const more = this.root.querySelector('[data-more]');
     if (more) more.classList.toggle('on', this.adding);
-    const join = this.root.querySelector('[data-join]');
-    if (join) join.classList.toggle('on', this.adding);
   };
   ModelEngine.prototype._sub3 = function (a, b) {
     return [a[0] - b[0], a[1] - b[1], (a[2] || 0) - (b[2] || 0)];
@@ -2402,9 +2411,13 @@
   ModelEngine.prototype._syncCutBar = function () {
     const bar = this.root.querySelector('[data-cutbar]');
     if (!bar) return;
-    const show = this.mode === 'object' && !this.sk && this.multi.length === 2;
+    const n = this.multi.length;
+    const show = this.mode === 'object' && !this.sk && n >= 2;
     bar.classList.toggle('hidden', !show);
     if (!show) return;
+    const cutOn = n === 2;
+    bar.querySelectorAll('[data-cutops]').forEach((el) => el.classList.toggle('hidden', !cutOn));
+    if (!cutOn) return;
     const a = this._obj(this.multi[0]);
     const b = this._obj(this.multi[1]);
     const na = (a && a.name) || 'First';
@@ -4378,7 +4391,7 @@
     if (this.faceOn) this._faceToggle();
     if (this.multi.length < 2) {
       this._setAdding(true);
-      this._toast('Tap each body, then tap Join again. That selects the body, not a face.');
+      this._toast('Select more bodies, then tap Join bodies.');
       return;
     }
     const ids = this.multi.slice();
