@@ -104,6 +104,39 @@ html[data-theme="dark"] .mdl-root {
 .mdl-rail button:hover, .mdl-modes button:hover, .mdl-del:hover { background: var(--mdl-hover); }
 .mdl-rail button:active { background: var(--mdl-accent-soft); }
 .mdl-rail .mdl-gap { height: 1px; margin: 4px 8px; background: var(--mdl-line); }
+.mdl-exportmenu {
+  position: absolute;
+  z-index: 6;
+  left: max(70px, calc(env(safe-area-inset-left) + 66px));
+  top: 50%;
+  transform: translateY(-10%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--mdl-panel);
+  box-shadow: var(--mdl-shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.mdl-exportmenu.hidden { display: none; }
+.mdl-exportmenu button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--mdl-ink);
+  text-align: left;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: pan-x pan-y;
+}
+.mdl-exportmenu button:hover { background: var(--mdl-accent-soft); color: var(--mdl-accent); }
 
 .mdl-side {
   position: absolute;

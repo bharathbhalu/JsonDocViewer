@@ -39,10 +39,12 @@
     cylinder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="6.5" rx="6.5" ry="2.4"/><path d="M5.5 6.5v11c0 1.3 2.9 2.4 6.5 2.4s6.5-1.1 6.5-2.4v-11"/></svg>',
     sphere: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="7.2"/><ellipse cx="12" cy="12" rx="7.2" ry="2.6"/><path d="M12 4.8v14.4"/></svg>',
     fit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+    xray: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M5 8.5 12 4.5l7 4v7l-7 4-7-4z" opacity=".35"/><path d="M8 10.2 12 8l4 2.2v4.4L12 16.8l-4-2.2z"/><path d="M12 8v8.8M8 10.2l4 2.2 4-2.2"/></svg>',
     sketch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5 15.5 5l3.5 3.5L7.5 20H4z"/><path d="M13 7.5 16.5 11"/></svg>',
     face: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M5 8.5 12 4.5l7 4v7l-7 4-7-4z"/><path d="M12 12V4.5M12 12l7-3.5"/></svg>',
     join: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8h7v8H4zM13 8h7v8h-7z"/></svg>',
     import: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 4v10"/><path d="M8 10.5 12 14.5 16 10.5"/><path d="M5 18h14"/></svg>',
+    export: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 14V4"/><path d="m8 7.5 4-4 4 4"/><path d="M5 18h14"/></svg>',
     undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 8 4 12l4 4"/><path d="M4 12h9a5 5 0 0 1 0 10h-2"/></svg>',
     redo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8l4 4-4 4"/><path d="M20 12h-9a5 5 0 0 0 0 10h2"/></svg>',
     move: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="m8 7 4-4 4 4M8 17l4 4 4-4M7 8 3 12l4 4M17 8l4 4-4 4"/></svg>',
@@ -87,6 +89,7 @@
     this.mode = 'object';
     this._faceTool = C().faceTool('extrude');
     this._cutHow = 'delete';
+    this._xray = false;
     this.sk = null;
     this.objs = {};
     this._shapeSigs = {};
@@ -331,8 +334,10 @@
         <button type="button" data-mode="face" title="Faces" aria-label="Faces">${ICON.face}</button>
         <button type="button" data-mode="edge" title="Edges" aria-label="Edges">${ICON.line}</button>
         <button type="button" data-import title="Import STL or OBJ" aria-label="Import">${ICON.import}</button>
+        <button type="button" data-export title="Export mesh" aria-label="Export">${ICON.export}</button>
         <div class="mdl-gap"></div>
         <button type="button" data-fit title="Fit" aria-label="Fit">${ICON.fit}</button>
+        <button type="button" data-xray title="X-ray view" aria-label="X-ray view">${ICON.xray}</button>
         <div class="mdl-gap"></div>
         <button type="button" data-undo title="Undo" aria-label="Undo" disabled>${ICON.undo}</button>
         <button type="button" data-redo title="Redo" aria-label="Redo" disabled>${ICON.redo}</button>
@@ -466,6 +471,11 @@
         <button type="button" class="mdl-word mdl-ghost" data-skcancel>Cancel</button>
       </div>
       <input data-file type="file" accept=".stl,.obj,model/stl" hidden>
+      <div class="mdl-exportmenu hidden" data-exportmenu role="menu" aria-label="Export">
+        <button type="button" data-exfmt="stl" role="menuitem">Download STL</button>
+        <button type="button" data-exfmt="obj" role="menuitem">Download OBJ</button>
+        <button type="button" data-exfmt="3mf" role="menuitem">Download 3MF</button>
+      </div>
       <aside class="mdl-side">
         <header class="mdl-sidehead"><span>Bodies</span><div class="mdl-iconrow"><button type="button" class="mdl-ico" data-hideall aria-label="Hide all">${ICON.eyeOff}</button><button type="button" class="mdl-ico" data-showall aria-label="Show all">${ICON.eye}</button><button type="button" class="mdl-ico" data-point aria-label="Save checkpoint">${ICON.bookmark}</button><button type="button" class="mdl-ico" data-more aria-label="Select more">${ICON.more}</button></div></header>
         <div class="mdl-list" data-list></div>
@@ -504,6 +514,7 @@
     this._bindTips(this.root);
     this.root.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => this._add(b.dataset.add); });
     this.root.querySelector('[data-fit]').onclick = () => this._fit();
+    this.root.querySelector('[data-xray]').onclick = () => this._setXray(!this._xray);
     this.root.querySelector('[data-undo]').onclick = () => this._undo();
     this.root.querySelector('[data-redo]').onclick = () => this._redo();
     this.root.querySelector('[data-sketch]').onclick = () => this._sketchStart();
@@ -535,6 +546,17 @@
     if (barJoin) barJoin.onclick = () => this._join();
     this.root.querySelector('[data-skperp]').onclick = () => this._sketchPerpToggle();
     this.root.querySelector('[data-import]').onclick = () => this.root.querySelector('[data-file]').click();
+    this.root.querySelector('[data-export]').onclick = (e) => {
+      e.stopPropagation();
+      this._toggleExportMenu();
+    };
+    this.root.querySelectorAll('[data-exfmt]').forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        this._hideExportMenu();
+        this._exportMesh(b.dataset.exfmt);
+      };
+    });
     this.root.querySelector('[data-more]').onclick = () => this._setAdding(!this.adding);
     this.root.querySelector('[data-hideall]').onclick = () => this._setAllHidden(true);
     this.root.querySelector('[data-showall]').onclick = () => this._setAllHidden(false);
@@ -824,7 +846,7 @@
 
   ModelEngine.prototype._overMenu = function (e) {
     const t = e && e.target;
-    return !!(t && t.closest && t.closest('.mdl-rail, .mdl-side, .mdl-skbar, .mdl-pill, .mdl-toast, input, textarea, select'));
+    return !!(t && t.closest && t.closest('.mdl-rail, .mdl-side, .mdl-skbar, .mdl-exportmenu, .mdl-pill, .mdl-toast, input, textarea, select'));
   };
   ModelEngine.prototype._bindWheel = function () {
     const wheel = (e) => this._viewWheel(e);
@@ -1140,22 +1162,39 @@
     this.scene.add(this.grid);
     this._paint();
   };
+  ModelEngine.prototype._setXray = function (on) {
+    this._xray = !!on;
+    const btn = this.root.querySelector('[data-xray]');
+    if (btn) btn.classList.toggle('on', this._xray);
+    this._paint();
+    this._toast(this._xray ? 'X-ray on. Internal faces and slots show through.' : 'X-ray off.');
+  };
   ModelEngine.prototype._paint = function () {
     if (!this.colors) return;
+    const xray = !!this._xray;
     for (const [id, o] of Object.entries(this.objs)) {
       const obj = this._obj(id);
       const show = !obj || !obj.hidden;
       o.group.visible = show;
       (o.picks || []).forEach((m) => { m.visible = show; });
-      if (o.mesh && o.mesh.material && o.group.scale) {
+      if (!o.mesh || !o.mesh.material || !o.edges || !o.edges.material) continue;
+      if (o.group.scale) {
         const flipped = o.group.scale.x < 0 || o.group.scale.y < 0 || o.group.scale.z < 0;
-        o.mesh.material.side = flipped ? this.T.DoubleSide : this.T.FrontSide;
+        o.mesh.material.side = (xray || flipped) ? this.T.DoubleSide : this.T.FrontSide;
+      } else {
+        o.mesh.material.side = xray ? this.T.DoubleSide : this.T.FrontSide;
       }
       const on = this.multi.indexOf(id) >= 0 && !this.faceOn;
       const hot = id === this.hov && !on && !this.faceOn;
       o.mesh.material.color.copy(on ? this.colors.selBody : this.colors.body);
+      o.mesh.material.transparent = xray;
+      o.mesh.material.opacity = xray ? (on ? 0.42 : 0.28) : 1;
+      o.mesh.material.depthWrite = !xray;
+      o.mesh.material.needsUpdate = true;
       o.edges.material.color.copy(on || hot ? this.colors.sel : this.colors.edge);
-      o.edges.material.opacity = on ? 0.95 : hot ? 0.7 : 0.38;
+      o.edges.material.opacity = xray ? (on ? 1 : hot ? 0.9 : 0.72) : (on ? 0.95 : hot ? 0.7 : 0.38);
+      o.edges.material.depthTest = !xray;
+      o.edges.renderOrder = xray ? 3 : 0;
     }
   };
 
@@ -4415,6 +4454,123 @@
     this._requestBuild();
   };
 
+  ModelEngine.prototype._toggleExportMenu = function () {
+    const menu = this.root.querySelector('[data-exportmenu]');
+    const btn = this.root.querySelector('[data-export]');
+    if (!menu || !btn) return;
+    const open = menu.classList.contains('hidden');
+    menu.classList.toggle('hidden', !open);
+    btn.classList.toggle('on', open);
+    if (open) {
+      const hide = (e) => {
+        if (e && e.target && (menu.contains(e.target) || btn.contains(e.target))) return;
+        this._hideExportMenu();
+        window.removeEventListener('pointerdown', hide, true);
+      };
+      window.addEventListener('pointerdown', hide, true);
+    }
+  };
+  ModelEngine.prototype._hideExportMenu = function () {
+    const menu = this.root.querySelector('[data-exportmenu]');
+    const btn = this.root.querySelector('[data-export]');
+    if (menu) menu.classList.add('hidden');
+    if (btn) btn.classList.remove('on');
+  };
+  ModelEngine.prototype._exportIds = function () {
+    if (this.multi.length) return this.multi.slice();
+    if (this.sel) return [this.sel];
+    return (this.data.objects || []).filter((o) => o && !o.hidden).map((o) => o.id);
+  };
+  ModelEngine.prototype._meshFromSlot = function (slot) {
+    const T = this.T;
+    if (!T || !slot || !slot.mesh || !slot.mesh.geometry) return null;
+    slot.group.updateMatrixWorld(true);
+    const g = slot.mesh.geometry;
+    const pos = g.getAttribute('position');
+    if (!pos || pos.count < 3) return null;
+    const vertices = [];
+    const triangles = [];
+    const v = new T.Vector3();
+    const m = slot.mesh.matrixWorld;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      vertices.push(r3(v.x), r3(v.y), r3(v.z));
+    }
+    const idx = g.getIndex();
+    if (idx) {
+      for (let i = 0; i < idx.count; i++) triangles.push(idx.getX(i));
+    } else {
+      for (let i = 0; i < pos.count; i++) triangles.push(i);
+    }
+    return triangles.length >= 3 ? { vertices, triangles } : null;
+  };
+  ModelEngine.prototype._collectExportMesh = function (ids) {
+    const vertices = [];
+    const triangles = [];
+    for (const id of ids || []) {
+      const obj = this._obj(id);
+      const slot = this.objs[id];
+      if (!obj || obj.hidden || !slot) continue;
+      const part = this._meshFromSlot(slot);
+      if (!part) continue;
+      const base = vertices.length / 3;
+      for (let i = 0; i < part.vertices.length; i++) vertices.push(part.vertices[i]);
+      for (let i = 0; i < part.triangles.length; i++) triangles.push(base + part.triangles[i]);
+    }
+    return triangles.length >= 3 ? { vertices, triangles } : null;
+  };
+  ModelEngine.prototype._collectExportParts = function (ids) {
+    const parts = [];
+    for (const id of ids || []) {
+      const obj = this._obj(id);
+      const slot = this.objs[id];
+      if (!obj || obj.hidden || !slot) continue;
+      const mesh = this._meshFromSlot(slot);
+      if (!mesh) continue;
+      parts.push({ name: obj.name || ('Body ' + (parts.length + 1)), vertices: mesh.vertices, triangles: mesh.triangles });
+    }
+    return parts;
+  };
+  ModelEngine.prototype._downloadBlob = function (blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+  ModelEngine.prototype._exportMesh = function (fmt) {
+    const kind = fmt === 'obj' ? 'obj' : (fmt === '3mf' ? '3mf' : 'stl');
+    const ids = this._exportIds();
+    const base = String((this.data && this.data.title) || 'Model').replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || 'Model';
+    if (kind === '3mf') {
+      const parts = this._collectExportParts(ids);
+      const buf = C().meshTo3mf(parts, base);
+      if (!buf) {
+        this._toast('Nothing to export. Build a body first.');
+        return;
+      }
+      this._downloadBlob(new Blob([buf], { type: 'model/3mf' }), base + '.3mf');
+      this._toast('Downloaded ' + base + '.3mf');
+      return;
+    }
+    const mesh = this._collectExportMesh(ids);
+    if (!mesh) {
+      this._toast('Nothing to export. Build a body first.');
+      return;
+    }
+    if (kind === 'obj') {
+      const text = C().meshToObj(mesh.vertices, mesh.triangles, base);
+      this._downloadBlob(new Blob([text], { type: 'text/plain' }), base + '.obj');
+      this._toast('Downloaded ' + base + '.obj');
+      return;
+    }
+    const buf = C().meshToBinaryStl(mesh.vertices, mesh.triangles, base);
+    this._downloadBlob(new Blob([buf], { type: 'model/stl' }), base + '.stl');
+    this._toast('Downloaded ' + base + '.stl');
+  };
   ModelEngine.prototype._importFile = function (file) {
     const reader = new FileReader();
     reader.onload = () => {

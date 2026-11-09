@@ -781,6 +781,173 @@
     try { return normalize(JSON.parse(m[1])); } catch (e) { return normalize({}); }
   }
 
+  // Triangle mesh → downloadable CAD mesh. vertices is xyz triples; triangles
+  // are vertex indices (any typed array or plain array).
+  function meshToBinaryStl(vertices, triangles, title) {
+    const v = vertices || [];
+    const t = triangles || [];
+    const n = Math.floor(t.length / 3);
+    const out = new ArrayBuffer(84 + n * 50);
+    const bytes = new Uint8Array(out);
+    const dv = new DataView(out);
+    const head = String(title || 'DocViewer model').slice(0, 79);
+    for (let i = 0; i < head.length; i++) bytes[i] = head.charCodeAt(i) & 0xff;
+    dv.setUint32(80, n, true);
+    let o = 84;
+    for (let i = 0; i < n; i++) {
+      const ia = t[i * 3] * 3, ib = t[i * 3 + 1] * 3, ic = t[i * 3 + 2] * 3;
+      const ax = +v[ia] || 0, ay = +v[ia + 1] || 0, az = +v[ia + 2] || 0;
+      const bx = +v[ib] || 0, by = +v[ib + 1] || 0, bz = +v[ib + 2] || 0;
+      const cx = +v[ic] || 0, cy = +v[ic + 1] || 0, cz = +v[ic + 2] || 0;
+      const ux = bx - ax, uy = by - ay, uz = bz - az;
+      const wx = cx - ax, wy = cy - ay, wz = cz - az;
+      let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      nx /= nl; ny /= nl; nz /= nl;
+      dv.setFloat32(o, nx, true); dv.setFloat32(o + 4, ny, true); dv.setFloat32(o + 8, nz, true);
+      dv.setFloat32(o + 12, ax, true); dv.setFloat32(o + 16, ay, true); dv.setFloat32(o + 20, az, true);
+      dv.setFloat32(o + 24, bx, true); dv.setFloat32(o + 28, by, true); dv.setFloat32(o + 32, bz, true);
+      dv.setFloat32(o + 36, cx, true); dv.setFloat32(o + 40, cy, true); dv.setFloat32(o + 44, cz, true);
+      dv.setUint16(o + 48, 0, true);
+      o += 50;
+    }
+    return out;
+  }
+  function meshToObj(vertices, triangles, name) {
+    const v = vertices || [];
+    const t = triangles || [];
+    const lines = ['# DocViewer model', 'o ' + String(name || 'Model').replace(/\s+/g, '_')];
+    const nV = Math.floor(v.length / 3);
+    for (let i = 0; i < nV; i++) {
+      lines.push('v ' + (+v[i * 3] || 0) + ' ' + (+v[i * 3 + 1] || 0) + ' ' + (+v[i * 3 + 2] || 0));
+    }
+    const nT = Math.floor(t.length / 3);
+    for (let i = 0; i < nT; i++) {
+      lines.push('f ' + ((t[i * 3] | 0) + 1) + ' ' + ((t[i * 3 + 1] | 0) + 1) + ' ' + ((t[i * 3 + 2] | 0) + 1));
+    }
+    return lines.join('\n') + '\n';
+  }
+  // Minimal ZIP (store only) so 3MF needs no extra package.
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(bytes) {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function utf8Bytes(text) {
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(String(text || ''));
+    const s = unescape(encodeURIComponent(String(text || '')));
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+  function zipStore(files) {
+    const entries = Object.keys(files || {}).map((name) => {
+      const data = files[name] instanceof Uint8Array ? files[name] : utf8Bytes(files[name]);
+      return { name: String(name), data, crc: crc32(data) };
+    });
+    let local = 0;
+    let central = 0;
+    for (const e of entries) {
+      const n = utf8Bytes(e.name).length;
+      local += 30 + n + e.data.length;
+      central += 46 + n;
+    }
+    const out = new Uint8Array(local + central + 22);
+    const dv = new DataView(out.buffer);
+    let o = 0;
+    const offsets = [];
+    for (const e of entries) {
+      const name = utf8Bytes(e.name);
+      offsets.push(o);
+      dv.setUint32(o, 0x04034b50, true);
+      dv.setUint16(o + 8, 0, true); // store
+      dv.setUint32(o + 14, e.crc, true);
+      dv.setUint32(o + 18, e.data.length, true);
+      dv.setUint32(o + 22, e.data.length, true);
+      dv.setUint16(o + 26, name.length, true);
+      out.set(name, o + 30);
+      out.set(e.data, o + 30 + name.length);
+      o += 30 + name.length + e.data.length;
+    }
+    const centralStart = o;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const name = utf8Bytes(e.name);
+      dv.setUint32(o, 0x02014b50, true);
+      dv.setUint16(o + 8, 0, true);
+      dv.setUint32(o + 16, e.crc, true);
+      dv.setUint32(o + 20, e.data.length, true);
+      dv.setUint32(o + 24, e.data.length, true);
+      dv.setUint16(o + 28, name.length, true);
+      dv.setUint32(o + 42, offsets[i], true);
+      out.set(name, o + 46);
+      o += 46 + name.length;
+    }
+    dv.setUint32(o, 0x06054b50, true);
+    dv.setUint16(o + 8, entries.length, true);
+    dv.setUint16(o + 10, entries.length, true);
+    dv.setUint32(o + 12, o - centralStart, true);
+    dv.setUint32(o + 16, centralStart, true);
+    return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+  }
+  function xmlEsc(t) {
+    return String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+  }
+  function f6(x) {
+    const r = Math.round((+x || 0) * 1e5) / 1e5;
+    return Object.is(r, -0) ? '0' : String(r);
+  }
+  // parts: [{ name, vertices, triangles }]. Units are millimetres.
+  function meshTo3mf(parts, title) {
+    const list = (Array.isArray(parts) ? parts : []).filter((p) => p && p.vertices && p.triangles && p.triangles.length >= 3);
+    if (!list.length) return null;
+    const objs = [];
+    const build = [];
+    list.forEach((p, k) => {
+      const v = p.vertices;
+      const t = p.triangles;
+      const vs = [];
+      for (let i = 0; i < Math.floor(v.length / 3); i++) {
+        vs.push('<vertex x="' + f6(v[i * 3]) + '" y="' + f6(v[i * 3 + 1]) + '" z="' + f6(v[i * 3 + 2]) + '"/>');
+      }
+      const ts = [];
+      for (let i = 0; i < Math.floor(t.length / 3); i++) {
+        ts.push('<triangle v1="' + (t[i * 3] | 0) + '" v2="' + (t[i * 3 + 1] | 0) + '" v3="' + (t[i * 3 + 2] | 0) + '"/>');
+      }
+      objs.push(
+        '<object id="' + (k + 1) + '" type="model" name="' + xmlEsc(p.name || ('Part ' + (k + 1))) + '">'
+        + '<mesh><vertices>' + vs.join('') + '</vertices><triangles>' + ts.join('') + '</triangles></mesh></object>'
+      );
+      build.push('<item objectid="' + (k + 1) + '"/>');
+    });
+    const model = '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+      + '<metadata name="Title">' + xmlEsc(title || 'Model') + '</metadata>'
+      + '<metadata name="Application">DocViewer Model</metadata>'
+      + '<resources>' + objs.join('') + '</resources><build>' + build.join('') + '</build></model>';
+    return zipStore({
+      '[Content_Types].xml': '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        + '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+        + '</Types>',
+      '_rels/.rels': '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + '<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        + '</Relationships>',
+      '3D/3dmodel.model': model,
+    });
+  }
+
   return {
     normalize, createStarter, serializeToHtml, parseHtml, isModelHtml, normObject, cutRoles,
     placePoint, fitCircle, drawnSpan, lengthDelta, planeNormal, sameDirection, pickDim, drawnMeasure,
@@ -788,6 +955,7 @@
     faceTool, faceCutPlaneOn, faceOutlineProfiles, sketchDir, sketchSegLen, sketchSignedAngle, sketchAngleBetween,
     sketchPointAt, sketchRotateDir, sketchSetSegLen, sketchSetAngle, sketchEditSegLen, sketchEditAngle,
     sketchPerpPoint, sketchProjectSeg, sketchSnapToLines, sketchSnapPoint,
+    meshToBinaryStl, meshToObj, meshTo3mf,
     DEFAULT_SIZE,
   };
 });

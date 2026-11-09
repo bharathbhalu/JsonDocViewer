@@ -159,6 +159,16 @@ function worldBounds(v, pos, rot, scale) {
   check('the named cutter is the tool', joinedCuts.tool === 'Joined' && joinedCuts.target === 'Cylinder' && cylinderCuts.tool === 'Cylinder' && cylinderCuts.target === 'Joined');
   const multiBarJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
   check('multi-select bottom menu offers join with cut', multiBarJs.includes('data-barjoin') && multiBarJs.includes('mdl-cutgroup') && multiBarJs.includes('data-cutbar') && multiBarJs.includes('n >= 2') && multiBarJs.includes('n === 2'));
+  check('x-ray view makes bodies see-through', multiBarJs.includes('data-xray') && multiBarJs.includes('_setXray') && multiBarJs.includes('depthWrite = !xray') && multiBarJs.includes('DoubleSide'));
+  const stl = ModelCore.meshToBinaryStl([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 2], 'Tri');
+  const stlView = stl && new DataView(stl);
+  const objTxt = ModelCore.meshToObj([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 2], 'Tri');
+  check('a mesh exports as binary STL and OBJ', stl && stl.byteLength === 84 + 50 && stlView.getUint32(80, true) === 1 && objTxt.includes('v 0 0 0') && objTxt.includes('f 1 2 3'));
+  const mf = ModelCore.meshTo3mf([{ name: 'Tri & A', vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0], triangles: [0, 1, 2] }], 'Part');
+  const mfBytes = mf && new Uint8Array(mf);
+  const mfText = mfBytes && new TextDecoder().decode(mfBytes);
+  check('a mesh exports as 3MF', mf && mf.byteLength > 200 && mfText.includes('3D/3dmodel.model') && mfText.includes('unit="millimeter"') && mfText.includes('Tri &amp; A') && mfText.includes('<triangle v1="0"'));
+  check('export menu downloads STL or OBJ', multiBarJs.includes('data-export') && multiBarJs.includes('data-exfmt="stl"') && multiBarJs.includes('data-exfmt="obj"') && multiBarJs.includes('data-exfmt="3mf"') && multiBarJs.includes('_exportMesh'));
   const piece = ModelCore.normalize({ objects: [{ name: 'Piece', type: 'solid', pos: [1, 2, 3], brep: '0123456789abcdefEXTRA', brepHash: 'abc' }] });
   check('a split piece is saved as its own solid', piece.objects[0].type === 'solid' && piece.objects[0].pos[0] === 1 && piece.objects[0].brep === '0123456789abcdefEXTRA' && piece.objects[0].brepHash === 'abc');
   const dimDoc = ModelCore.normalize({ objects: [{ name: 'A', type: 'box', dims: true }, { name: 'B', type: 'box' }, { name: 'C', type: 'box', dims: false }] });
