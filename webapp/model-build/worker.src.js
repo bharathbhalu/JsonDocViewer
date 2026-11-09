@@ -38,13 +38,16 @@ function featStamp(f) {
   if (f && f.op === 'split') base.push(f.origin);
   if (f && f.op === 'imprint') base.push(f.cuts);
   if (f && f.exact) base.push('exact');
-  if (f && (f.op === 'fillet' || f.op === 'chamfer')) base.push(f.at, f.r);
+  if (f && (f.op === 'fillet' || f.op === 'chamfer')) base.push(f.scope, f.at, f.center, f.normal, f.r);
+  if (f && f.op === 'shell') base.push(f.center, f.normal, f.thickness);
+  if (f && f.op === 'mirror') base.push(f.plane, f.origin, f.keep === false ? 0 : 1);
   if (f && f.op === 'length') base.push(f.scope, f.at, f.a, f.b, f.dir, f.delta, f.round ? 1 : 0, f.factor, f.loops);
   return JSON.stringify(base);
 }
 function bodyStamp(obj) {
   return JSON.stringify({
     k: obj.kernel, t: obj.type, s: obj.size, pr: obj.profiles, h: obj.height, parts: obj.parts,
+    m: obj.mirror,
     ...(obj.type === 'cut' ? { cut: obj.cut === 'split' ? 'split' : 'delete' } : {}),
   });
 }
@@ -394,8 +397,94 @@ function scaleShape(shape, scale) {
   }
   return out;
 }
+// Symmetry: the body stays put. Each feature is also applied across every
+// enabled plane (YZ / ZX / XY through the body's center). Turning a plane on
+// alone does not duplicate the solid.
+function shapeCenter(shape) {
+  try {
+    const box = shape.boundingBox;
+    const [lo, hi] = box.bounds;
+    box.delete();
+    return [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+  } catch (e) {
+    return [0, 0, 0];
+  }
+}
+function mirPt(p, planes, center) {
+  // Copy — xyz() returns the same array for array inputs, and mutating it
+  // would rewrite the stored feature point (and make a/b look identical).
+  const src = xyz(p);
+  const q = [src[0], src[1], src[2]];
+  const c = center ? xyz(center) : [0, 0, 0];
+  for (const plane of planes || []) {
+    if (plane === 'YZ') q[0] = 2 * c[0] - q[0];
+    else if (plane === 'XZ') q[1] = 2 * c[1] - q[1];
+    else if (plane === 'XY') q[2] = 2 * c[2] - q[2];
+  }
+  return q;
+}
+function mirDir(v, planes) {
+  // Directions flip about the plane normal; they are not offset by the center.
+  return mirPt(v, planes, [0, 0, 0]);
+}
+function mirrorCombos(flags) {
+  const names = [];
+  if (flags && flags[0]) names.push('YZ');
+  if (flags && flags[1]) names.push('XZ');
+  if (flags && flags[2]) names.push('XY');
+  const out = [[]];
+  for (const n of names) {
+    const more = out.map((c) => c.concat([n]));
+    for (const c of more) out.push(c);
+  }
+  return out;
+}
+function mirrorFeature(f, planes, center) {
+  if (!f || !(planes || []).length) return f;
+  const mp = (p) => (p ? mirPt(p, planes, center) : p);
+  const out = Object.assign({}, f);
+  if (f.at) out.at = mp(f.at);
+  if (f.a) out.a = mp(f.a);
+  if (f.b) out.b = mp(f.b);
+  if (f.center) out.center = mp(f.center);
+  if (f.origin) out.origin = mp(f.origin);
+  if (f.normal) out.normal = mirDir(f.normal, planes);
+  if (f.dir) out.dir = mirDir(f.dir, planes);
+  if (f.loop) out.loop = f.loop.map((p) => mp(p));
+  if (f.loops) out.loops = f.loops.map((loop) => (Array.isArray(loop) ? loop.map((p) => mp(p)) : loop));
+  if (f.cuts) {
+    out.cuts = f.cuts.map((c) => {
+      if (!c) return c;
+      if (c.k === 'circle') return { k: 'circle', c: mp(c.c), r: c.r };
+      return Object.assign({}, c, { pts: (c.pts || []).map((p) => mp(p)) });
+    });
+  }
+  return out;
+}
+// Clone a solid across each enabled symmetry plane (and combinations).
+// replicad's mirror() deletes the shape it is called on.
+function mirrorSolid(shape, planes, center) {
+  let s = shape.clone();
+  const origin = center || [0, 0, 0];
+  for (const plane of planes || []) s = s.mirror(plane, origin);
+  return s;
+}
+// One cutter that is the original tool plus every mirrored copy.
+function symmetryCutter(tool, flags, center) {
+  const reflections = mirrorCombos(flags).filter((c) => c.length);
+  if (!reflections.length) return tool;
+  let cutter = tool;
+  for (const combo of reflections) {
+    const copy = mirrorSolid(tool, combo, center);
+    const next = cutter.fuse(copy);
+    del(copy);
+    if (cutter !== tool) del(cutter);
+    cutter = next;
+  }
+  return cutter;
+}
 function bodyLocal(obj, notes) {
-  return applyPushes(baseShape(obj, notes), obj.features, notes || []);
+  return applyPushes(baseShape(obj, notes), obj.features, notes || [], obj.mirror);
 }
 function partShape(p) {
   return placeShape(scaleShape(bodyLocal(p), p.scale), p.pos, p.rot);
@@ -496,17 +585,24 @@ function baseShape(obj, notes) {
     if (parts.some((p) => p.kernel === 'mesh' || p.type === 'mesh')) throw new Error('A mesh cannot cut an exact body.');
     const target = bodyLocal(parts[0]);
     const tool = toolInTarget(parts[1], parts[0]);
+    // Symmetry on the cut (or the target) repeats the cutter across midplanes.
+    const flags = (Array.isArray(obj.mirror) && obj.mirror.some(Boolean))
+      ? obj.mirror
+      : ((parts[0] && parts[0].mirror) || []);
+    const center = (Array.isArray(flags) && flags.some(Boolean)) ? shapeCenter(target) : null;
+    const cutter = symmetryCutter(tool, flags, center);
     const beforeVol = Math.abs(replicad.measureVolume(target));
     const beforeFaces = obj.cut === 'split' ? countFaces(target) : 0;
     let cut = null;
     try {
-      cut = obj.cut === 'split' ? splitBySolid(target, tool) : target.cut(tool);
+      cut = obj.cut === 'split' ? splitBySolid(target, cutter) : target.cut(cutter);
       const vol = Math.abs(replicad.measureVolume(cut));
       if (!(vol > 1e-6)) throw new Error(obj.cut === 'split' ? 'That body does not split the other.' : 'That cut would erase the body.');
       if (notes && obj.cut === 'split' && countFaces(cut) <= beforeFaces) notes.push('That body does not split the other.');
       else if (notes && obj.cut !== 'split' && Math.abs(vol - beforeVol) < 0.5) notes.push('Those bodies do not overlap.');
       return cut;
     } finally {
+      if (cutter !== tool) del(cutter);
       del(tool);
       if (cut !== target) del(target);
     }
@@ -762,6 +858,81 @@ function edgeShape(shape, feature) {
     throw new Error('That edge could not be changed.');
   }
   return next;
+}
+// Round every edge of a face. The face is matched by center and normal, like a push.
+function faceFilletShape(shape, feature) {
+  const r = Math.abs(+feature.r || 0);
+  if (!(r >= 0.05)) throw new Error('That face could not be rounded.');
+  const face = takeFace(shape, feature);
+  if (!face) throw new Error('That face could not be rounded.');
+  const keep = [];
+  try {
+    let edges = [];
+    try { edges = face.edges || []; } catch (e) { edges = []; }
+    if (!edges.length) {
+      const wire = face.outerWire();
+      keep.push(wire);
+      edges = wire.edges || [];
+    }
+    const mids = [];
+    for (const e of edges) {
+      keep.push(e);
+      try { mids.push(xyz(e.pointAt(0.5))); } catch (err) { /* skip a bad edge */ }
+    }
+    if (!mids.length) throw new Error('That face could not be rounded.');
+    const pick = (finder) => finder.either(mids.map((m) => (f) => f.near(m, 0.5)));
+    const next = feature.op === 'chamfer' ? shape.chamfer(r, pick) : shape.fillet(r, pick);
+    const vol = Math.abs(replicad.measureVolume(next));
+    if (!(vol > 1e-6)) {
+      del(next);
+      throw new Error('That face could not be rounded.');
+    }
+    return next;
+  } finally {
+    keep.forEach(del);
+    del(face);
+  }
+}
+// Open the selected face and hollow the solid to a wall thickness.
+function shellShape(shape, feature) {
+  const t = Math.abs(+feature.thickness || 0);
+  if (!(t >= 0.05)) throw new Error('That shell could not be built.');
+  const center = feature.center ? xyz(feature.center) : loopCenter(feature.loop || [[0, 0, 0]]);
+  const next = shape.shell(t, (f) => f.near(center, 0.75));
+  const vol = Math.abs(replicad.measureVolume(next));
+  if (!(vol > 1e-6)) {
+    del(next);
+    throw new Error('That shell could not be built.');
+  }
+  return next;
+}
+// Mirror across a named plane through origin. keep (default) fuses the copy back on.
+// replicad's mirror() deletes the shape it is called on.
+function mirrorShape(shape, feature) {
+  const plane = feature.plane === 'XZ' ? 'XZ' : feature.plane === 'XY' ? 'XY' : 'YZ';
+  const origin = feature.origin || [0, 0, 0];
+  if (feature.keep === false) {
+    const flipped = shape.mirror(plane, origin);
+    const vol = Math.abs(replicad.measureVolume(flipped));
+    if (!(vol > 1e-6)) {
+      del(flipped);
+      throw new Error('That mirror could not be built.');
+    }
+    return flipped;
+  }
+  const copy = shape.clone();
+  const flipped = copy.mirror(plane, origin);
+  try {
+    const next = shape.fuse(flipped);
+    const vol = Math.abs(replicad.measureVolume(next));
+    if (!(vol > 1e-6)) {
+      del(next);
+      throw new Error('That mirror could not be built.');
+    }
+    return next;
+  } finally {
+    del(flipped);
+  }
 }
 function sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
 function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -1166,76 +1337,119 @@ function applyRoundLength(shape, feature) {
   }
   return s;
 }
-function applyPushes(shape, features, notes) {
+function applyOneFeature(shape, f, notes) {
   const log = notes || [];
   let s = shape;
-  for (const f of features || []) {
-    if (f && f.op === 'imprint') {
-      try {
-        const next = imprintShape(s, f);
-        if (next !== s) del(s);
-        s = next;
-      } catch (e) {
-        log.push((e && e.message) || 'That sketch does not split the face.');
-      }
-      continue;
-    }
-    if (f && f.op === 'split') {
-      try {
-        const next = splitShape(s, f.origin, f.normal);
-        if (next !== s) del(s);
-        s = next;
-      } catch (e) {
-        log.push((e && e.message) || 'This plane does not cut the body.');
-      }
-      continue;
-    }
-    if (f && f.op === 'length') {
-      try {
-        const next = f.round ? applyRoundLength(s, f) : applyEdgeLength(s, f);
-        if (next !== s) del(s);
-        s = next;
-      } catch (e) {
-        log.push((e && e.message) || 'That edge could not be changed.');
-      }
-      continue;
-    }
-    if (f && (f.op === 'fillet' || f.op === 'chamfer')) {
-      try {
-        const next = edgeShape(s, f);
-        if (next !== s) del(s);
-        s = next;
-      } catch (e) {
-        log.push((e && e.message) || 'That edge could not be changed.');
-      }
-      continue;
-    }
-    if (!f || f.op !== 'push' || Math.abs(+f.dist || 0) < 0.05) continue;
-    let tool = null;
+  if (f && f.op === 'imprint') {
     try {
-      const matched = takeFace(s, f);
-      if (matched) {
-        try { tool = extrudeFace(matched, f); }
-        catch (e) { log.push('Exact face push failed (' + ((e && e.message) || e) + ').'); }
-      }
-      if (!tool && (f.exact || sampledCurve(f.loop))) {
-        log.push('That curve was not extruded, because a polyline would leave a gap.');
-        continue;
-      }
-      if (!tool) tool = pushTool(f);
-      const next = (+f.dist || 0) >= 0 ? s.fuse(tool) : s.cut(tool);
-      const vol = Math.abs(replicad.measureVolume(next));
-      if (!(vol > 1e-6)) {
-        log.push('A push of ' + f.dist + ' mm was skipped because it would erase the body.');
-        if (next !== s) del(next);
-        continue;
-      }
+      const next = imprintShape(s, f);
       if (next !== s) del(s);
       s = next;
     } catch (e) {
-      log.push('A push of ' + f.dist + ' mm was skipped (' + ((e && e.message) || e) + ').');
-    } finally {
-      del(tool);
+      log.push((e && e.message) || 'That sketch does not split the face.');
+    }
+    return s;
+  }
+  if (f && f.op === 'split') {
+    try {
+      const next = splitShape(s, f.origin, f.normal);
+      if (next !== s) del(s);
+      s = next;
+    } catch (e) {
+      log.push((e && e.message) || 'This plane does not cut the body.');
+    }
+    return s;
+  }
+  if (f && f.op === 'length') {
+    try {
+      const next = f.round ? applyRoundLength(s, f) : applyEdgeLength(s, f);
+      if (next !== s) del(s);
+      s = next;
+    } catch (e) {
+      log.push((e && e.message) || 'That edge could not be changed.');
+    }
+    return s;
+  }
+  if (f && (f.op === 'fillet' || f.op === 'chamfer')) {
+    try {
+      const next = f.scope === 'face' ? faceFilletShape(s, f) : edgeShape(s, f);
+      if (next !== s) del(s);
+      s = next;
+    } catch (e) {
+      log.push((e && e.message) || (f.scope === 'face' ? 'That face could not be rounded.' : 'That edge could not be changed.'));
+    }
+    return s;
+  }
+  if (f && f.op === 'shell') {
+    try {
+      const next = shellShape(s, f);
+      if (next !== s) del(s);
+      s = next;
+    } catch (e) {
+      log.push((e && e.message) || 'That shell could not be built.');
+    }
+    return s;
+  }
+  if (f && f.op === 'mirror') {
+    try {
+      const next = mirrorShape(s, f);
+      if (next !== s) del(s);
+      s = next;
+    } catch (e) {
+      log.push((e && e.message) || 'That mirror could not be built.');
+    }
+    return s;
+  }
+  if (!f || f.op !== 'push' || Math.abs(+f.dist || 0) < 0.05) return s;
+  let tool = null;
+  try {
+    const matched = takeFace(s, f);
+    if (matched) {
+      try { tool = extrudeFace(matched, f); }
+      catch (e) { log.push('Exact face push failed (' + ((e && e.message) || e) + ').'); }
+    }
+    if (!tool && (f.exact || sampledCurve(f.loop))) {
+      log.push('That curve was not extruded, because a polyline would leave a gap.');
+      return s;
+    }
+    if (!tool) tool = pushTool(f);
+    const next = (+f.dist || 0) >= 0 ? s.fuse(tool) : s.cut(tool);
+    const vol = Math.abs(replicad.measureVolume(next));
+    if (!(vol > 1e-6)) {
+      log.push('A push of ' + f.dist + ' mm was skipped because it would erase the body.');
+      if (next !== s) del(next);
+      return s;
+    }
+    if (next !== s) del(s);
+    s = next;
+  } catch (e) {
+    log.push('A push of ' + f.dist + ' mm was skipped (' + ((e && e.message) || e) + ').');
+  } finally {
+    del(tool);
+  }
+  return s;
+}
+function applyPushes(shape, features, notes, mirror) {
+  const log = notes || [];
+  let s = shape;
+  const reflections = mirrorCombos(mirror).filter((c) => c.length);
+  // Planes cut through the body's center so one-sided edits land on the other side.
+  const center = reflections.length ? shapeCenter(s) : null;
+  for (const f of features || []) {
+    if (!f) continue;
+    s = applyOneFeature(s, f, log);
+    // Reflect this edit across each symmetry plane (and combinations).
+    if (f.op === 'mirror' || !reflections.length) continue;
+    for (const combo of reflections) {
+      const seed = f.at || f.center || f.origin || (f.loop && f.loop[0]);
+      if (seed) {
+        const a = xyz(seed);
+        const b = mirPt(seed, combo, center);
+        if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 0.05) continue;
+      }
+      const mf = mirrorFeature(f, combo, center);
+      if (mf.exact) mf.exact = false;
+      s = applyOneFeature(s, mf, log);
     }
   }
   return s;
@@ -1601,7 +1815,7 @@ function partMesh(p) {
     return transformMesh(p.mesh, p.pos, p.rot, p.scale);
   }
   if (nonUniform(p.scale)) {
-    const local = applyPushes(baseShape(p), p.features, []);
+    const local = bodyLocal(p, []);
     try { return transformMesh(meshOf(local), p.pos, p.rot, p.scale); }
     finally { del(local); }
   }
@@ -1683,7 +1897,10 @@ function buildOne(obj) {
       faces: [],
     };
   }
-  if (obj.type === 'join' && (obj.kernel === 'mesh' || (obj.parts || []).some((p) => p.kernel === 'mesh' || p.type === 'mesh' || nonUniform(p.scale)))) {
+  // Only real triangle meshes use Manifold. Exact parts with a different
+  // scale on each axis stay in OpenCascade (affineScale + fuse); meshing
+  // them first and unioning leaves a broken shell at the join.
+  if (obj.type === 'join' && (obj.kernel === 'mesh' || (obj.parts || []).some((p) => p.kernel === 'mesh' || p.type === 'mesh'))) {
     const mans = (obj.parts || []).map((p) => toManifold(partMesh(p)));
     let u = null;
     try {
@@ -1700,7 +1917,9 @@ function buildOne(obj) {
   const feats = obj.features || [];
   const stamps = feats.map(featStamp);
   const hit = shapeCache.get(obj.id);
-  const extend = hit && hit.stamp === stamp && hit.stamps.length <= stamps.length
+  const hasMirror = Array.isArray(obj.mirror) && obj.mirror.some(Boolean);
+  // Symmetry remirrors the whole feature stack. Do not extend a cached solid.
+  const extend = !hasMirror && hit && hit.stamp === stamp && hit.stamps.length <= stamps.length
     && hit.stamps.every((s, i) => s === stamps[i]);
   let shape;
   let made = false;
@@ -1719,7 +1938,7 @@ function buildOne(obj) {
       catch (e) { shape = null; notes.push('Saved solid could not be read, so the body was rebuilt.'); }
     }
     if (!shape) {
-      shape = applyPushes(baseShape(obj, notes), feats, notes);
+      shape = bodyLocal(obj, notes);
       made = true;
     }
   }

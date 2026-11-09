@@ -81,7 +81,30 @@
       const cuts = (Array.isArray(s.cuts) ? s.cuts : []).slice(0, 40).map(normCut).filter(Boolean);
       return cuts.length ? { op: 'imprint', center: vec(s.center), normal: vec(s.normal, [0, 0, 1]), cuts } : null;
     }
-    if (s.op === 'fillet' || s.op === 'chamfer') return { op: s.op, at: vec(s.at), r: n(s.r, 1, 0.05, 1e4) };
+    if (s.op === 'shell') {
+      return {
+        op: 'shell',
+        center: vec(s.center),
+        normal: vec(s.normal, [0, 0, 1]),
+        thickness: n(s.thickness, 1, 0.05, 1e4),
+      };
+    }
+    if (s.op === 'mirror') {
+      const plane = s.plane === 'XZ' || s.plane === 'XY' ? s.plane : 'YZ';
+      return { op: 'mirror', plane, origin: vec(s.origin), keep: s.keep !== false };
+    }
+    if (s.op === 'fillet' || s.op === 'chamfer') {
+      if (s.scope === 'face') {
+        return {
+          op: s.op,
+          scope: 'face',
+          center: vec(s.center),
+          normal: vec(s.normal, [0, 0, 1]),
+          r: n(s.r, 1, 0.05, 1e4),
+        };
+      }
+      return { op: s.op, at: vec(s.at), r: n(s.r, 1, 0.05, 1e4) };
+    }
     if (s.op === 'length') {
       const scope = s.scope === 'edge' ? 'edge' : 'parallel';
       const at = vec(s.at);
@@ -205,6 +228,8 @@
       pos: vec(o.pos),
       rot: vec(o.rot),
       scale: normScale(o.scale),
+      mirror: normMirror(o.mirror),
+      ...(o.mirrorPlanes ? { mirrorPlanes: true } : {}),
       ...(o.hidden ? { hidden: true } : {}),
       ...(o.dims === false ? { dims: false } : (o.dims ? { dims: true } : {})),
       features: (Array.isArray(o.features) ? o.features : []).map(normFeature).filter(Boolean).slice(0, 200),
@@ -248,6 +273,14 @@
       if (Math.abs(x) < 0.05) x = x < 0 ? -0.05 : 0.05;
       return x;
     });
+  }
+  // Per-object mirror planes: [YZ, ZX, XY]. Several can be on at once.
+  function normMirror(v) {
+    if (Array.isArray(v)) return [!!v[0], !!v[1], !!v[2]];
+    if (v && typeof v === 'object') {
+      return [!!(v.yz || v.x), !!(v.zx || v.xz || v.y), !!(v.xy || v.z)];
+    }
+    return [false, false, false];
   }
   function normPoint(p) {
     const s = p && typeof p === 'object' ? p : {};
@@ -418,10 +451,12 @@
   function dimPressEdits(button, pointerType) {
     return button === 0 || pointerType === 'pen' || pointerType === 'touch';
   }
-  // Face mode defaults to extrude. The cut-by-plane preview only shows when
-  // that tool is chosen.
+  // Face mode defaults to extrude. Cut / shell / face fillet each have their own panel.
   function faceTool(kind) {
-    return kind === 'cut' ? 'cut' : 'extrude';
+    if (kind === 'cut') return 'cut';
+    if (kind === 'shell') return 'shell';
+    if (kind === 'fillet') return 'fillet';
+    return 'extrude';
   }
   function faceCutPlaneOn(tool) {
     return faceTool(tool) === 'cut';

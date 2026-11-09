@@ -292,7 +292,14 @@ function worldBounds(v, pos, rot, scale) {
   const onEnd = ModelCore.sketchSnapToLines([0.2, 0.2], [{ a: [0, 0], b: [10, 0] }], { tol: 1 });
   const onMid = ModelCore.sketchSnapToLines([5.1, 0.2], [{ a: [0, 0], b: [10, 0] }], { tol: 1 });
   check('a sketch point snaps onto a line', onLine.snapped && onLine.kind === 'line' && near(onLine.point[1], 0, 1e-6) && onEnd.snapped && onEnd.kind === 'end' && onMid.snapped && onMid.kind === 'mid' && near(onMid.point[0], 5, 1e-6));
-  check('face mode defaults to extrude, not cut by plane', ModelCore.faceTool() === 'extrude' && ModelCore.faceTool('extrude') === 'extrude' && ModelCore.faceTool('cut') === 'cut' && !ModelCore.faceCutPlaneOn('extrude') && ModelCore.faceCutPlaneOn('cut') && !ModelCore.faceCutPlaneOn());
+  check('face mode defaults to extrude, not cut by plane', ModelCore.faceTool() === 'extrude' && ModelCore.faceTool('extrude') === 'extrude' && ModelCore.faceTool('cut') === 'cut' && ModelCore.faceTool('shell') === 'shell' && ModelCore.faceTool('fillet') === 'fillet' && !ModelCore.faceCutPlaneOn('extrude') && ModelCore.faceCutPlaneOn('cut') && !ModelCore.faceCutPlaneOn());
+  const shellFeat = ModelCore.normalize({ objects: [{ name: 'A', type: 'box', features: [
+    { op: 'shell', center: [0, 0, 5], normal: [0, 0, 1], thickness: 1 },
+    { op: 'fillet', scope: 'face', center: [0, 0, 5], normal: [0, 0, 1], r: 0.5 },
+  ], mirror: [true, false, true] }] }).objects[0];
+  check('shell, mirror axes, and face fillet are saved on the body', shellFeat.features.length === 2 && shellFeat.features[0].op === 'shell' && shellFeat.features[0].thickness === 1 && shellFeat.mirror[0] === true && shellFeat.mirror[1] === false && shellFeat.mirror[2] === true && shellFeat.features[1].op === 'fillet' && shellFeat.features[1].scope === 'face' && shellFeat.features[1].r === 0.5);
+  check('face tools include shell and round face', dimEditJs.includes('data-facetool="shell"') && dimEditJs.includes('data-facetool="fillet"') && dimEditJs.includes('data-shellgo') && dimEditJs.includes('data-facefilletgo') && dimEditJs.includes('data-mirror="0"') && dimEditJs.includes('_toggleMirror') && dimEditJs.includes('_shellFace') && dimEditJs.includes('_faceFillet') && dimEditJs.includes('mdl-mirrors') && dimEditJs.includes('>XY</button>') && dimEditJs.includes('>YZ</button>') && dimEditJs.includes('>ZX</button>'));
+  check('a selected body shows move rotate scale in a floating bar', dimEditJs.includes('data-xfbar') && dimEditJs.includes('data-xf="translate"') && dimEditJs.includes('data-xf="rotate"') && dimEditJs.includes('data-xf="scale"') && dimEditJs.includes('_syncXfBar') && dimEditJs.includes('data-xfaxis') && dimEditJs.includes('data-xfnudge') && dimEditJs.includes('data-rpreset') && /data-xfbar[\s\S]*data-mirror="0"/.test(dimEditJs));
   // Sketch from a face outline must open an editable sketch (rect/circle/poly), not fail closed.
   const outlineRect = ModelCore.faceOutlineProfiles([{ edges: [
     { k: 'line', a: [0, 0], b: [10, 0] }, { k: 'line', a: [10, 0], b: [10, 6] },
@@ -530,6 +537,21 @@ const send = async (msg) => {
 }
 
 {
+  // A stretched cylinder must still fuse in OpenCascade — meshing then
+  // Manifold-unioning leaves a broken shell at the join.
+  const stretched = await send({ type: 'build', objects: [{
+    id: 'jnuni', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0], features: [],
+    parts: [
+      { id: 'box', kernel: 'brep', type: 'box', size: { x: 40, y: 30, z: 20 }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], features: [] },
+      { id: 'cyl', kernel: 'brep', type: 'cylinder', size: { d: 24, z: 40 }, pos: [-15, 0, 10], rot: [0, 90, 0], scale: [1, 0.45, 1], features: [] },
+    ],
+  }] });
+  const stretchedBody = (stretched.bodies || [])[0];
+  const stretchedVol = stretchedBody && stretchedBody.vertices && volume(stretchedBody.vertices, stretchedBody.triangles);
+  check('a stretched body joins as an exact solid', stretchedBody && stretchedBody.vertices && !stretchedBody.error && stretchedBody.kernel === 'brep' && (stretchedBody.faces || []).length >= 6 && stretchedBody.normals && stretchedBody.normals.length === stretchedBody.vertices.length && stretchedVol > 20000 && stretchedVol < 30000, stretchedBody && (stretchedBody.error || stretchedBody.kernel || stretchedVol));
+}
+
+{
   const top = [[-5, -5, 10], [5, -5, 10], [5, 5, 10], [-5, 5, 10]];
   const joined = await send({ type: 'build', objects: [{
     id: 'moved', kernel: 'brep', type: 'join', pos: [0, 0, 0], rot: [0, 0, 0], features: [],
@@ -757,6 +779,16 @@ const send = async (msg) => {
   const cutGone = await send({ type: 'build', objects: [{ id: 'del', kernel: 'brep', type: 'cut', cut: 'delete', pos: [0, 0, 0], rot: [0, 0, 0], features: [], parts: [part([0, 0, 0]), part([6, 0, 0])] }] });
   const cutGoneBody = (cutGone.bodies || [])[0];
   check('delete removes the overlap of the other body', cutGoneBody && cutGoneBody.vertices && near(volume(cutGoneBody.vertices, cutGoneBody.triangles), 600, 1), cutGoneBody && (cutGoneBody.error || (cutGoneBody.vertices && volume(cutGoneBody.vertices, cutGoneBody.triangles))));
+  // Symmetry repeats a body-cut across midplanes (not only face edits).
+  const plate = { id: 'plate', kernel: 'brep', type: 'box', size: { x: 40, y: 30, z: 20 }, pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1], features: [] };
+  const cornerBit = { id: 'bit', kernel: 'brep', type: 'sphere', size: { d: 24 }, pos: [14, 9, 14], rot: [0, 0, 0], scale: [1, 1, 1], features: [] };
+  const cutOne = await send({ type: 'build', objects: [{ id: 'symcut0', kernel: 'brep', type: 'cut', cut: 'delete', features: [], parts: [plate, cornerBit] }] });
+  const cutSym = await send({ type: 'build', objects: [{ id: 'symcut1', kernel: 'brep', type: 'cut', cut: 'delete', mirror: [true, true, true], features: [], parts: [plate, cornerBit] }] });
+  const cutOneBody = (cutOne.bodies || [])[0];
+  const cutSymBody = (cutSym.bodies || [])[0];
+  const cutOneVol = cutOneBody && cutOneBody.vertices && volume(cutOneBody.vertices, cutOneBody.triangles);
+  const cutSymVol = cutSymBody && cutSymBody.vertices && volume(cutSymBody.vertices, cutSymBody.triangles);
+  check('symmetry mirrors a body cut to the other sides', cutSymBody && cutSymBody.vertices && !cutSymBody.error && !(cutSymBody.notes || []).length && cutOneVol && cutSymVol < cutOneVol - 100, cutSymBody && (cutSymBody.error || ((cutSymBody.notes || []).join('; ')) || (cutSymVol + ' vs ' + cutOneVol)));
   const cutKept = await send({ type: 'build', objects: [{ id: 'spl', kernel: 'brep', type: 'cut', cut: 'split', pos: [0, 0, 0], rot: [0, 0, 0], features: [], parts: [part([0, 0, 0]), part([6, 0, 0])] }] });
   const cutKeptBody = (cutKept.bodies || [])[0];
   const splitPieces = cutKeptBody && cutKeptBody.pieces && cutKeptBody.pieces.length >= 2 ? [cutKeptBody, ...cutKeptBody.pieces.slice(1)] : [];
@@ -1060,6 +1092,62 @@ function axisLens(body, axis) {
   const chamferedBody = (chamfered.bodies || [])[0];
   const chamferedVol = chamferedBody && chamferedBody.vertices && volume(chamferedBody.vertices, chamferedBody.triangles);
   check('chamfering an edge cuts a flat across that corner', chamferedBody && chamferedBody.vertices && !chamferedBody.error && !(chamferedBody.notes || []).length && near(chamferedVol, 995, 2), chamferedBody && (chamferedBody.error || ((chamferedBody.notes || []).join('; ')) || chamferedVol));
+
+  const shelled = await send({ type: 'build', objects: [{
+    id: 'shell', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 10 },
+    features: [{ op: 'shell', center: [0, 0, 10], normal: [0, 0, 1], thickness: 1 }],
+  }] });
+  const shelledBody = (shelled.bodies || [])[0];
+  const shelledVol = shelledBody && shelledBody.vertices && volume(shelledBody.vertices, shelledBody.triangles);
+  check('shelling a face hollows the body', shelledBody && shelledBody.vertices && !shelledBody.error && !(shelledBody.notes || []).length && shelledVol > 300 && shelledVol < 700, shelledBody && (shelledBody.error || ((shelledBody.notes || []).join('; ')) || shelledVol));
+
+  const faceRound = await send({ type: 'build', objects: [{
+    id: 'faceround', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 10 },
+    features: [{ op: 'fillet', scope: 'face', center: [0, 0, 10], normal: [0, 0, 1], r: 1 }],
+  }] });
+  const faceRoundBody = (faceRound.bodies || [])[0];
+  const faceRoundVol = faceRoundBody && faceRoundBody.vertices && volume(faceRoundBody.vertices, faceRoundBody.triangles);
+  check('rounding a face softens every edge on that face', faceRoundBody && faceRoundBody.vertices && !faceRoundBody.error && !(faceRoundBody.notes || []).length && faceRoundVol < 995 && faceRoundVol > 960, faceRoundBody && (faceRoundBody.error || ((faceRoundBody.notes || []).join('; ')) || faceRoundVol));
+
+  // Turning a plane on alone must not duplicate the body.
+  const planeOnly = await send({ type: 'build', objects: [{
+    id: 'sym0', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 10 },
+    mirror: [true, false, false], features: [],
+  }] });
+  const planeOnlyBody = (planeOnly.bodies || [])[0];
+  check('a mirror plane alone does not duplicate the body', planeOnlyBody && planeOnlyBody.vertices && !planeOnlyBody.error && !(planeOnlyBody.notes || []).length && near(volume(planeOnlyBody.vertices, planeOnlyBody.triangles), 1000, 2), planeOnlyBody && (planeOnlyBody.error || ((planeOnlyBody.notes || []).join('; ')) || (planeOnlyBody.vertices && volume(planeOnlyBody.vertices, planeOnlyBody.triangles))));
+  // Chamfer one +X edge with YZ on → the mirrored −X edge is chamfered too.
+  const mirrored = await send({ type: 'build', objects: [{
+    id: 'sym', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 10 },
+    mirror: [true, false, false],
+    features: [{ op: 'chamfer', at: [5, 0, 10], r: 1 }],
+  }] });
+  const mirToolBody = (mirrored.bodies || [])[0];
+  const mirToolVol = mirToolBody && mirToolBody.vertices && volume(mirToolBody.vertices, mirToolBody.triangles);
+  const oneSide = await send({ type: 'build', objects: [{
+    id: 'sym1', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 10 },
+    features: [{ op: 'chamfer', at: [5, 0, 10], r: 1 }],
+  }] });
+  const oneVol = (oneSide.bodies || [])[0] && volume(oneSide.bodies[0].vertices, oneSide.bodies[0].triangles);
+  check('symmetry mirrors a chamfer to the other side', mirToolBody && mirToolBody.vertices && !mirToolBody.error && !(mirToolBody.notes || []).length && oneVol && mirToolVol < oneVol - 0.2, mirToolBody && (mirToolBody.error || ((mirToolBody.notes || []).join('; ')) || (mirToolVol + ' vs ' + oneVol)));
+  // XY midplane is at body center (z=5), so a top-edge chamfer mirrors to the bottom edge.
+  const midZ = await send({ type: 'build', objects: [{
+    id: 'symz', kernel: 'brep', type: 'box', size: { x: 10, y: 10, z: 10 },
+    mirror: [false, false, true],
+    features: [{ op: 'chamfer', at: [5, 0, 10], r: 1 }],
+  }] });
+  const midZBody = (midZ.bodies || [])[0];
+  const midZVol = midZBody && midZBody.vertices && volume(midZBody.vertices, midZBody.triangles);
+  check('symmetry planes cut through the body center', midZBody && midZBody.vertices && !midZBody.error && !(midZBody.notes || []).length && oneVol && midZVol < oneVol - 0.2, midZBody && (midZBody.error || ((midZBody.notes || []).join('; ')) || (midZVol + ' vs ' + oneVol)));
+  const mirrorUiJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
+  const mirrorCss = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.css'), 'utf8');
+  check('mirror planes are drawn on the body', mirrorUiJs.includes('_syncMirrorPlanes') && mirrorUiJs.includes('slot.mirrors') && mirrorUiJs.includes('both sides') && mirrorUiJs.includes('getCenter') && mirrorUiJs.includes('mirrorPlanes') && mirrorUiJs.includes('_toggleMirrorPlanes') && mirrorUiJs.includes('data-mirrorplanes') && mirrorUiJs.includes('Show planes') && mirrorUiJs.includes('mdl-showplanes'));
+  check('a rebuild sends mirror toggles to the worker', mirrorUiJs.includes('m: o.mirror') && /mirror:\s*o\.mirror/.test(mirrorUiJs));
+  check('an active mirror toggle is highlighted orange', mirrorCss.includes('.mdl-mirrors .mdl-pick.on') && mirrorCss.includes('#d97706'));
+  check('mirror plane display defaults off', !!(function () {
+    const core = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'core.js'), 'utf8');
+    return core.includes('mirrorPlanes') && /o\.mirrorPlanes\s*\?\s*\{\s*mirrorPlanes:\s*true/.test(core);
+  })());
 
   const cap = [[-5, -5, 10], [5, -5, 10], [5, 5, 10], [-5, 5, 10]];
   const grownFace = await send({ type: 'build', objects: [{

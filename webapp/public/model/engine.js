@@ -71,7 +71,11 @@
     cut: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="16" r="2.2"/><circle cx="17" cy="16" r="2.2"/><path d="m8.4 14.6 7-8M15.6 14.6l-7-8"/></svg>',
     bodies: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 8.5 9 5.5l5 3v6l-5 3-5-3z"/><path d="M14 9.5 19 6.5v6L14 16"/></svg>',
     flip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16a6 6 0 1 1 1.6-4"/><path d="M8 8v4h4"/></svg>',
+    planes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 15.5 12 7l8 8.5H4z" opacity=".35"/><path d="M4 15.5 12 7l8 8.5"/><path d="M5 18.5h14"/><path d="M8 12.5h8"/></svg>',
   };
+  function mirrorPlanesLabel(on) {
+    return (on ? ICON.eye : ICON.eyeOff) + '<span>' + (on ? 'Hide planes' : 'Show planes') + '</span>';
+  }
 
   function ModelEngine(host, opts) {
     this.host = host;
@@ -361,6 +365,8 @@
           <div class="mdl-oprow mdl-picks">
             <button type="button" class="mdl-pick on" data-facetool="extrude" title="Push or pull this face">Extrude</button>
             <button type="button" class="mdl-pick" data-facetool="cut" title="Cut the body with a plane">Cut by plane</button>
+            <button type="button" class="mdl-pick" data-facetool="shell" title="Hollow the body and open this face">Shell</button>
+            <button type="button" class="mdl-pick" data-facetool="fillet" title="Round every edge of this face">Round face</button>
           </div>
         </div>
         <span class="mdl-vsep" data-faceextrude></span>
@@ -382,6 +388,22 @@
             <label class="mdl-len">Offset<input data-splitoff type="text" inputmode="decimal" value="0"></label>
             <button type="button" class="mdl-ico" data-cutnudge="1" aria-label="Move the plane forward">${ICON.up}</button>
             <button type="button" class="mdl-word" data-split>Cut by plane</button>
+          </div>
+        </div>
+        <span class="mdl-vsep hidden" data-faceshell></span>
+        <div class="mdl-op hidden" data-faceshell>
+          <span class="mdl-opk">Shell</span>
+          <div class="mdl-oprow">
+            <label class="mdl-len">Wall<input data-shellt type="text" inputmode="decimal" value="1"></label>
+            <button type="button" class="mdl-word" data-shellgo>Hollow</button>
+          </div>
+        </div>
+        <span class="mdl-vsep hidden" data-facefillet></span>
+        <div class="mdl-op hidden" data-facefillet>
+          <span class="mdl-opk">Round face</span>
+          <div class="mdl-oprow">
+            <label class="mdl-len">Radius<input data-facer type="text" inputmode="decimal" value="1"></label>
+            <button type="button" class="mdl-word" data-facefilletgo>Round face</button>
           </div>
         </div>
         <span class="mdl-vsep"></span>
@@ -442,6 +464,52 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="mdl-xfbar hidden" data-xfbar role="toolbar" aria-label="Transform">
+        <div class="mdl-op">
+          <span class="mdl-opk">Transform</span>
+          <div class="mdl-oprow mdl-xfmodes">
+            <button type="button" class="mdl-ico on" data-xf="translate" title="Move" aria-label="Move">${ICON.move}</button>
+            <button type="button" class="mdl-ico" data-xf="rotate" title="Rotate" aria-label="Rotate">${ICON.rotate}</button>
+            <button type="button" class="mdl-ico" data-xf="scale" title="Scale" aria-label="Scale">${ICON.scale}</button>
+          </div>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Axis</span>
+          <div class="mdl-oprow mdl-xfaxes">
+            <button type="button" class="mdl-axbtn x" data-xfaxis="x" title="X axis" aria-label="X axis">X</button>
+            <button type="button" class="mdl-axbtn y" data-xfaxis="y" title="Y axis" aria-label="Y axis">Y</button>
+            <button type="button" class="mdl-axbtn z on" data-xfaxis="z" title="Z axis" aria-label="Z axis">Z</button>
+          </div>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Step</span>
+          <div class="mdl-oprow">
+            <button type="button" class="mdl-ico" data-xfnudge="-1" title="Decrease" aria-label="Decrease">${ICON.minus}</button>
+            <button type="button" class="mdl-ico" data-xfnudge="1" title="Increase" aria-label="Increase">${ICON.plus}</button>
+          </div>
+        </div>
+        <span class="mdl-vsep" data-xfturnsep></span>
+        <div class="mdl-op" data-xfturn>
+          <span class="mdl-opk">Turn</span>
+          <div class="mdl-oprow">
+            <button type="button" class="mdl-chipbtn" data-rpreset="90" title="Rotate 90°" aria-label="Rotate 90 degrees">90°</button>
+            <button type="button" class="mdl-chipbtn" data-rpreset="-90" title="Rotate −90°" aria-label="Rotate minus 90 degrees">−90°</button>
+            <button type="button" class="mdl-chipbtn" data-rpreset="180" title="Turn 180°" aria-label="Turn 180 degrees">180°</button>
+          </div>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Mirror</span>
+          <div class="mdl-oprow mdl-picks mdl-mirrors">
+            <button type="button" class="mdl-pick" data-mirror="2" aria-pressed="false" title="Mirror across XY" aria-label="Mirror across XY">XY</button>
+            <button type="button" class="mdl-pick" data-mirror="0" aria-pressed="false" title="Mirror across YZ" aria-label="Mirror across YZ">YZ</button>
+            <button type="button" class="mdl-pick" data-mirror="1" aria-pressed="false" title="Mirror across ZX" aria-label="Mirror across ZX">ZX</button>
+          </div>
+          <button type="button" class="mdl-showplanes" data-mirrorplanes aria-pressed="false" title="Show the orange symmetry planes on the body" aria-label="Show planes">${mirrorPlanesLabel(false)}</button>
         </div>
       </div>
       <div class="mdl-skbar hidden" data-skbar>
@@ -524,6 +592,12 @@
     this.root.querySelector('[data-exgo]').onclick = () => this._extrudeLength();
     this.root.querySelector('[data-exdist]').addEventListener('change', () => this._extrudeLength());
     this.root.querySelectorAll('[data-facetool]').forEach((b) => { b.onclick = () => this._setFaceTool(b.dataset.facetool); });
+    this.root.querySelector('[data-shellgo]').onclick = () => this._shellFace();
+    const shellT = this.root.querySelector('[data-shellt]');
+    if (shellT) shellT.addEventListener('change', () => this._shellFace());
+    this.root.querySelector('[data-facefilletgo]').onclick = () => this._faceFillet();
+    const faceR = this.root.querySelector('[data-facer]');
+    if (faceR) faceR.addEventListener('change', () => this._faceFillet());
     this.root.querySelectorAll('[data-splitplane]').forEach((b) => b.onclick = () => {
       this._splitPlane = b.dataset.splitplane;
       this.root.querySelectorAll('[data-splitplane]').forEach((x) => x.classList.toggle('on', x === b));
@@ -544,6 +618,38 @@
     this.root.querySelectorAll('[data-cuthow]').forEach((b) => { b.onclick = () => this._cutHowSet(b.dataset.cuthow); });
     const barJoin = this.root.querySelector('[data-barjoin]');
     if (barJoin) barJoin.onclick = () => this._join();
+    const xfBar = this.root.querySelector('[data-xfbar]');
+    if (xfBar) {
+      xfBar.querySelectorAll('[data-xf]').forEach((b) => {
+        b.onclick = () => {
+          this.xfMode = b.dataset.xf === 'rotate' || b.dataset.xf === 'scale' ? b.dataset.xf : 'translate';
+          this._syncXfBar();
+          this._renderInsp();
+          this._syncGizmo();
+        };
+      });
+      xfBar.querySelectorAll('[data-xfaxis]').forEach((b) => {
+        b.onclick = () => {
+          this._rotAxis = b.dataset.xfaxis === 'x' || b.dataset.xfaxis === 'y' ? b.dataset.xfaxis : 'z';
+          this._syncXfBar();
+          this._renderInsp();
+        };
+      });
+      xfBar.querySelectorAll('[data-xfnudge]').forEach((b) => {
+        b.onclick = () => {
+          const attr = this.xfMode === 'rotate' ? 'rot' : this.xfMode === 'scale' ? 'scale' : 'pos';
+          this._nudge(attr, this._rotAxis || 'z', Number(b.dataset.xfnudge));
+        };
+      });
+      xfBar.querySelectorAll('[data-rpreset]').forEach((b) => {
+        b.onclick = () => this._rotateBy(Number(b.dataset.rpreset));
+      });
+      xfBar.querySelectorAll('[data-mirror]').forEach((b) => {
+        b.onclick = () => this._toggleMirror(Number(b.dataset.mirror));
+      });
+      const planesBtn = xfBar.querySelector('[data-mirrorplanes]');
+      if (planesBtn) planesBtn.onclick = () => this._toggleMirrorPlanes();
+    }
     this.root.querySelector('[data-skperp]').onclick = () => this._sketchPerpToggle();
     this.root.querySelector('[data-import]').onclick = () => this.root.querySelector('[data-file]').click();
     this.root.querySelector('[data-export]').onclick = (e) => {
@@ -846,7 +952,7 @@
 
   ModelEngine.prototype._overMenu = function (e) {
     const t = e && e.target;
-    return !!(t && t.closest && t.closest('.mdl-rail, .mdl-side, .mdl-skbar, .mdl-exportmenu, .mdl-pill, .mdl-toast, input, textarea, select'));
+    return !!(t && t.closest && t.closest('.mdl-rail, .mdl-side, .mdl-skbar, .mdl-xfbar, .mdl-exportmenu, .mdl-pill, .mdl-toast, input, textarea, select'));
   };
   ModelEngine.prototype._bindWheel = function () {
     const wheel = (e) => this._viewWheel(e);
@@ -1199,7 +1305,7 @@
   };
 
   ModelEngine.prototype._initWorker = function () {
-    this.worker = new Worker(VENDOR + 'model-worker.js?v=' + encodeURIComponent(this.version) + '-28', { type: 'module' });
+    this.worker = new Worker(VENDOR + 'model-worker.js?v=' + encodeURIComponent(this.version) + '-37', { type: 'module' });
     this.worker.onmessage = (e) => this._onWorker(e.data || {});
     this.worker.onerror = (e) => {
       this.building = false;
@@ -1211,6 +1317,7 @@
   ModelEngine.prototype._shapeSig = function (o) {
     return JSON.stringify({
       k: o.kernel, t: o.type, s: o.size, pr: o.profiles, h: o.height, f: o.features, parts: o.parts,
+      m: o.mirror,
       cut: o.type === 'cut' ? (o.cut === 'split' ? 'split' : 'delete') : undefined,
       mesh: (o.kernel === 'mesh' || o.type === 'mesh') ? o.mesh : undefined,
     });
@@ -1239,8 +1346,8 @@
       if (this._shapeSigs[o.id] === sig && this.objs[o.id]) continue;
       objects.push({
         id: o.id, kernel: o.kernel, type: o.type, size: o.size, pos: o.pos, rot: o.rot, scale: o.scale,
-        profiles: o.profiles, height: o.height, features: o.features, parts: o.parts, mesh: o.mesh,
-        brep: o.brep, brepHash: o.brepHash, cut: o.cut,
+        mirror: o.mirror, profiles: o.profiles, height: o.height, features: o.features, parts: o.parts,
+        mesh: o.mesh, brep: o.brep, brepHash: o.brepHash, cut: o.cut,
       });
     }
     this._pendingSigs = sigs;
@@ -1465,6 +1572,7 @@
       this._place(slot, obj);
       slot.group.visible = !obj.hidden;
       this._setFaces(slot, b);
+      this._syncMirrorPlanes(obj, slot);
     }
     const live = new Set(this.data.objects.map((o) => o.id));
     for (const id of Object.keys(this.objs)) {
@@ -1670,6 +1778,7 @@
     this._renderInsp();
     this._syncGizmo();
     this._syncCutBar();
+    this._syncXfBar();
     this._paint();
   };
   ModelEngine.prototype._select = function (id, toggle) {
@@ -1690,7 +1799,37 @@
     this._renderInsp();
     this._syncGizmo();
     this._syncCutBar();
+    this._syncXfBar();
     this._paint();
+  };
+  ModelEngine.prototype._syncXfBar = function () {
+    const bar = this.root.querySelector('[data-xfbar]');
+    if (!bar) return;
+    const show = this.mode === 'object' && !this.sk && !this.faceOn && this.multi.length === 1 && !!this.sel;
+    bar.classList.toggle('hidden', !show);
+    if (!show) return;
+    if (this.xfMode !== 'rotate' && this.xfMode !== 'scale') this.xfMode = 'translate';
+    if (this._rotAxis !== 'x' && this._rotAxis !== 'y') this._rotAxis = 'z';
+    bar.querySelectorAll('[data-xf]').forEach((b) => b.classList.toggle('on', b.dataset.xf === this.xfMode));
+    bar.querySelectorAll('[data-xfaxis]').forEach((b) => b.classList.toggle('on', b.dataset.xfaxis === this._rotAxis));
+    const turn = this.xfMode === 'rotate';
+    bar.querySelectorAll('[data-xfturn], [data-xfturnsep]').forEach((el) => el.classList.toggle('hidden', !turn));
+    const obj = this._obj(this.sel);
+    const flags = (obj && obj.mirror) || [];
+    bar.querySelectorAll('[data-mirror]').forEach((b) => {
+      const on = !!flags[Number(b.dataset.mirror)];
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const planesBtn = bar.querySelector('[data-mirrorplanes]');
+    if (planesBtn) {
+      const on = !!(obj && obj.mirrorPlanes);
+      planesBtn.classList.toggle('on', on);
+      planesBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      planesBtn.title = on ? 'Hide the orange symmetry planes' : 'Show the orange symmetry planes on the body';
+      planesBtn.setAttribute('aria-label', on ? 'Hide planes' : 'Show planes');
+      planesBtn.innerHTML = mirrorPlanesLabel(on);
+    }
   };
   ModelEngine.prototype._syncGizmo = function () {
     if (!this.tc) return;
@@ -1962,6 +2101,11 @@
       + (size ? '<div class="mdl-k">Size</div><div class="mdl-fields">' + size + '</div>' : '')
       + '<div class="mdl-modes"><button type="button" data-mode="translate"' + on('translate') + ' aria-label="Move">' + ICON.move + '</button><button type="button" data-mode="rotate"' + on('rotate') + ' aria-label="Rotate">' + ICON.rotate + '</button><button type="button" data-mode="scale"' + on('scale') + ' aria-label="Scale">' + ICON.scale + '</button></div>'
       + channel
+      + '<div class="mdl-k">Mirror</div><div class="mdl-oprow mdl-picks mdl-mirrors">'
+      + '<button type="button" class="mdl-pick' + ((it.mirror && it.mirror[2]) ? ' on' : '') + '" data-mirror="2" aria-pressed="' + !!(it.mirror && it.mirror[2]) + '" title="Mirror across the XY plane" aria-label="Mirror across XY">XY</button>'
+      + '<button type="button" class="mdl-pick' + ((it.mirror && it.mirror[0]) ? ' on' : '') + '" data-mirror="0" aria-pressed="' + !!(it.mirror && it.mirror[0]) + '" title="Mirror across the YZ plane" aria-label="Mirror across YZ">YZ</button>'
+      + '<button type="button" class="mdl-pick' + ((it.mirror && it.mirror[1]) ? ' on' : '') + '" data-mirror="1" aria-pressed="' + !!(it.mirror && it.mirror[1]) + '" title="Mirror across the ZX plane" aria-label="Mirror across ZX">ZX</button></div>'
+      + '<button type="button" class="mdl-showplanes' + (it.mirrorPlanes ? ' on' : '') + '" data-mirrorplanes aria-pressed="' + !!it.mirrorPlanes + '" title="' + (it.mirrorPlanes ? 'Hide the orange symmetry planes' : 'Show the orange symmetry planes on the body') + '" aria-label="' + (it.mirrorPlanes ? 'Hide planes' : 'Show planes') + '">' + mirrorPlanesLabel(!!it.mirrorPlanes) + '</button>'
       + '<div class="mdl-actions">'
       + '<button type="button" class="mdl-text" data-floor>Drop to floor</button>'
       + (it.type === 'sketch' ? '<button type="button" class="mdl-ico" data-edit aria-label="Edit sketch">' + ICON.pencil + '</button>' : '')
@@ -2028,6 +2172,7 @@
     });
     host.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => {
       this.xfMode = b.dataset.mode;
+      this._syncXfBar();
       this._renderInsp();
       this._syncGizmo();
     });
@@ -2041,6 +2186,9 @@
       this._rotateBy(180);
       this._renderInsp();
     });
+    host.querySelectorAll('[data-mirror]').forEach((b) => b.onclick = () => this._toggleMirror(Number(b.dataset.mirror)));
+    const planesBtn = host.querySelector('[data-mirrorplanes]');
+    if (planesBtn) planesBtn.onclick = () => this._toggleMirrorPlanes();
     const edit = host.querySelector('[data-edit]');
     if (edit) edit.onclick = () => this._sketchEdit();
     host.querySelector('[data-floor]').onclick = () => this._dropToFloor(this.sel);
@@ -2106,6 +2254,7 @@
     delete this._shapeSigs[id];
     const o = this.objs[id];
     if (!o) return;
+    this._clearMirrorPlanes(o);
     this.itemsGroup.remove(o.group);
     o.mesh.geometry.dispose();
     o.edges.geometry.dispose();
@@ -2453,6 +2602,7 @@
     const n = this.multi.length;
     const show = this.mode === 'object' && !this.sk && n >= 2;
     bar.classList.toggle('hidden', !show);
+    this._syncXfBar();
     if (!show) return;
     const cutOn = n === 2;
     bar.querySelectorAll('[data-cutops]').forEach((el) => el.classList.toggle('hidden', !cutOn));
@@ -2502,6 +2652,7 @@
     const cut = C().normObject({
       name: target.name, kernel: 'brep', type: 'cut', cut: how,
       pos: target.pos.slice(), rot: target.rot.slice(), scale: (target.scale || [1, 1, 1]).slice(),
+      mirror: (target.mirror || [false, false, false]).slice(),
       ...(target.hidden ? { hidden: true } : {}),
       ...(target.dims === false ? { dims: false } : {}),
       features: [],
@@ -2623,19 +2774,29 @@
     const edgebar = this.root.querySelector('[data-edgebar]');
     if (edgebar) edgebar.classList.toggle('hidden', next !== 'edge');
     this._syncCutBar();
+    this._syncXfBar();
     this._markFace();
     if (next === 'edge') this._markEdge();
     this._syncGizmo();
-    if (!quiet) this._toast(next === 'face' ? 'Select a face to extrude, or switch to cut by plane.' : next === 'edge' ? 'These tools act on the selected edge.' : 'Selecting bodies.');
+    if (!quiet) {
+      this._toast(next === 'face'
+        ? 'Select a face, then Extrude, Cut, Shell, or Round face.'
+        : next === 'edge' ? 'These tools act on the selected edge.' : 'Selecting bodies.');
+    }
   };
   ModelEngine.prototype._setFaceTool = function (kind, quiet) {
     this._faceTool = C().faceTool(kind);
     this._syncFaceTool();
     this._showCutPlane();
     if (!quiet) {
-      this._toast(this._faceTool === 'cut'
+      const tip = this._faceTool === 'cut'
         ? 'Cut by plane is ready. Choose a plane and cut.'
-        : 'Extrude is ready. Drag the face or enter a length.');
+        : this._faceTool === 'shell'
+          ? 'Shell is ready. Select the face to open, then Hollow.'
+          : this._faceTool === 'fillet'
+            ? 'Round face is ready. Select a face and set a radius.'
+            : 'Extrude is ready. Drag the face or enter a length.';
+      this._toast(tip);
     }
   };
   ModelEngine.prototype._syncFaceTool = function () {
@@ -2644,6 +2805,8 @@
     this.root.querySelectorAll('[data-facetool]').forEach((b) => b.classList.toggle('on', b.dataset.facetool === tool));
     this.root.querySelectorAll('[data-faceextrude]').forEach((el) => el.classList.toggle('hidden', tool !== 'extrude'));
     this.root.querySelectorAll('[data-facecut]').forEach((el) => el.classList.toggle('hidden', tool !== 'cut'));
+    this.root.querySelectorAll('[data-faceshell]').forEach((el) => el.classList.toggle('hidden', tool !== 'shell'));
+    this.root.querySelectorAll('[data-facefillet]').forEach((el) => el.classList.toggle('hidden', tool !== 'fillet'));
   };
   ModelEngine.prototype._faceToggle = function (quiet) {
     this._setMode(this.faceOn ? 'object' : 'face', quiet);
@@ -2862,6 +3025,139 @@
     this._changed();
     this._requestBuild();
   };
+  ModelEngine.prototype._shellFace = function () {
+    const hit = this._faceHit;
+    const slot = hit && this.objs[hit.id];
+    const face = slot && slot.faces[hit.index];
+    const obj = hit && this._obj(hit.id);
+    if (!obj || !face || !face.center) { this._toast('Select a face to open first.'); return; }
+    if (obj.kernel === 'mesh' || obj.type === 'mesh') { this._toast('Shell works on an exact body.'); return; }
+    const field = this.root.querySelector('[data-shellt]');
+    const thickness = r3(evalNum(field && field.value, 1));
+    if (!(thickness >= 0.05)) { this._toast('Use a wall of at least 0.05 mm.'); return; }
+    obj.features.push({
+      op: 'shell',
+      center: (face.center || face.loop[0]).slice(),
+      normal: (face.normal || [0, 0, 1]).slice(),
+      thickness,
+    });
+    this._changed();
+    this._requestBuild();
+    this._toast('The body is hollow.');
+  };
+  ModelEngine.prototype._faceFillet = function () {
+    const hit = this._faceHit;
+    const slot = hit && this.objs[hit.id];
+    const face = slot && slot.faces[hit.index];
+    const obj = hit && this._obj(hit.id);
+    if (!obj || !face || !face.center) { this._toast('Select a face first.'); return; }
+    if (obj.kernel === 'mesh' || obj.type === 'mesh') { this._toast('Round face works on an exact body.'); return; }
+    const field = this.root.querySelector('[data-facer]');
+    const r = r3(evalNum(field && field.value, 1));
+    if (!(r >= 0.05)) { this._toast('Use a radius of at least 0.05 mm.'); return; }
+    obj.features.push({
+      op: 'fillet',
+      scope: 'face',
+      center: (face.center || face.loop[0]).slice(),
+      normal: (face.normal || [0, 0, 1]).slice(),
+      r,
+    });
+    this._changed();
+    this._requestBuild();
+    this._toast('The face edges are rounded.');
+  };
+  ModelEngine.prototype._clearMirrorPlanes = function (slot) {
+    const group = slot && slot.mirrors;
+    if (!group) return;
+    if (group.parent) group.parent.remove(group);
+    group.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+    slot.mirrors = null;
+  };
+  ModelEngine.prototype._syncMirrorPlanes = function (obj, slot) {
+    const T = this.T;
+    if (!T || !slot) return;
+    this._clearMirrorPlanes(slot);
+    const flags = (obj && obj.mirror) || [];
+    // Planes stay hidden until "Planes" is turned on (default off).
+    if (!obj || obj.hidden || !obj.mirrorPlanes || !flags.some(Boolean)) return;
+    const geom = slot.mesh && slot.mesh.geometry;
+    if (geom && !geom.boundingBox) geom.computeBoundingBox();
+    const box = geom && geom.boundingBox;
+    if (!box || box.isEmpty()) return;
+    // Planes pass through the body's center — the same midplanes the solid uses.
+    const mid = box.getCenter(new T.Vector3());
+    const size = box.getSize(new T.Vector3());
+    const span = Math.max(size.x, size.y, size.z, 10) * 1.2;
+    const half = span / 2;
+    const planes = [
+      { on: !!flags[0], u: [0, 1, 0], v: [0, 0, 1] }, // YZ
+      { on: !!flags[1], u: [1, 0, 0], v: [0, 0, 1] }, // ZX
+      { on: !!flags[2], u: [1, 0, 0], v: [0, 1, 0] }, // XY
+    ];
+    const group = new T.Group();
+    for (const p of planes) {
+      if (!p.on) continue;
+      const corner = (su, sv) => [
+        mid.x + (p.u[0] * su + p.v[0] * sv) * half,
+        mid.y + (p.u[1] * su + p.v[1] * sv) * half,
+        mid.z + (p.u[2] * su + p.v[2] * sv) * half,
+      ];
+      const a = corner(-1, -1);
+      const b = corner(1, -1);
+      const d = corner(1, 1);
+      const e = corner(-1, 1);
+      const sheetGeo = new T.BufferGeometry();
+      sheetGeo.setAttribute('position', new T.Float32BufferAttribute([...a, ...b, ...d, ...a, ...d, ...e], 3));
+      const sheet = new T.Mesh(sheetGeo, new T.MeshBasicMaterial({
+        color: 0xd97706, transparent: true, opacity: 0.22, depthTest: false, side: T.DoubleSide,
+      }));
+      sheet.renderOrder = 3;
+      const edge = new T.Line(
+        new T.BufferGeometry().setFromPoints([a, b, d, e, a].map((p0) => new T.Vector3(p0[0], p0[1], p0[2]))),
+        new T.LineBasicMaterial({ color: 0xd97706, depthTest: false })
+      );
+      edge.renderOrder = 5;
+      group.add(sheet, edge);
+    }
+    group.traverse((node) => { node.raycast = () => {}; });
+    (slot.local || slot.group).add(group);
+    slot.mirrors = group;
+  };
+  ModelEngine.prototype._toggleMirror = function (axis) {
+    const obj = this._obj(this.sel);
+    if (!obj) { this._toast('Select a body first.'); return; }
+    if (obj.kernel === 'mesh' || obj.type === 'mesh') { this._toast('Mirror works on an exact body.'); return; }
+    const i = axis === 1 || axis === 2 ? axis : 0;
+    const names = ['YZ', 'ZX', 'XY'];
+    if (!Array.isArray(obj.mirror) || obj.mirror.length !== 3) obj.mirror = [false, false, false];
+    obj.mirror[i] = !obj.mirror[i];
+    this._renderInsp();
+    this._syncXfBar();
+    this._syncMirrorPlanes(obj, this.objs[obj.id]);
+    this._changed();
+    this._requestBuild();
+    this._toast(obj.mirror[i]
+      ? ('Symmetry across ' + names[i] + ' on. The body stays put; cuts and edits apply on both sides.')
+      : ('Symmetry across ' + names[i] + ' off.'));
+  };
+  ModelEngine.prototype._toggleMirrorPlanes = function () {
+    const obj = this._obj(this.sel);
+    if (!obj) { this._toast('Select a body first.'); return; }
+    if (obj.kernel === 'mesh' || obj.type === 'mesh') { this._toast('Mirror works on an exact body.'); return; }
+    if (obj.mirrorPlanes) delete obj.mirrorPlanes;
+    else obj.mirrorPlanes = true;
+    this._renderInsp();
+    this._syncXfBar();
+    this._syncMirrorPlanes(obj, this.objs[obj.id]);
+    this._changed();
+    this._toast(obj.mirrorPlanes ? 'Mirror planes shown.' : 'Mirror planes hidden.');
+  };
 
   ModelEngine.prototype._openSketch = function (plane, profiles, opts) {
     const o = opts || {};
@@ -2874,6 +3170,7 @@
     this._syncSketchDims();
     this._sketchSourceBar();
     this._syncGizmo();
+    this._syncXfBar();
     this._sketchDraw();
   };
   ModelEngine.prototype._sketchStart = function () {
@@ -4423,6 +4720,7 @@
     this._sketchSourceBar();
     this._freeNav();
     this._syncGizmo();
+    this._syncXfBar();
   };
 
   ModelEngine.prototype._join = function () {
