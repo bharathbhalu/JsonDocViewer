@@ -411,6 +411,14 @@
   function dimPressEdits(button, pointerType) {
     return button === 0 || pointerType === 'pen' || pointerType === 'touch';
   }
+  // Face mode defaults to extrude. The cut-by-plane preview only shows when
+  // that tool is chosen.
+  function faceTool(kind) {
+    return kind === 'cut' ? 'cut' : 'extrude';
+  }
+  function faceCutPlaneOn(tool) {
+    return faceTool(tool) === 'cut';
+  }
   // One label per drawn length. A hidden edge of that length must not be the
   // one that gets drawn, and a cut edge the camera can see is labeled even
   // when its face normal points to the side.
@@ -585,5 +593,5 @@
     try { return normalize(JSON.parse(m[1])); } catch (e) { return normalize({}); }
   }
 
-  return { normalize, createStarter, serializeToHtml, parseHtml, isModelHtml, normObject, cutRoles, placePoint, fitCircle, drawnSpan, lengthDelta, planeNormal, sameDirection, pickDim, drawnMeasure, dropBuiltCache, snapObjects, dimGroupKey, floorShift, setAllHidden, navIdle, dimPressEdits, DEFAULT_SIZE };
+  return { normalize, createStarter, serializeToHtml, parseHtml, isModelHtml, normObject, cutRoles, placePoint, fitCircle, drawnSpan, lengthDelta, planeNormal, sameDirection, pickDim, drawnMeasure, dropBuiltCache, snapObjects, dimGroupKey, floorShift, setAllHidden, navIdle, dimPressEdits, faceTool, faceCutPlaneOn, DEFAULT_SIZE };
 });

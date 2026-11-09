@@ -85,6 +85,7 @@
     this._splitPlane = 'yz';
     this.faceOn = false;
     this.mode = 'object';
+    this._faceTool = C().faceTool('extrude');
     this._cutHow = 'delete';
     this.sk = null;
     this.objs = {};
@@ -351,14 +352,22 @@
         </div>
         <span class="mdl-vsep"></span>
         <div class="mdl-op">
+          <span class="mdl-opk">Tool</span>
+          <div class="mdl-oprow mdl-picks">
+            <button type="button" class="mdl-pick on" data-facetool="extrude" title="Push or pull this face">Extrude</button>
+            <button type="button" class="mdl-pick" data-facetool="cut" title="Cut the body with a plane">Cut by plane</button>
+          </div>
+        </div>
+        <span class="mdl-vsep" data-faceextrude></span>
+        <div class="mdl-op" data-faceextrude>
           <span class="mdl-opk">Extrude</span>
           <div class="mdl-oprow">
             <label class="mdl-len">Length<input data-exdist type="text" inputmode="decimal" value=""></label>
             <button type="button" class="mdl-word" data-exgo>Extrude</button>
           </div>
         </div>
-        <span class="mdl-vsep"></span>
-        <div class="mdl-op">
+        <span class="mdl-vsep hidden" data-facecut></span>
+        <div class="mdl-op hidden" data-facecut>
           <span class="mdl-opk">Cut by plane</span>
           <div class="mdl-oprow">
             <button type="button" class="mdl-plane on" data-splitplane="yz" aria-label="Cutting plane YZ">YZ</button>
@@ -492,6 +501,7 @@
     this.root.querySelector('[data-fromface]').onclick = () => this._sketchFromFace();
     this.root.querySelector('[data-exgo]').onclick = () => this._extrudeLength();
     this.root.querySelector('[data-exdist]').addEventListener('change', () => this._extrudeLength());
+    this.root.querySelectorAll('[data-facetool]').forEach((b) => { b.onclick = () => this._setFaceTool(b.dataset.facetool); });
     this.root.querySelectorAll('[data-splitplane]').forEach((b) => b.onclick = () => {
       this._splitPlane = b.dataset.splitplane;
       this.root.querySelectorAll('[data-splitplane]').forEach((x) => x.classList.toggle('on', x === b));
@@ -502,6 +512,7 @@
     if (splitOff) splitOff.addEventListener('input', () => this._showCutPlane());
     this.root.querySelector('[data-split]').onclick = () => this._splitFace();
     this.root.querySelector('[data-facedone]').onclick = () => this._setMode('object');
+    this._syncFaceTool();
     this.root.querySelector('[data-edgeobj]').onclick = () => this._setMode('object');
     this.root.querySelectorAll('[data-edgeop]').forEach((b) => { b.onclick = () => this._edgeApply(b.dataset.edgeop); });
     const edgeR = this.root.querySelector('[data-edger]');
@@ -2287,7 +2298,7 @@
   };
   ModelEngine.prototype._edgeTap = function (e) {
     let best = null;
-    let bestD = 18;
+    let bestD = 22;
     for (const o of this.data.objects) {
       if (o.hidden) continue;
       const slot = this.objs[o.id];
@@ -2322,18 +2333,36 @@
     const world = slot && T && this._shapeMatrix(slot);
     const measured = hit && this._measureEdge(hit, world);
     if (chip) {
+      chip.classList.toggle('on', !!hit);
       if (!hit) chip.textContent = 'Select an edge';
       else if (measured && measured.kind === 'diameter') chip.textContent = 'Ø ' + r3(measured.value);
       else if (measured) chip.textContent = String(r3(measured.value));
       else chip.textContent = 'Edge';
     }
-    if (!hit || !T || !slot) return;
+    if (!hit || !T || !slot) {
+      this._paint();
+      return;
+    }
     const pts = this._edgeSamples(hit).map((p) => new T.Vector3(p[0], p[1], p[2] || 0));
     if (hit.k === 'circle' && pts.length) pts.push(pts[0].clone());
-    const line = new T.Line(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: ORANGE, depthTest: false }));
-    line.renderOrder = 5;
-    (slot.local || slot.group).add(line);
-    this._edgeMark = line;
+    if (pts.length < 2) { this._paint(); return; }
+    // Bright selected edge. WebGL lines are 1px, so a thin tube stands in for ~2× thickness.
+    const curve = pts.length === 2
+      ? new T.LineCurve3(pts[0], pts[1])
+      : new T.CatmullRomCurve3(pts, false, 'catmullrom', 0.05);
+    const geom = slot.mesh && slot.mesh.geometry;
+    if (geom && !geom.boundingBox) geom.computeBoundingBox();
+    const size = geom && geom.boundingBox ? geom.boundingBox.getSize(new T.Vector3()) : null;
+    const span = size ? Math.max(size.x, size.y, size.z, 8) : 40;
+    const r = Math.max(0.18, Math.min(1.2, span * 0.01));
+    const mesh = new T.Mesh(
+      new T.TubeGeometry(curve, Math.max(8, pts.length * 3), r, 6, false),
+      new T.MeshBasicMaterial({ color: 0xff9a2e, depthTest: false })
+    );
+    mesh.renderOrder = 5;
+    mesh.raycast = () => {};
+    (slot.local || slot.group).add(mesh);
+    this._edgeMark = mesh;
     this._paint();
   };
   ModelEngine.prototype._edgeApply = function (kind) {
@@ -2518,11 +2547,16 @@
       this._faceHeld = 0;
       this._facePress = null;
       this._faceDrag = null;
+      this._hideCutPlane();
+    } else {
+      this._setFaceTool('extrude', true);
     }
     if (next !== 'edge') {
       this._edgeHit = null;
       this._edgePress = null;
       this._clearEdgeMark();
+      const chip = this.root.querySelector('[data-edgedim]');
+      if (chip) { chip.classList.remove('on'); chip.textContent = 'Select an edge'; }
     }
     if (next !== 'object') this._setAdding(false);
     this.root.querySelectorAll('.mdl-rail [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === next));
@@ -2534,7 +2568,24 @@
     this._markFace();
     if (next === 'edge') this._markEdge();
     this._syncGizmo();
-    if (!quiet) this._toast(next === 'face' ? 'These tools act on the selected face.' : next === 'edge' ? 'These tools act on the selected edge.' : 'Selecting bodies.');
+    if (!quiet) this._toast(next === 'face' ? 'Select a face to extrude, or switch to cut by plane.' : next === 'edge' ? 'These tools act on the selected edge.' : 'Selecting bodies.');
+  };
+  ModelEngine.prototype._setFaceTool = function (kind, quiet) {
+    this._faceTool = C().faceTool(kind);
+    this._syncFaceTool();
+    this._showCutPlane();
+    if (!quiet) {
+      this._toast(this._faceTool === 'cut'
+        ? 'Cut by plane is ready. Choose a plane and cut.'
+        : 'Extrude is ready. Drag the face or enter a length.');
+    }
+  };
+  ModelEngine.prototype._syncFaceTool = function () {
+    const tool = C().faceTool(this._faceTool);
+    this._faceTool = tool;
+    this.root.querySelectorAll('[data-facetool]').forEach((b) => b.classList.toggle('on', b.dataset.facetool === tool));
+    this.root.querySelectorAll('[data-faceextrude]').forEach((el) => el.classList.toggle('hidden', tool !== 'extrude'));
+    this.root.querySelectorAll('[data-facecut]').forEach((el) => el.classList.toggle('hidden', tool !== 'cut'));
   };
   ModelEngine.prototype._faceToggle = function (quiet) {
     this._setMode(this.faceOn ? 'object' : 'face', quiet);
@@ -2560,6 +2611,8 @@
     this._markFace();
   };
   ModelEngine.prototype._beginFaceDrag = function (press) {
+    // Extrude owns the drag. Cut by plane uses its own controls.
+    if (C().faceTool(this._faceTool) !== 'extrude') return;
     // The face was chosen by the tap. The drag never raycasts, so turning the
     // view and pulling from another angle cannot switch to a different face.
     const hit = this._faceHit;
@@ -2664,7 +2717,7 @@
   };
   ModelEngine.prototype._showCutPlane = function () {
     this._hideCutPlane();
-    if (!this.faceOn || !this._faceHit || !this.T) return;
+    if (!this.faceOn || !this._faceHit || !this.T || !C().faceCutPlaneOn(this._faceTool)) return;
     const T = this.T;
     const slot = this.objs[this._faceHit.id];
     const face = slot && slot.faces[this._faceHit.index];
@@ -3552,8 +3605,8 @@
       const m = project(it.at);
       if (!a.ok || !b.ok || !m.ok) continue;
       if (m.x < 0 || m.y < 0 || m.x > rect.width || m.y > rect.height) continue;
-      const hw = Math.max(22, it.text.length * 3.6 + 8);
-      const hh = 12;
+      const hw = Math.max(18, it.text.length * 3.4 + 10);
+      const hh = 14;
       if (placed.some((q) => Math.abs(q.x - m.x) < q.hw + hw && Math.abs(q.y - m.y) < q.hh + hh)) continue;
       placed.push({ x: m.x, y: m.y, hw, hh });
       visible.push({ it, x: m.x, y: m.y, a, b, ea: project(it.worldA), eb: project(it.worldB), xa: project(it.extA), xb: project(it.extB) });
@@ -3561,7 +3614,7 @@
     const arrow = (tip, ux, uy) => {
       const L = Math.hypot(ux, uy) || 1;
       const x = ux / L, y = uy / L;
-      const s = 7, w = 2.2;
+      const s = 5.5, w = 1.8;
       const bx = tip.x - x * s, by = tip.y - y * s;
       return tip.x.toFixed(1) + ',' + tip.y.toFixed(1) + ' ' + (bx - y * w).toFixed(1) + ',' + (by + x * w).toFixed(1) + ' ' + (bx + y * w).toFixed(1) + ',' + (by - x * w).toFixed(1);
     };
@@ -3572,19 +3625,19 @@
       const dx = b.x - a.x, dy = b.y - a.y;
       const span = Math.hypot(dx, dy) || 1;
       const ux = dx / span, uy = dy / span;
-      const outside = span < 46;
+      const outside = span < 42;
       if (!row.it.circle) {
         parts.push('<line class="mdl-ext" x1="' + row.ea.x.toFixed(1) + '" y1="' + row.ea.y.toFixed(1) + '" x2="' + row.xa.x.toFixed(1) + '" y2="' + row.xa.y.toFixed(1) + '"/>');
         parts.push('<line class="mdl-ext" x1="' + row.eb.x.toFixed(1) + '" y1="' + row.eb.y.toFixed(1) + '" x2="' + row.xb.x.toFixed(1) + '" y2="' + row.xb.y.toFixed(1) + '"/>');
       }
-      const gap = Math.min(span * 0.42, Math.max(22, row.it.text.length * 6.2));
-      if (!outside && span > gap + 16) {
+      const gap = Math.min(span * 0.42, Math.max(26, row.it.text.length * 6.8));
+      if (!outside && span > gap + 14) {
         const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
         const h = gap / 2;
         parts.push(line(a, { x: mx - ux * h, y: my - uy * h }));
         parts.push(line({ x: mx + ux * h, y: my + uy * h }, b));
       } else if (outside) {
-        const pad = 14;
+        const pad = 12;
         parts.push(line({ x: a.x - ux * pad, y: a.y - uy * pad }, { x: b.x + ux * pad, y: b.y + uy * pad }));
       } else parts.push(line(a, b));
       if (outside) {
@@ -3594,10 +3647,6 @@
         parts.push('<polygon class="mdl-arrow" points="' + arrow(a, -ux, -uy) + '"/>');
         parts.push('<polygon class="mdl-arrow" points="' + arrow(b, ux, uy) + '"/>');
       }
-      let deg = Math.atan2(dy, dx) * 180 / Math.PI;
-      if (deg > 90) deg -= 180;
-      else if (deg < -90) deg += 180;
-      row.deg = deg;
     }
     svg.innerHTML = parts.join('');
     this._dimMeta = new Map(visible.map((row) => [row.it.key, row.it]));
@@ -3632,9 +3681,8 @@
       el.hidden = false;
       el.style.left = row.x + 'px';
       el.style.top = row.y + 'px';
-      el.style.transform = this._dimEdit === it.key
-        ? 'translate(-50%, -50%)'
-        : 'translate(-50%, -50%) rotate(' + (row.deg || 0).toFixed(2) + 'deg)';
+      // Keep values upright; measure lines already show the edge direction.
+      el.style.transform = 'translate(-50%, -50%)';
     }
     host.querySelectorAll('[data-dim]').forEach((el) => {
       if (el.dataset.dim === this._dimEdit) return;

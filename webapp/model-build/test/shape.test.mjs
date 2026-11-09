@@ -1,6 +1,7 @@
 // 3D Model regression suite. Every change to public/model or model-build
 // runs this file, and a new behavior gets a new check in this file.
 //   model-build/test/regression.sh
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'module';
@@ -269,6 +270,16 @@ function worldBounds(v, pos, rot, scale) {
   const dimLeavesOrbit = !ModelCore.dimPressEdits(2, 'mouse') && !ModelCore.dimPressEdits(1, 'mouse');
   check('a dimension label does not steal the view turn', dimEdits && dimLeavesOrbit);
   check('the view still turns when a drag ends on a dimension label', viewFree && dimLeavesOrbit && ModelCore.dimPressEdits(0, 'mouse'));
+  check('face mode defaults to extrude, not cut by plane', ModelCore.faceTool() === 'extrude' && ModelCore.faceTool('extrude') === 'extrude' && ModelCore.faceTool('cut') === 'cut' && !ModelCore.faceCutPlaneOn('extrude') && ModelCore.faceCutPlaneOn('cut') && !ModelCore.faceCutPlaneOn());
+  // Dimension values stay upright on a soft chip; the measure line shows direction.
+  const dimCss = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.css'), 'utf8');
+  const dimJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
+  const chipStyle = dimCss.includes('--mdl-dim-chip') && dimCss.includes('.mdl-dim') && dimCss.includes('border-radius: 999px') && !/text-shadow:\s*[\s\S]*0 0 2px var\(--mdl-bg\)/.test(dimCss);
+  const uprightOk = dimJs.includes("el.style.transform = 'translate(-50%, -50%)'") && !/translate\(-50%, -50%\) rotate\(/.test(dimJs);
+  check('dimension labels stay upright on chips', chipStyle && uprightOk, chipStyle ? (uprightOk ? '' : 'js') : 'css');
+  // Selected edges stay a bright thick mark (WebGL lines are 1px; a thin tube is ~2×).
+  const edgeMarkJs = fs.readFileSync(path.join(here, '..', '..', 'public', 'model', 'engine.js'), 'utf8');
+  check('a selected edge is drawn as a bright thick mark', edgeMarkJs.includes('TubeGeometry') && edgeMarkJs.includes('0xff9a2e') && !edgeMarkJs.includes('_edgeHoverAt') && !edgeMarkJs.includes('_edgeMarkGroup'));
   const edgeDoc = ModelCore.normalize({ objects: [{ name: 'A', type: 'box', features: [
     { op: 'fillet', at: [0, 5, 10], r: 1 },
     { op: 'chamfer', at: [0, -5, 10], r: 0.5 },
