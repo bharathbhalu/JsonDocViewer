@@ -64,6 +64,7 @@
     rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="7" width="14" height="10" rx="1.2"/></svg>',
     circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="6.5"/></svg>',
     line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 18 18 6"/></svg>',
+    dim: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15h14"/><path d="m5 15 2.4-2.4M5 15l2.4 2.4M19 15l-2.4-2.4M19 15l-2.4 2.4"/><path d="M8 15V8M16 15V8"/></svg>',
     extrude: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 15 12 11l8 4-8 4z"/><path d="M12 11V5M9 7.2 12 5l3 2.2"/></svg>',
     cut: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="16" r="2.2"/><circle cx="17" cy="16" r="2.2"/><path d="m8.4 14.6 7-8M15.6 14.6l-7-8"/></svg>',
     bodies: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 8.5 9 5.5l5 3v6l-5 3-5-3z"/><path d="M14 9.5 19 6.5v6L14 16"/></svg>',
@@ -83,6 +84,8 @@
     this._rotAxis = 'z';
     this._splitPlane = 'yz';
     this.faceOn = false;
+    this.mode = 'object';
+    this._cutHow = 'delete';
     this.sk = null;
     this.objs = {};
     this._shapeSigs = {};
@@ -100,14 +103,7 @@
     this.disposers.push(() => el.removeEventListener(ev, fn, o));
   };
   function modelSnap(objects) {
-    return JSON.stringify((objects || []).map((o) => {
-      if (!o || (o.view == null && o.brep == null && o.brepHash == null)) return o;
-      const c = Object.assign({}, o);
-      delete c.view;
-      delete c.brep;
-      delete c.brepHash;
-      return c;
-    }));
+    return JSON.stringify(C().snapObjects(objects));
   }
   ModelEngine.prototype._changed = function () {
     if (!this.data.history) this.data.history = { past: [], future: [] };
@@ -320,14 +316,18 @@
 
   ModelEngine.prototype._buildDom = function () {
     this.root.innerHTML = `
-      <div class="mdl-view" data-view></div>
+      <div class="mdl-view" data-view>
+        <div class="mdl-dims" data-dims></div>
+      </div>
       <div class="mdl-rail" role="toolbar" aria-label="Bodies">
         <button type="button" data-add="box" title="Box" aria-label="Box">${ICON.box}</button>
         <button type="button" data-add="cylinder" title="Cylinder" aria-label="Cylinder">${ICON.cylinder}</button>
         <button type="button" data-add="sphere" title="Sphere" aria-label="Sphere">${ICON.sphere}</button>
         <div class="mdl-gap"></div>
         <button type="button" data-sketch title="Sketch" aria-label="Sketch">${ICON.sketch}</button>
-        <button type="button" data-face title="Face push or pull" aria-label="Face">${ICON.face}</button>
+        <button type="button" data-mode="object" class="on" title="Objects" aria-label="Objects">${ICON.bodies}</button>
+        <button type="button" data-mode="face" title="Faces" aria-label="Faces">${ICON.face}</button>
+        <button type="button" data-mode="edge" title="Edges" aria-label="Edges">${ICON.line}</button>
         <button type="button" data-join title="Join selected bodies" aria-label="Join">${ICON.join}</button>
         <button type="button" data-import title="Import STL or OBJ" aria-label="Import">${ICON.import}</button>
         <div class="mdl-gap"></div>
@@ -336,7 +336,6 @@
         <button type="button" data-undo title="Undo" aria-label="Undo" disabled>${ICON.undo}</button>
         <button type="button" data-redo title="Redo" aria-label="Redo" disabled>${ICON.redo}</button>
       </div>
-      <div class="mdl-dims" data-dims></div>
       <div class="mdl-skbar hidden" data-facebar>
         <div class="mdl-op">
           <span class="mdl-opk">On this face</span>
@@ -372,7 +371,53 @@
           </div>
         </div>
         <span class="mdl-vsep"></span>
-        <button type="button" class="mdl-word mdl-ghost" data-facedone>Bodies</button>
+        <button type="button" class="mdl-word mdl-ghost" data-facedone>Objects</button>
+      </div>
+      <div class="mdl-skbar hidden" data-edgebar>
+        <div class="mdl-op">
+          <span class="mdl-opk">On this edge</span>
+          <span class="mdl-chip" data-edgedim>Select an edge</span>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Round</span>
+          <div class="mdl-oprow">
+            <label class="mdl-len">Radius<input data-edger type="text" inputmode="decimal" value="1"></label>
+            <button type="button" class="mdl-word" data-edgeop="fillet">Round</button>
+          </div>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Chamfer</span>
+          <div class="mdl-oprow">
+            <button type="button" class="mdl-word" data-edgeop="chamfer">Chamfer</button>
+          </div>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Sharp</span>
+          <div class="mdl-oprow">
+            <button type="button" class="mdl-word" data-edgeop="sharp">Remove round</button>
+          </div>
+        </div>
+        <button type="button" class="mdl-word mdl-ghost" data-edgeobj>Objects</button>
+      </div>
+      <div class="mdl-skbar hidden" data-cutbar>
+        <div class="mdl-op">
+          <span class="mdl-opk">Overlap</span>
+          <div class="mdl-oprow mdl-picks">
+            <button type="button" class="mdl-pick on" data-cuthow="delete" title="Remove the shared volume">Delete</button>
+            <button type="button" class="mdl-pick" data-cuthow="split" title="Divide into separate bodies">Split</button>
+          </div>
+        </div>
+        <span class="mdl-vsep"></span>
+        <div class="mdl-op">
+          <span class="mdl-opk">Which body</span>
+          <div class="mdl-oprow">
+            <button type="button" class="mdl-word" data-cuta>First cuts second</button>
+            <button type="button" class="mdl-word" data-cutb>Second cuts first</button>
+          </div>
+        </div>
       </div>
       <div class="mdl-skbar hidden" data-skbar>
         <div class="mdl-op">
@@ -381,6 +426,7 @@
             <button type="button" class="mdl-ico" data-sktool="rect" aria-label="Rectangle">${ICON.rect}</button>
             <button type="button" class="mdl-ico" data-sktool="circle" aria-label="Circle">${ICON.circle}</button>
             <button type="button" class="mdl-ico" data-sktool="line" aria-label="Line">${ICON.line}</button>
+            <button type="button" class="mdl-ico" data-skperp aria-label="Line perpendicular to the last line" title="Perpendicular">${ICON.flip}</button>
           </div>
         </div>
         <span class="mdl-vsep"></span>
@@ -401,7 +447,7 @@
       </div>
       <input data-file type="file" accept=".stl,.obj,model/stl" hidden>
       <aside class="mdl-side">
-        <header class="mdl-sidehead"><span>Bodies</span><div class="mdl-iconrow"><button type="button" class="mdl-ico" data-point aria-label="Save checkpoint">${ICON.bookmark}</button><button type="button" class="mdl-ico" data-more aria-label="Select more">${ICON.more}</button></div></header>
+        <header class="mdl-sidehead"><span>Bodies</span><div class="mdl-iconrow"><button type="button" class="mdl-ico" data-hideall aria-label="Hide all">${ICON.eyeOff}</button><button type="button" class="mdl-ico" data-showall aria-label="Show all">${ICON.eye}</button><button type="button" class="mdl-ico" data-point aria-label="Save checkpoint">${ICON.bookmark}</button><button type="button" class="mdl-ico" data-more aria-label="Select more">${ICON.more}</button></div></header>
         <div class="mdl-list" data-list></div>
         <div class="mdl-points" data-points>
           <div class="mdl-composer hidden" data-pointnew>
@@ -441,7 +487,7 @@
     this.root.querySelector('[data-undo]').onclick = () => this._undo();
     this.root.querySelector('[data-redo]').onclick = () => this._redo();
     this.root.querySelector('[data-sketch]').onclick = () => this._sketchStart();
-    this.root.querySelector('[data-face]').onclick = () => this._faceToggle();
+    this.root.querySelectorAll('.mdl-rail [data-mode]').forEach((b) => { b.onclick = () => this._setMode(b.dataset.mode); });
     this.root.querySelector('[data-sketchface]').onclick = () => this._sketchStart();
     this.root.querySelector('[data-fromface]').onclick = () => this._sketchFromFace();
     this.root.querySelector('[data-exgo]').onclick = () => this._extrudeLength();
@@ -455,10 +501,20 @@
     const splitOff = this.root.querySelector('[data-splitoff]');
     if (splitOff) splitOff.addEventListener('input', () => this._showCutPlane());
     this.root.querySelector('[data-split]').onclick = () => this._splitFace();
-    this.root.querySelector('[data-facedone]').onclick = () => { if (this.faceOn) this._faceToggle(); };
+    this.root.querySelector('[data-facedone]').onclick = () => this._setMode('object');
+    this.root.querySelector('[data-edgeobj]').onclick = () => this._setMode('object');
+    this.root.querySelectorAll('[data-edgeop]').forEach((b) => { b.onclick = () => this._edgeApply(b.dataset.edgeop); });
+    const edgeR = this.root.querySelector('[data-edger]');
+    if (edgeR) edgeR.addEventListener('change', () => this._edgeApply('fillet'));
+    this.root.querySelector('[data-cuta]').onclick = () => this._cutPair(0);
+    this.root.querySelector('[data-cutb]').onclick = () => this._cutPair(1);
+    this.root.querySelectorAll('[data-cuthow]').forEach((b) => { b.onclick = () => this._cutHowSet(b.dataset.cuthow); });
+    this.root.querySelector('[data-skperp]').onclick = () => this._sketchPerpToggle();
     this.root.querySelector('[data-join]').onclick = () => this._join();
     this.root.querySelector('[data-import]').onclick = () => this.root.querySelector('[data-file]').click();
     this.root.querySelector('[data-more]').onclick = () => this._setAdding(!this.adding);
+    this.root.querySelector('[data-hideall]').onclick = () => this._setAllHidden(true);
+    this.root.querySelector('[data-showall]').onclick = () => this._setAllHidden(false);
     this.root.querySelector('[data-point]').onclick = () => this._askPoint();
     const pointName = this.root.querySelector('[data-pointname]');
     this.root.querySelector('[data-pointok]').onclick = () => this._savePoint(pointName.value);
@@ -497,7 +553,11 @@
     const renderer = new T.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(2, global.devicePixelRatio || 1));
     if (T.SRGBColorSpace) renderer.outputColorSpace = T.SRGBColorSpace;
-    this.viewEl.appendChild(renderer.domElement);
+    // The dimension overlay sits on this same view. Orbit and the gizmo listen
+    // on the view, so a drag that starts on a label still turns the camera.
+    const dims = this.viewEl.querySelector('[data-dims]');
+    if (dims) this.viewEl.insertBefore(renderer.domElement, dims);
+    else this.viewEl.appendChild(renderer.domElement);
     renderer.domElement.style.touchAction = 'none';
     this.renderer = renderer;
     const scene = new T.Scene();
@@ -518,7 +578,7 @@
     this.itemsGroup = new T.Group();
     scene.add(this.itemsGroup);
 
-    const controls = new T.OrbitControls(cam, renderer.domElement);
+    const controls = new T.OrbitControls(cam, this.viewEl);
     controls.target = this.target;
     controls.enableDamping = true;
     controls.dampingFactor = 0.15;
@@ -530,15 +590,19 @@
     controls.maxPolarAngle = Math.PI - 0.02;
     this.controls = controls;
 
-    const tc = new T.TransformControls(cam, renderer.domElement);
+    const tc = new T.TransformControls(cam, this.viewEl);
     tc.setSpace('world');
     tc.size = matchMedia('(pointer: coarse)').matches ? 1.25 : 0.9;
     scene.add(tc.getHelper());
     this.tc = tc;
     tc.addEventListener('dragging-changed', (e) => {
-      this.controls.enabled = !e.value;
       this.dragging = e.value;
-      if (!e.value) { this._renderList(); this._changed(); }
+      if (e.value) this.controls.enabled = false;
+      else {
+        this._freeNav();
+        this._renderList();
+        this._changed();
+      }
     });
     tc.addEventListener('objectChange', () => this._readGizmo());
 
@@ -553,10 +617,10 @@
 
     this._bindPointer();
     this._bindWheel();
-    this._on(renderer.domElement, 'touchmove', (e) => this._pinch(e), { passive: false });
+    this._on(this.viewEl, 'touchmove', (e) => this._pinch(e), { passive: false });
     let gs = 1;
-    this._on(renderer.domElement, 'gesturestart', (e) => { e.preventDefault(); gs = 1; });
-    this._on(renderer.domElement, 'gesturechange', (e) => { e.preventDefault(); this._zoom(gs / (e.scale || 1), e); gs = e.scale || 1; });
+    this._on(this.viewEl, 'gesturestart', (e) => { e.preventDefault(); gs = 1; });
+    this._on(this.viewEl, 'gesturechange', (e) => { e.preventDefault(); this._zoom(gs / (e.scale || 1), e); gs = e.scale || 1; });
 
     this.ro = new ResizeObserver(() => this._resize());
     this.ro.observe(this.viewEl);
@@ -578,25 +642,46 @@
     loop();
   };
 
+  // The view turns again when no tool holds the pointer. Ending a drag on a
+  // body list or menu must not leave the orbit locked against the app chrome.
+  ModelEngine.prototype._freeNav = function () {
+    if (!C().navIdle({ dragging: this.dragging, sketch: !!this._skDrag, face: !!this._faceDrag })) return;
+    if (!this.controls) return;
+    this.controls.enabled = true;
+    if (this.controls.state !== undefined) this.controls.state = -1;
+    this._calmNav();
+  };
   // Desktop pointer, finger, and Pencil. A finger orbits after a short move.
   // Pencil and the left mouse button select and drive the gizmo. They never orbit.
   ModelEngine.prototype._bindPointer = function () {
-    const el = this.renderer.domElement;
+    const el = this.viewEl;
     let down = null;
     let finger = null;
+    const onDim = (e) => !!(e && e.target && e.target.closest && e.target.closest('.mdl-dim'));
     // iPad sends a mouse or touch pointer just after the pencil. That second
     // pointer lands on a different face and steals the selection.
     const notePen = (e) => { if (e.pointerType === 'pen') this._penAt = performance.now(); };
     const penEcho = (e) => e.pointerType !== 'pen' && this._penAt && performance.now() - this._penAt < 800;
+    const endFinger = (e) => {
+      if (!finger) return false;
+      if (e && e.pointerId != null && e.pointerId !== finger.id) return false;
+      const moved = finger.moved;
+      finger = null;
+      this._freeNav();
+      return moved;
+    };
     this._on(el, 'pointerdown', (e) => {
       notePen(e);
       if (penEcho(e)) return;
+      // A dimension label keeps the primary press for editing. Right-drag and
+      // middle-drag still reach the view so the camera does not stick.
+      if (onDim(e) && C().dimPressEdits(e.button, e.pointerType)) return;
       this.root.focus({ preventScroll: true });
       if (e.button === 1) {
         const mod = e.shiftKey || e.ctrlKey || e.metaKey;
         this.controls.mouseButtons.MIDDLE = mod ? this.T.MOUSE.ROTATE : this.T.MOUSE.PAN;
       }
-      if (e.pointerType === 'touch' && !e.isPrimary) { finger = null; this.controls.enabled = true; return; }
+      if (e.pointerType === 'touch' && !e.isPrimary) { finger = null; this._freeNav(); return; }
       // Sketch owns the main pointer: mouse, Pencil, and one finger. A second finger still pans.
       if (this.sk && (e.button === 0 || e.pointerType === 'touch' || e.pointerType === 'pen')) {
         this._sketchDown(e);
@@ -604,6 +689,10 @@
       }
       if (this.faceOn && e.pointerType !== 'touch' && (e.button === 0 || e.pointerType === 'pen')) {
         this._facePress = { id: e.pointerId, x: e.clientX, y: e.clientY, dragged: false };
+        return;
+      }
+      if (this.mode === 'edge' && e.pointerType !== 'touch' && (e.button === 0 || e.pointerType === 'pen')) {
+        this._edgePress = { id: e.pointerId, x: e.clientX, y: e.clientY };
         return;
       }
       if (e.pointerType === 'touch') {
@@ -628,6 +717,9 @@
         if (this.dragging) { finger.moved = true; return; }
         const dx = e.clientX - finger.x, dy = e.clientY - finger.y;
         if (!finger.moved && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) return;
+        if (!finger.moved) {
+          try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetic */ }
+        }
         finger.moved = true;
         finger.x = e.clientX;
         finger.y = e.clientY;
@@ -639,14 +731,6 @@
       if (this.sk) { this._sketchHover(e); return; }
       this._hover(this._pick(e));
     }, true);
-    const endFinger = (e) => {
-      if (!finger) return;
-      if (e && e.pointerId != null && e.pointerId !== finger.id) return;
-      const moved = finger.moved;
-      finger = null;
-      if (!this.dragging) this.controls.enabled = true;
-      return moved;
-    };
     this._on(el, 'pointerup', (e) => {
       notePen(e);
       if (penEcho(e)) return;
@@ -661,6 +745,13 @@
         if (!press.dragged && Math.hypot(e.clientX - press.x, e.clientY - press.y) <= 6) this._faceTap(e);
         return;
       }
+      if (this._edgePress && e.pointerId === this._edgePress.id) {
+        const press = this._edgePress;
+        this._edgePress = null;
+        down = null;
+        if (Math.hypot(e.clientX - press.x, e.clientY - press.y) <= 6) this._edgeTap(e);
+        return;
+      }
       if (!down || down.id !== e.pointerId) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       const quick = Date.now() - down.t < 500;
@@ -672,7 +763,14 @@
       if (this.sk) { this._sketchClick(e); return; }
       if (this.faceOn) {
         if (e.pointerType === 'touch') {
-          this._faceToggle();
+          this._setMode('object', true);
+          this._select(this._pick(e), false);
+        }
+        return;
+      }
+      if (this.mode === 'edge') {
+        if (e.pointerType === 'touch') {
+          this._setMode('object', true);
           this._select(this._pick(e), false);
         }
         return;
@@ -685,15 +783,47 @@
       if (this._skDrag && (!e || e.pointerId === this._skDrag.id)) this._sketchUp(e);
       if (this._faceDrag && (!e || e.pointerId === this._faceDrag.id)) this._faceUp(e);
       this._facePress = null;
+      this._edgePress = null;
+      this._freeNav();
     });
+    // A drag that ends on the body list or another app chrome still frees the view.
+    this._on(window, 'pointerup', (e) => { endFinger(e); this._freeNav(); }, true);
+    this._on(window, 'pointercancel', (e) => { endFinger(e); this._freeNav(); }, true);
+    this._on(window, 'blur', () => { finger = null; down = null; this._facePress = null; this._edgePress = null; this._freeNav(); });
     this._on(el, 'pointerleave', () => this._hover(null));
     this._on(el, 'contextmenu', (e) => e.preventDefault());
   };
 
+  ModelEngine.prototype._overMenu = function (e) {
+    const t = e && e.target;
+    return !!(t && t.closest && t.closest('.mdl-rail, .mdl-side, .mdl-skbar, .mdl-pill, .mdl-toast, input, textarea, select'));
+  };
   ModelEngine.prototype._bindWheel = function () {
     const wheel = (e) => this._viewWheel(e);
-    this._on(this.renderer.domElement, 'wheel', wheel, { passive: false });
+    this._on(this.viewEl, 'wheel', wheel, { passive: false });
     this._on(this.root.querySelector('[data-cube]'), 'wheel', wheel, { passive: false });
+    // A pinch or ⌘-scroll zooms the view. It must not zoom the page, or the
+    // menus and the rest of the app slide off and only a corner of the grid remains.
+    this._on(this.root, 'wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const cube = this.root.querySelector('[data-cube]');
+      if ((this.viewEl && this.viewEl.contains(e.target)) || (cube && cube.contains(e.target)) || this._overMenu(e)) return;
+      this._zoom(Math.exp(e.deltaY * 0.012), e);
+    }, { passive: false, capture: true });
+    let gesture = 1;
+    ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
+      this._on(this.root, type, (e) => {
+        e.preventDefault();
+        if ((this.viewEl && this.viewEl.contains(e.target)) || this._overMenu(e)) return;
+        if (type === 'gesturestart') gesture = 1;
+        else if (type === 'gesturechange') {
+          const scale = e.scale || 1;
+          this._zoom(gesture / scale, e);
+          gesture = scale;
+        }
+      }, { passive: false, capture: true });
+    });
   };
   ModelEngine.prototype._viewWheel = function (e) {
     e.preventDefault();
@@ -788,10 +918,22 @@
     return hits.length ? hits[0].point : null;
   };
   ModelEngine.prototype._hover = function (id) {
+    if (id) {
+      this._dimShown = id;
+      if (this._dimTimer) { clearTimeout(this._dimTimer); this._dimTimer = null; }
+    } else this._armDimHide();
     if (id === this.hov) return;
     this.hov = id;
     this.renderer.domElement.style.cursor = id ? 'pointer' : '';
     this._paint();
+  };
+  ModelEngine.prototype._armDimHide = function () {
+    if (this._dimEdit || this._dimHold) return;
+    if (this._dimTimer) clearTimeout(this._dimTimer);
+    this._dimTimer = setTimeout(() => {
+      this._dimTimer = null;
+      if (!this.hov && !this._dimHold && !this._dimEdit) this._dimShown = null;
+    }, 800);
   };
 
   ModelEngine.prototype._orthoFrustum = function () {
@@ -990,7 +1132,7 @@
   };
 
   ModelEngine.prototype._initWorker = function () {
-    this.worker = new Worker(VENDOR + 'model-worker.js?v=' + encodeURIComponent(this.version) + '-11', { type: 'module' });
+    this.worker = new Worker(VENDOR + 'model-worker.js?v=' + encodeURIComponent(this.version) + '-24', { type: 'module' });
     this.worker.onmessage = (e) => this._onWorker(e.data || {});
     this.worker.onerror = (e) => {
       this.building = false;
@@ -1002,6 +1144,7 @@
   ModelEngine.prototype._shapeSig = function (o) {
     return JSON.stringify({
       k: o.kernel, t: o.type, s: o.size, pr: o.profiles, h: o.height, f: o.features, parts: o.parts,
+      cut: o.type === 'cut' ? (o.cut === 'split' ? 'split' : 'delete') : undefined,
       mesh: (o.kernel === 'mesh' || o.type === 'mesh') ? o.mesh : undefined,
     });
   };
@@ -1028,9 +1171,9 @@
       sigs[o.id] = sig;
       if (this._shapeSigs[o.id] === sig && this.objs[o.id]) continue;
       objects.push({
-        id: o.id, kernel: o.kernel, type: o.type, size: o.size, pos: o.pos, rot: o.rot,
+        id: o.id, kernel: o.kernel, type: o.type, size: o.size, pos: o.pos, rot: o.rot, scale: o.scale,
         profiles: o.profiles, height: o.height, features: o.features, parts: o.parts, mesh: o.mesh,
-        brep: o.brep, brepHash: o.brepHash,
+        brep: o.brep, brepHash: o.brepHash, cut: o.cut,
       });
     }
     this._pendingSigs = sigs;
@@ -1066,15 +1209,23 @@
       const notes = (m.bodies || []).filter((b) => b.error).map((b) => b.error);
       if (notes.length) this._toast(notes[0]);
       for (const b of m.bodies || []) {
-        const missed = b && b.notes && b.notes.find((t) => t === 'That sketch does not split the face.');
+        const missed = b && b.notes && b.notes.find((t) => t === 'That sketch does not split the face.' || t === 'That curve was not extruded, because a polyline would leave a gap.' || t === 'That edge could not be changed.' || t === 'Those bodies do not overlap.' || t === 'That body does not split the other.');
         if (missed) { this._toast(missed); break; }
       }
       let remember = false;
+      const splitShown = [];
       for (const b of m.bodies || []) {
-        if (b && b.vertices && this._pendingSigs && this._pendingSigs[b.id]) this._shapeSigs[b.id] = this._pendingSigs[b.id];
-        if (b && b.vertices) remember = this._remember(b) || remember;
+        if (this._revertCut(b)) continue;
+        const extra = this._adoptSplit(b);
+        if (extra) { splitShown.push(...extra); continue; }
+        this._finishCut(b);
       }
-      this._showBodies(m.bodies || []);
+      for (const b of m.bodies || []) {
+        if (!b || !b.vertices || !this._obj(b.id)) continue;
+        if (this._pendingSigs && this._pendingSigs[b.id]) this._shapeSigs[b.id] = this._pendingSigs[b.id];
+        remember = this._remember(b) || remember;
+      }
+      this._showBodies((m.bodies || []).concat(splitShown));
       if (remember && this.opts.onChange) this.opts.onChange();
     } catch (e) {
       this._toast('Could not update the model. ' + (e && e.message ? e.message : e));
@@ -1083,6 +1234,22 @@
     if (this.pendingBuild) this._build();
     else this._clearBusy();
   };
+  ModelEngine.prototype._finishCut = function (b) {
+    if (!b || !b.vertices) return;
+    const obj = this._obj(b.id);
+    if (!obj || obj.type !== 'cut' || !obj.parts || !obj.parts[1]) return;
+    const missed = (b.notes || []).some((t) => t === 'Those bodies do not overlap.' || t === 'That body does not split the other.');
+    if (missed) return;
+    const tool = this._obj(obj.parts[1].id);
+    if (!tool || tool.hidden || tool.id === obj.id) return;
+    tool.hidden = true;
+    this.multi = this.multi.filter((id) => id !== tool.id);
+    if (this.sel === tool.id) this.sel = obj.id;
+    this.root.dataset.sel = this.sel || '';
+    this._renderList();
+    this._syncCutBar();
+    this._syncGizmo();
+  };
   ModelEngine.prototype._remember = function (b) {
     const obj = this._obj(b.id);
     if (!obj) return false;
@@ -1090,7 +1257,8 @@
     const storedSurface = obj.view && obj.view.faces && obj.view.faces.some((f) => f.surface && f.surface.vertices && f.surface.vertices.length >= 9);
     if (!b.brep && obj.view && obj.view.edges && obj.view.edges.length >= 6 && obj.view.vertices && obj.view.vertices.length > 8 && (!nextSurface || storedSurface)) return false;
     let changed = false;
-    if (b.brep && b.brepHash && (obj.brep !== b.brep || obj.brepHash !== b.brepHash)) {
+    const keepBase = obj.type === 'solid' && (obj.features || []).length;
+    if (!keepBase && b.brep && b.brepHash && (obj.brep !== b.brep || obj.brepHash !== b.brepHash)) {
       obj.brep = b.brep;
       obj.brepHash = b.brepHash;
       changed = true;
@@ -1099,10 +1267,19 @@
     const tris = b.triangles;
     const prev = obj.view;
     const hasLines = b.edges && b.edges.length >= 6;
+    const faceEdges = (faces) => {
+      let n = 0;
+      for (const f of faces || []) {
+        for (const w of f.exact || []) n += (w.edges || []).length;
+        n += (f.measures || []).length;
+      }
+      return n;
+    };
     const same = prev && prev.vertices && prev.vertices.length === verts.length && prev.triangles && prev.triangles.length === tris.length
       && prev.vertices[0] === verts[0] && prev.vertices[verts.length - 1] === verts[verts.length - 1]
       && (!hasLines || (prev.edges && prev.edges.length === b.edges.length))
-      && (!nextSurface || storedSurface);
+      && (!nextSurface || storedSurface)
+      && faceEdges(prev.faces) === faceEdges(b.faces);
     if (!same) {
       obj.view = {
         vertices: Array.from(verts), triangles: Array.from(tris), faces: b.faces || [],
@@ -1412,7 +1589,7 @@
     else if (e.key === 'Escape') {
       e.preventDefault();
       if (this.sk) this._sketchEscape();
-      else if (this.faceOn) this._faceToggle();
+      else if (this.faceOn || this.mode === 'edge') this._setMode('object');
       else this._select(null);
     }
   };
@@ -1425,6 +1602,7 @@
     this._renderList();
     this._renderInsp();
     this._syncGizmo();
+    this._syncCutBar();
     this._paint();
   };
   ModelEngine.prototype._select = function (id, toggle) {
@@ -1444,12 +1622,13 @@
     this._renderList();
     this._renderInsp();
     this._syncGizmo();
+    this._syncCutBar();
     this._paint();
   };
   ModelEngine.prototype._syncGizmo = function () {
     if (!this.tc) return;
     const slot = this.sel && this.objs[this.sel];
-    if (!slot || this.sk || this.faceOn || this.multi.length > 1) { this.tc.detach(); return; }
+    if (!slot || this.sk || this.faceOn || this.mode === 'edge' || this.multi.length > 1) { this.tc.detach(); return; }
     if (this.xfMode !== 'rotate' && this.xfMode !== 'scale') this.xfMode = 'translate';
     this.tc.setMode(this.xfMode === 'rotate' ? 'rotate' : this.xfMode === 'scale' ? 'scale' : 'translate');
     this.tc.attach(slot.group);
@@ -1495,9 +1674,10 @@
     if (!list) return;
     if (!this.data.objects.length) { list.innerHTML = '<p class="mdl-empty">Add a body from the left.</p>'; return; }
     list.innerHTML = this.data.objects.map((o) =>
-      '<div class="mdl-item' + (o.hidden ? ' off' : '') + '"><button type="button" class="mdl-row' + (this.multi.indexOf(o.id) >= 0 ? ' on' : '') + '" data-id="' + esc(o.id) + '"><b>' + esc(o.name) + '</b><span>' + esc(this._sizeText(o)) + '</span></button><button type="button" class="mdl-ico" data-hide="' + esc(o.id) + '" aria-label="' + (o.hidden ? 'Show ' : 'Hide ') + esc(o.name) + '">' + (o.hidden ? ICON.eyeOff : ICON.eye) + '</button></div>'
+      '<div class="mdl-item' + (o.hidden ? ' off' : '') + '"><button type="button" class="mdl-row' + (this.multi.indexOf(o.id) >= 0 ? ' on' : '') + '" data-id="' + esc(o.id) + '"><b>' + esc(o.name) + '</b><span>' + esc(this._sizeText(o)) + '</span></button><button type="button" class="mdl-ico' + (o.dims === false ? '' : ' on') + '" data-dims="' + esc(o.id) + '" aria-label="' + (o.dims === false ? 'Show dimensions' : 'Hide dimensions') + '">' + ICON.dim + '</button><button type="button" class="mdl-ico" data-hide="' + esc(o.id) + '" aria-label="' + (o.hidden ? 'Show ' : 'Hide ') + esc(o.name) + '">' + (o.hidden ? ICON.eyeOff : ICON.eye) + '</button></div>'
     ).join('');
     list.querySelectorAll('[data-id]').forEach((b) => { b.onclick = (e) => this._select(b.dataset.id, e.shiftKey || e.metaKey || e.ctrlKey); });
+    list.querySelectorAll('[data-dims]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); this._toggleDims(b.dataset.dims); }; });
     list.querySelectorAll('[data-hide]').forEach((b) => { b.onclick = (e) => { e.stopPropagation(); this._toggleHidden(b.dataset.hide); }; });
     this._bindTips(list);
     this._renderPoints();
@@ -1600,6 +1780,53 @@
     this._restore(cp.objects);
     this._toast('Restored ' + cp.name + '.');
   };
+  ModelEngine.prototype._toggleDims = function (id) {
+    const obj = this._obj(id);
+    if (!obj) return;
+    if (obj.dims === false) delete obj.dims;
+    else obj.dims = false;
+    this._renderList();
+    this._changed();
+  };
+  ModelEngine.prototype._setAllHidden = function (hidden) {
+    const list = this.data.objects || [];
+    if (!list.length) { this._toast('There are no bodies.'); return; }
+    C().setAllHidden(list, hidden);
+    if (hidden) {
+      this.multi = [];
+      this.sel = null;
+      this.root.dataset.sel = '';
+    }
+    let rebuild = false;
+    for (const o of list) {
+      const slot = this.objs[o.id];
+      if (slot) slot.group.visible = !o.hidden;
+      else if (!o.hidden) rebuild = true;
+    }
+    this._renderList();
+    this._renderInsp();
+    this._syncGizmo();
+    this._paint();
+    this._changed();
+    if (rebuild) this._requestBuild();
+  };
+  ModelEngine.prototype._dropToFloor = function (id) {
+    const obj = this._obj(id);
+    const slot = obj && this.objs[obj.id];
+    if (!obj || !slot || !slot.mesh) { this._toast('That body is not ready.'); return; }
+    this._place(slot, obj);
+    slot.group.updateMatrixWorld(true);
+    const box = new this.T.Box3().setFromObject(slot.mesh);
+    if (!box || box.isEmpty()) { this._toast('That body is not ready.'); return; }
+    const shift = C().floorShift(box.min.z, 0);
+    if (Math.abs(shift) < 0.05) { this._toast('That body is already on the floor.'); return; }
+    obj.pos[2] = r3((obj.pos[2] || 0) + shift);
+    this._place(slot, obj);
+    this._renderInsp();
+    this._syncGizmo();
+    this._paint();
+    this._changed();
+  };
   ModelEngine.prototype._toggleHidden = function (id) {
     const obj = this._obj(id);
     if (!obj) return;
@@ -1669,6 +1896,7 @@
       + '<div class="mdl-modes"><button type="button" data-mode="translate"' + on('translate') + ' aria-label="Move">' + ICON.move + '</button><button type="button" data-mode="rotate"' + on('rotate') + ' aria-label="Rotate">' + ICON.rotate + '</button><button type="button" data-mode="scale"' + on('scale') + ' aria-label="Scale">' + ICON.scale + '</button></div>'
       + channel
       + '<div class="mdl-actions">'
+      + '<button type="button" class="mdl-text" data-floor>Drop to floor</button>'
       + (it.type === 'sketch' ? '<button type="button" class="mdl-ico" data-edit aria-label="Edit sketch">' + ICON.pencil + '</button>' : '')
       + '<button type="button" class="mdl-ico mdl-danger" data-del aria-label="Delete">' + ICON.trash + '</button></div></div>';
     const commitSize = () => {
@@ -1748,6 +1976,7 @@
     });
     const edit = host.querySelector('[data-edit]');
     if (edit) edit.onclick = () => this._sketchEdit();
+    host.querySelector('[data-floor]').onclick = () => this._dropToFloor(this.sel);
     host.querySelector('[data-del]').onclick = () => this._deleteSel();
     this._bindTips(host);
   };
@@ -1886,9 +2115,16 @@
     const T = this.T;
     this._clearFaceMark();
     const hit = this._faceHit;
-    if (!hit) { this._paint(); this._showCutPlane(); return; }
+    const chip = this.root.querySelector('[data-facedim]');
+    if (!hit) {
+      if (chip) chip.textContent = 'Select a face';
+      this._paint();
+      this._showCutPlane();
+      return;
+    }
     const slot = this.objs[hit.id];
     const face = slot && slot.faces[hit.index];
+    if (chip) chip.textContent = face ? this._faceDimText(face, slot && this._shapeMatrix(slot)) : 'Face';
     if (!slot || !face) { this._paint(); this._showCutPlane(); return; }
     const n = face.normal;
     const lift = 0.08;
@@ -1943,21 +2179,365 @@
     const join = this.root.querySelector('[data-join]');
     if (join) join.classList.toggle('on', this.adding);
   };
-  ModelEngine.prototype._faceToggle = function (quiet) {
-    if (this.sk) this._sketchCancel();
-    this.faceOn = !this.faceOn;
-    if (this.faceOn) this._setAdding(false);
-    this._faceHit = null;
-    this._faceHeld = 0;
-    this._facePress = null;
-    this._faceDrag = null;
-    const b = this.root.querySelector('[data-face]');
-    if (b) b.classList.toggle('on', this.faceOn);
-    const bar = this.root.querySelector('[data-facebar]');
-    if (bar) bar.classList.toggle('hidden', !this.faceOn);
-    this._markFace();
+  ModelEngine.prototype._sub3 = function (a, b) {
+    return [a[0] - b[0], a[1] - b[1], (a[2] || 0) - (b[2] || 0)];
+  };
+  ModelEngine.prototype._dot3 = function (a, b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  };
+  ModelEngine.prototype._cross3 = function (a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  };
+  ModelEngine.prototype._circum3 = function (a, b, c) {
+    const ab = this._sub3(b, a), ac = this._sub3(c, a);
+    const n = this._cross3(ab, ac);
+    const n2 = this._dot3(n, n);
+    if (n2 < 1e-10) return null;
+    const center = [0, 1, 2].map((i) => a[i] + (this._dot3(ac, ac) * this._cross3(n, ab)[i] - this._dot3(ab, ab) * this._cross3(n, ac)[i]) / (2 * n2));
+    return { c: center, r: Math.hypot(a[0] - center[0], a[1] - center[1], (a[2] || 0) - center[2]), n };
+  };
+  ModelEngine.prototype._arcLen = function (a, mid, b) {
+    const hit = this._circum3(a, mid, b);
+    if (!hit) return Math.hypot(b[0] - a[0], b[1] - a[1], (b[2] || 0) - (a[2] || 0));
+    const ca = this._sub3(a, hit.c), cm = this._sub3(mid, hit.c), cb = this._sub3(b, hit.c);
+    const turn = Math.atan2(this._dot3(this._cross3(ca, cb), hit.n), this._dot3(ca, cb));
+    const via = Math.atan2(this._dot3(this._cross3(ca, cm), hit.n), this._dot3(ca, cm));
+    let sweep = turn;
+    if (sweep * via < 0) sweep += sweep > 0 ? -Math.PI * 2 : Math.PI * 2;
+    return Math.abs(sweep) * hit.r;
+  };
+  ModelEngine.prototype._bodyEdges = function (id) {
+    const slot = this.objs[id];
+    if (!slot) return [];
+    const byKey = new Map();
+    const out = [];
+    const keyOf = (pts) => pts.map((p) => p.map((v) => Math.round(v * 100)).join(',')).sort().join('|');
+    const add = (key, edge, face) => {
+      const prev = byKey.get(key);
+      if (prev) { prev.faces.push(face); return; }
+      edge.faces = [face];
+      byKey.set(key, edge);
+      out.push(edge);
+    };
+    for (const face of slot.faces || []) {
+      const wires = (face.exact && face.exact.length) ? face.exact : (face.measures && face.measures.length ? [{ edges: face.measures }] : []);
+      for (const wire of wires) {
+        for (const e of wire.edges || []) {
+          if (e.k === 'line' && e.a && e.b) {
+            const at = e.a.map((v, i) => (v + e.b[i]) / 2);
+            const len = Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1], (e.b[2] || 0) - (e.a[2] || 0));
+            add(id + ':' + keyOf([e.a, e.b]), { id, key: id + ':' + keyOf([e.a, e.b]), k: 'line', a: e.a, b: e.b, at, len }, face);
+          } else if (e.k === 'arc' && e.a && e.b && e.mid) {
+            const key = id + ':' + keyOf([e.a, e.b, e.mid]);
+            add(key, { id, key, k: 'arc', a: e.a, b: e.b, mid: e.mid, at: e.mid.slice(), len: this._arcLen(e.a, e.mid, e.b) }, face);
+          } else if (e.k === 'circle' && e.c) {
+            const key = id + ':c' + e.c.map((v) => Math.round(v * 100)).join(',') + ':' + Math.round(e.r * 100);
+            const round = { id, key, k: 'circle', c: e.c, r: e.r, ...(e.n ? { n: e.n } : {}), faces: [face], len: Math.PI * 2 * e.r };
+            const onEdge = this._circlePts(round)[0];
+            round.at = onEdge || e.c.slice();
+            add(key, round, face);
+          } else if (e.k === 'curve' && e.mid && e.pts && e.pts.length >= 2) {
+            const key = id + ':u' + keyOf([e.a || e.pts[0], e.mid, e.b || e.pts[e.pts.length - 1]]);
+            add(key, { id, key, k: 'curve', a: e.a, b: e.b, mid: e.mid, pts: e.pts, at: e.mid.slice(), len: e.len || 0 }, face);
+          }
+        }
+      }
+    }
+    return out;
+  };
+  ModelEngine.prototype._seesCamera = function (normal, at) {
+    const to = this.camera.position.clone().sub(at);
+    const len = to.length();
+    const n = normal.clone().normalize();
+    if (len < 1e-6 || n.lengthSq() < 1e-8) return false;
+    return n.dot(to) / len > 0.08;
+  };
+  ModelEngine.prototype._openToCamera = function (at, meshes) {
+    const origin = this.camera.position;
+    const dir = at.clone().sub(origin);
+    const dist = dir.length();
+    if (dist < 1e-4) return false;
+    dir.multiplyScalar(1 / dist);
+    if (!this._dimRay) this._dimRay = new this.T.Raycaster();
+    this._dimRay.set(origin, dir);
+    this._dimRay.far = dist;
+    const hits = this._dimRay.intersectObjects(meshes, false);
+    return !hits.length || hits[0].distance > dist - 0.8;
+  };
+  ModelEngine.prototype._screenOf = function (local, world) {
+    const T = this.T;
+    const p = new T.Vector3(local[0], local[1], local[2] || 0).applyMatrix4(world).project(this.camera);
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return {
+      x: (p.x * 0.5 + 0.5) * rect.width + rect.left,
+      y: (-p.y * 0.5 + 0.5) * rect.height + rect.top,
+      z: p.z,
+    };
+  };
+  ModelEngine.prototype._edgeSamples = function (edge) {
+    if (edge.k === 'line') {
+      const pts = [];
+      for (let i = 0; i <= 8; i++) pts.push(edge.a.map((v, k) => v + (edge.b[k] - v) * i / 8));
+      return pts;
+    }
+    if (edge.k === 'curve' && edge.pts && edge.pts.length >= 2) return edge.pts;
+    if (edge.k === 'arc') return [edge.a, edge.mid, edge.b];
+    if (edge.k === 'circle') return this._circlePts(edge);
+    return edge.pts || [];
+  };
+  ModelEngine.prototype._edgeTap = function (e) {
+    let best = null;
+    let bestD = 18;
+    for (const o of this.data.objects) {
+      if (o.hidden) continue;
+      const slot = this.objs[o.id];
+      if (!slot || !slot.group.visible) continue;
+      const world = this._shapeMatrix(slot);
+      for (const edge of this._bodyEdges(o.id)) {
+        for (const p of this._edgeSamples(edge)) {
+          const s = this._screenOf(p, world);
+          if (s.z < -1 || s.z > 1) continue;
+          const d = Math.hypot(s.x - e.clientX, s.y - e.clientY);
+          if (d < bestD) { bestD = d; best = edge; }
+        }
+      }
+    }
+    this._edgeHit = best;
+    if (!best) this._toast('Tap an edge.');
+    this._markEdge();
+  };
+  ModelEngine.prototype._clearEdgeMark = function () {
+    if (!this._edgeMark) return;
+    if (this._edgeMark.parent) this._edgeMark.parent.remove(this._edgeMark);
+    this._edgeMark.geometry.dispose();
+    this._edgeMark.material.dispose();
+    this._edgeMark = null;
+  };
+  ModelEngine.prototype._markEdge = function () {
+    const T = this.T;
+    this._clearEdgeMark();
+    const hit = this._edgeHit;
+    const chip = this.root.querySelector('[data-edgedim]');
+    const slot = hit && this.objs[hit.id];
+    const world = slot && T && this._shapeMatrix(slot);
+    const measured = hit && this._measureEdge(hit, world);
+    if (chip) {
+      if (!hit) chip.textContent = 'Select an edge';
+      else if (measured && measured.kind === 'diameter') chip.textContent = 'Ø ' + r3(measured.value);
+      else if (measured) chip.textContent = String(r3(measured.value));
+      else chip.textContent = 'Edge';
+    }
+    if (!hit || !T || !slot) return;
+    const pts = this._edgeSamples(hit).map((p) => new T.Vector3(p[0], p[1], p[2] || 0));
+    if (hit.k === 'circle' && pts.length) pts.push(pts[0].clone());
+    const line = new T.Line(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: ORANGE, depthTest: false }));
+    line.renderOrder = 5;
+    (slot.local || slot.group).add(line);
+    this._edgeMark = line;
+    this._paint();
+  };
+  ModelEngine.prototype._edgeApply = function (kind) {
+    const hit = this._edgeHit;
+    if (!hit) { this._toast('Select an edge.'); return; }
+    const obj = this._obj(hit.id);
+    if (!obj || obj.kernel === 'mesh' || obj.type === 'mesh') { this._toast('Edge tools work on an exact body.'); return; }
+    if (kind === 'sharp') {
+      let best = -1;
+      let bestD = Infinity;
+      (obj.features || []).forEach((f, i) => {
+        if (!f || (f.op !== 'fillet' && f.op !== 'chamfer') || !f.at) return;
+        const d = Math.hypot(f.at[0] - hit.at[0], f.at[1] - hit.at[1], (f.at[2] || 0) - (hit.at[2] || 0));
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      if (best < 0 || bestD > Math.max(hit.len, 4)) { this._toast('This edge has no round to remove.'); return; }
+      obj.features.splice(best, 1);
+    } else {
+      const field = this.root.querySelector('[data-edger]');
+      const r = evalNum(field && field.value, 1);
+      if (!(r >= 0.05)) { this._toast('Use a radius of at least 0.05 mm.'); return; }
+      obj.features.push({ op: kind === 'chamfer' ? 'chamfer' : 'fillet', at: hit.at.slice(), r: r3(r) });
+    }
+    this._dropBuilt(obj);
+    this._edgeHit = null;
+    this._markEdge();
+    this._changed();
+    this._requestBuild();
+    this._toast(kind === 'sharp' ? 'The round is removed.' : kind === 'chamfer' ? 'The edge is chamfered.' : 'The edge is rounded.');
+  };
+  ModelEngine.prototype._syncCutBar = function () {
+    const bar = this.root.querySelector('[data-cutbar]');
+    if (!bar) return;
+    const show = this.mode === 'object' && !this.sk && this.multi.length === 2;
+    bar.classList.toggle('hidden', !show);
+    if (!show) return;
+    const a = this._obj(this.multi[0]);
+    const b = this._obj(this.multi[1]);
+    const na = (a && a.name) || 'First';
+    const nb = (b && b.name) || 'Second';
+    const ba = bar.querySelector('[data-cuta]');
+    const bb = bar.querySelector('[data-cutb]');
+    if (ba) ba.textContent = na + ' cuts ' + nb;
+    if (bb) bb.textContent = nb + ' cuts ' + na;
+  };
+  ModelEngine.prototype._cutHowSet = function (how) {
+    this._cutHow = how === 'split' ? 'split' : 'delete';
+    this.root.querySelectorAll('[data-cuthow]').forEach((b) => b.classList.toggle('on', b.dataset.cuthow === this._cutHow));
+  };
+  // The group is what is on screen. Write that pose back before a cut so the
+  // boolean uses the overlap the user sees, and a later place cannot jump.
+  ModelEngine.prototype._syncPlacement = function (obj) {
+    const slot = obj && this.objs[obj.id];
+    const geom = slot && slot.mesh && slot.mesh.geometry;
+    if (!slot || !slot.group || !geom) return;
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    if (!geom.boundingBox || geom.boundingBox.isEmpty()) return;
+    const g = slot.group;
+    const eu = new this.T.Euler().setFromQuaternion(g.quaternion, 'ZYX');
+    obj.rot = [eu.x, eu.y, eu.z].map((v) => wrapDeg(v / DEG));
+    obj.scale = [g.scale.x, g.scale.y, g.scale.z].map((v) => r3(Math.abs(v) < 0.05 ? (v < 0 ? -0.05 : 0.05) : v));
+    const spun = this._spinOf(obj, this._bodyCenter(slot));
+    obj.pos = [r3(g.position.x - spun.x), r3(g.position.y - spun.y), r3(g.position.z - spun.z)];
+  };
+  ModelEngine.prototype._cutPair = function (toolIndex) {
+    if (this.multi.length !== 2) { this._toast('Select two bodies.'); return; }
+    const roles = C().cutRoles(this.multi, toolIndex);
+    const tool = this._obj(roles.tool);
+    const target = this._obj(roles.target);
+    if (!tool || !target) return;
+    if (tool.kernel === 'mesh' || target.kernel === 'mesh' || tool.type === 'mesh' || target.type === 'mesh') {
+      this._toast('A mesh cannot cut an exact body.');
+      return;
+    }
+    this._syncPlacement(tool);
+    this._syncPlacement(target);
+    const how = this._cutHow === 'split' ? 'split' : 'delete';
+    const kept = C().normObject(target);
+    const cut = C().normObject({
+      name: target.name, kernel: 'brep', type: 'cut', cut: how,
+      pos: target.pos.slice(), rot: target.rot.slice(), scale: (target.scale || [1, 1, 1]).slice(),
+      ...(target.hidden ? { hidden: true } : {}),
+      ...(target.dims === false ? { dims: false } : {}),
+      features: [],
+      parts: [C().normObject(target, 0, false), C().normObject(tool, 0, false)],
+    });
+    const idx = this.data.objects.findIndex((o) => o.id === target.id);
+    if (idx < 0) return;
+    this._pendingCut = { cutId: cut.id, target: kept, toolId: tool.id };
+    this.data.objects.splice(idx, 1, cut);
+    this.sel = cut.id;
+    this.multi = [cut.id, tool.id];
+    this._renderList();
+    this._renderInsp();
     this._syncGizmo();
-    if (!quiet) this._toast(this.faceOn ? 'These tools act on the selected face.' : 'Selecting bodies.');
+    this._syncCutBar();
+    this._changed();
+    this._requestBuild();
+    this._toast(how === 'split'
+      ? tool.name + ' divides ' + target.name + ' into separate bodies.'
+      : tool.name + ' deletes from ' + target.name + '.');
+  };
+  ModelEngine.prototype._adoptSplit = function (b) {
+    if (!b || !b.pieces || b.pieces.length < 2) return null;
+    const obj = this._obj(b.id);
+    if (!obj || obj.type !== 'cut' || obj.cut !== 'split') return null;
+    const pos = (obj.pos || [0, 0, 0]).slice();
+    const rot = (obj.rot || [0, 0, 0]).slice();
+    const scale = (obj.scale || [1, 1, 1]).slice();
+    const toolId = obj.parts && obj.parts[1] && obj.parts[1].id;
+    const viewOf = (p) => ({
+      vertices: Array.from(p.vertices),
+      triangles: Array.from(p.triangles),
+      faces: p.faces || [],
+      ...(p.edges && p.edges.length >= 6 ? { edges: Array.from(p.edges) } : {}),
+      ...(p.normals && p.vertices && p.normals.length === p.vertices.length ? { normals: Array.from(p.normals) } : {}),
+    });
+    const solid = C().normObject({
+      id: obj.id, name: obj.name + ' 1', kernel: 'brep', type: 'solid',
+      pos, rot, scale, features: [], brep: b.brep, brepHash: b.brepHash,
+    });
+    const rest = b.pieces.slice(1).map((p, i) => {
+      const body = C().normObject({
+        name: obj.name + ' ' + (i + 2), kernel: 'brep', type: 'solid',
+        pos: pos.slice(), rot: rot.slice(), scale: scale.slice(), features: [],
+        brep: p.brep, brepHash: p.brepHash,
+      });
+      body.view = viewOf(p);
+      return body;
+    });
+    const idx = this.data.objects.findIndex((o) => o.id === obj.id);
+    if (idx < 0) return null;
+    this.data.objects.splice(idx, 1, solid, ...rest);
+    const tool = toolId && this._obj(toolId);
+    if (tool && tool.id !== solid.id) tool.hidden = true;
+    this._pendingCut = null;
+    this.sel = solid.id;
+    this.multi = [solid.id, ...rest.map((o) => o.id)];
+    this.root.dataset.sel = this.sel || '';
+    this._snap = modelSnap(this.data.objects);
+    this._syncHist();
+    this._renderList();
+    this._renderInsp();
+    this._syncCutBar();
+    this._syncGizmo();
+    if (this.opts.onChange) this.opts.onChange();
+    return rest.map((body, i) => Object.assign({ id: body.id }, b.pieces[i + 1]));
+  };
+  ModelEngine.prototype._revertCut = function (b) {
+    const pending = this._pendingCut;
+    if (!pending || !b || pending.cutId !== b.id) return false;
+    const missed = !b.vertices || b.error || (b.notes || []).some((t) => t === 'Those bodies do not overlap.' || t === 'That body does not split the other.');
+    if (!missed) { this._pendingCut = null; return false; }
+    const idx = this.data.objects.findIndex((o) => o.id === b.id);
+    const restored = C().normObject(pending.target);
+    if (idx >= 0) this.data.objects[idx] = restored;
+    this._pendingCut = null;
+    this.sel = restored.id;
+    this.multi = [restored.id, pending.toolId].filter((id) => this._obj(id));
+    this.root.dataset.sel = this.sel || '';
+    const slot = this.objs[restored.id];
+    if (slot) this._place(slot, restored);
+    const now = modelSnap(this.data.objects);
+    const past = this.data.history && this.data.history.past;
+    if (past && past.length && modelSnap(past[past.length - 1]) === now) past.pop();
+    this._snap = now;
+    this._syncHist();
+    this._renderList();
+    this._renderInsp();
+    this._syncCutBar();
+    this._syncGizmo();
+    if (this.opts.onChange) this.opts.onChange();
+    return true;
+  };
+  ModelEngine.prototype._setMode = function (mode, quiet) {
+    const next = mode === 'face' || mode === 'edge' ? mode : 'object';
+    if (this.sk && next !== 'object') this._sketchCancel();
+    this.mode = next;
+    this.faceOn = next === 'face';
+    if (next !== 'face') {
+      this._faceHit = null;
+      this._faceHeld = 0;
+      this._facePress = null;
+      this._faceDrag = null;
+    }
+    if (next !== 'edge') {
+      this._edgeHit = null;
+      this._edgePress = null;
+      this._clearEdgeMark();
+    }
+    if (next !== 'object') this._setAdding(false);
+    this.root.querySelectorAll('.mdl-rail [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === next));
+    const facebar = this.root.querySelector('[data-facebar]');
+    if (facebar) facebar.classList.toggle('hidden', next !== 'face');
+    const edgebar = this.root.querySelector('[data-edgebar]');
+    if (edgebar) edgebar.classList.toggle('hidden', next !== 'edge');
+    this._syncCutBar();
+    this._markFace();
+    if (next === 'edge') this._markEdge();
+    this._syncGizmo();
+    if (!quiet) this._toast(next === 'face' ? 'These tools act on the selected face.' : next === 'edge' ? 'These tools act on the selected edge.' : 'Selecting bodies.');
+  };
+  ModelEngine.prototype._faceToggle = function (quiet) {
+    this._setMode(this.faceOn ? 'object' : 'face', quiet);
   };
   ModelEngine.prototype._pickFace = function (e) {
     const picks = [];
@@ -1990,7 +2570,7 @@
     const axis = this._faceAxis(slot, face);
     this._faceDrag = { id: press.id, x: press.x, y: press.y, dist: 0, hit: { id: hit.id, index: hit.index }, axis };
     this.controls.enabled = false;
-    try { this.renderer.domElement.setPointerCapture(press.id); } catch (err) { /* synthetic events */ }
+    try { this.viewEl.setPointerCapture(press.id); } catch (err) { /* synthetic events */ }
   };
   ModelEngine.prototype._faceAxis = function (slot, face) {
     const T = this.T;
@@ -2048,7 +2628,7 @@
   ModelEngine.prototype._faceUp = function (e) {
     const d = this._faceDrag;
     this._faceDrag = null;
-    if (!this.dragging) this.controls.enabled = true;
+    this._freeNav();
     if (!d) return;
     const slot = this.objs[d.hit.id];
     if (this._facePrev && this._facePrev.parent) { this._facePrev.parent.remove(this._facePrev); this._facePrev.geometry.dispose(); this._facePrev.material.dispose(); this._facePrev = null; }
@@ -2167,13 +2747,13 @@
     const face = slot && slot.faces[hit.index];
     const obj = this._obj(hit.id);
     if (!obj || !face || !face.loop || face.loop.length < 3) { this._toast('This face cannot be extruded by a length.'); return; }
-    obj.features.push({ op: 'push', loop: face.loop.map((p) => p.slice()), normal: face.normal.slice(), center: (face.center || face.loop[0]).slice(), dist: r3(dist) });
+    obj.features.push({ op: 'push', loop: face.loop.map((p) => p.slice()), normal: face.normal.slice(), center: (face.center || face.loop[0]).slice(), dist: r3(dist), exact: true });
     this._changed();
     this._requestBuild();
   };
 
   ModelEngine.prototype._openSketch = function (plane, profiles) {
-    if (this.faceOn) this._faceToggle(true);
+    if (this.mode !== 'object') this._setMode('object', true);
     this.sk = { tool: 'rect', profiles: profiles || [], plane, chain: [], base: (profiles || []).length };
     const bar = this.root.querySelector('[data-skbar]');
     if (bar) bar.classList.remove('hidden');
@@ -2228,10 +2808,12 @@
         id: hit.id,
         center: (face.center || (face.loop && face.loop[0]) || [0, 0, 0]).slice(),
         normal: (face.normal || [0, 0, 1]).slice(),
+        loop: face.loop ? face.loop.map((p) => p.slice()) : null,
       };
+      this.sk.outlineKey = this._profileKey(this.sk.profiles[0]);
     }
     this._sketchSourceBar();
-    this._toast('Draw across the face, then Split face. Each region can be extruded in or out.');
+    this._toast('Extrude grows or cuts this face. Draw on it and use Split face to extrude each region.');
   };
   ModelEngine.prototype._planeBasis = function (normal) {
     const T = this.T;
@@ -2295,11 +2877,13 @@
     return [r3(d.dot(plane.xDir)), r3(d.dot(y))];
   };
   ModelEngine.prototype._sketchDown = function (e) {
-    const p = this._sketchPoint(e);
-    if (!p || !this.sk) return;
+    const p0 = this._sketchPoint(e);
+    if (!p0 || !this.sk) return;
+    const prev = this.sk.chain.length ? this.sk.chain[this.sk.chain.length - 1] : null;
+    const p = this.sk.perp && this.sk.tool === 'line' && prev ? this._sketchConstrain(prev, p0) : p0;
     this._skDrag = { id: e.pointerId, p0: p, p, moved: false };
     this.controls.enabled = false;
-    try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
+    try { this.viewEl.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
   };
   ModelEngine.prototype._sketchHover = function (e) {
     if (!this.sk) return;
@@ -2312,15 +2896,50 @@
     const p = this._sketchPoint(e);
     if (!p) return;
     if (Math.hypot(p[0] - d.p0[0], p[1] - d.p0[1]) > 0.4) d.moved = true;
-    d.p = p;
-    this.sk.hover = p;
+    d.p = this.sk.tool === 'line' && this.sk.perp ? this._sketchConstrain(d.p0, p) : p;
+    this.sk.hover = d.p;
     this._sketchDraw();
+  };
+  ModelEngine.prototype._sketchPerpToggle = function () {
+    if (!this.sk) return;
+    this.sk.perp = !this.sk.perp;
+    const b = this.root.querySelector('[data-skperp]');
+    if (b) b.classList.toggle('on', !!this.sk.perp);
+    if (this.sk.perp) this._sketchTool('line');
+  };
+  ModelEngine.prototype._lastSketchDir = function () {
+    const chain = this.sk.chain || [];
+    if (chain.length >= 2) {
+      const a = chain[chain.length - 2], b = chain[chain.length - 1];
+      const x = b[0] - a[0], y = b[1] - a[1];
+      const len = Math.hypot(x, y);
+      if (len > 1e-6) return [x / len, y / len];
+    }
+    for (let i = this.sk.profiles.length - 1; i >= 0; i--) {
+      const p = this.sk.profiles[i];
+      const pts = p.k === 'path' || p.k === 'poly' ? p.pts : null;
+      if (pts && pts.length >= 2) {
+        const a = pts[pts.length - 2], b = pts[pts.length - 1];
+        const x = b[0] - a[0], y = b[1] - a[1];
+        const len = Math.hypot(x, y);
+        if (len > 1e-6) return [x / len, y / len];
+      }
+    }
+    return [1, 0];
+  };
+  ModelEngine.prototype._sketchConstrain = function (origin, p) {
+    const d = this._lastSketchDir();
+    const dir = [-d[1], d[0]];
+    const t = (p[0] - origin[0]) * dir[0] + (p[1] - origin[1]) * dir[1];
+    return [r3(origin[0] + dir[0] * t), r3(origin[1] + dir[1] * t)];
   };
   ModelEngine.prototype._sketchClick = function (e) {
     if (!this.sk || this.sk.tool !== 'line') return;
-    const p = this._sketchPoint(e);
-    if (!p) return;
+    const raw = this._sketchPoint(e);
+    if (!raw) return;
     const c = this.sk.chain;
+    if (c.length >= 3 && Math.hypot(raw[0] - c[0][0], raw[1] - c[0][1]) < 2) { this._sketchClose(); return; }
+    const p = this.sk.perp && c.length ? this._sketchConstrain(c[c.length - 1], raw) : raw;
     if (c.length >= 3 && Math.hypot(p[0] - c[0][0], p[1] - c[0][1]) < 2) { this._sketchClose(); return; }
     c.push(p);
     this._sketchDraw();
@@ -2328,7 +2947,7 @@
   ModelEngine.prototype._sketchUp = function (e) {
     const d = this._skDrag;
     this._skDrag = null;
-    if (!this.dragging) this.controls.enabled = true;
+    this._freeNav();
     if (!d || !this.sk) return;
     if (!d.moved) { this._sketchClick(e); return; }
     if (this.sk.tool === 'rect') this._sketchAddRect(d.p0, d.p);
@@ -2419,7 +3038,7 @@
   ModelEngine.prototype._sketchEdit = function () {
     const it = this._obj(this.sel);
     if (!it || it.type !== 'sketch' || !this.T) return;
-    if (this.faceOn) this._faceToggle(true);
+    if (this.mode !== 'object') this._setMode('object', true);
     const hIn = this.root.querySelector('[data-skh]');
     if (hIn) hIn.value = String(it.height);
     this._openSketch(this._planeOf(it), JSON.parse(JSON.stringify(it.profiles || [])));
@@ -2483,61 +3102,544 @@
     }
     this._sketchDraw();
   };
-  ModelEngine.prototype._faceDimText = function (face) {
+  ModelEngine.prototype._measureEdge = function (edge, world) {
+    const T = this.T;
+    const place = (p) => {
+      if (!p) return [0, 0, 0];
+      if (!world || !T) return [p[0] || 0, p[1] || 0, p[2] || 0];
+      const v = new T.Vector3(p[0] || 0, p[1] || 0, p[2] || 0).applyMatrix4(world);
+      return [v.x, v.y, v.z];
+    };
+    return C().drawnMeasure(edge, place);
+  };
+  ModelEngine.prototype._faceDimText = function (face, world) {
     const edges = face && face.exact && face.exact[0] && face.exact[0].edges;
     if (!edges || !edges.length) return 'Face';
-    if (edges.length === 1 && edges[0].k === 'circle') return 'Ø ' + r3(edges[0].r * 2);
-    if (edges.every((e) => e.k === 'line')) {
-      const lens = [];
-      for (const e of edges) {
-        const L = Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1], (e.b[2] || 0) - (e.a[2] || 0));
-        if (!lens.some((u) => Math.abs(u - L) < 0.05)) lens.push(L);
-      }
-      if (lens.length === 1) return r3(lens[0]) + ' × ' + r3(lens[0]);
-      if (lens.length === 2) return r3(Math.max(lens[0], lens[1])) + ' × ' + r3(Math.min(lens[0], lens[1]));
+    const measures = edges.map((e) => this._measureEdge(Object.assign({ faces: [face] }, e), world)).filter(Boolean);
+    if (measures.length === 1 && measures[0].kind === 'diameter') return 'Ø ' + r3(measures[0].value);
+    const lens = [];
+    for (const m of measures) {
+      if (m.kind !== 'length') continue;
+      if (!lens.some((u) => Math.abs(u - m.value) < 0.05)) lens.push(m.value);
     }
+    if (lens.length === 1) return r3(lens[0]) + ' × ' + r3(lens[0]);
+    if (lens.length === 2) return r3(Math.max(lens[0], lens[1])) + ' × ' + r3(Math.min(lens[0], lens[1]));
     return 'Face';
+  };
+  ModelEngine.prototype._edgeAxis = function (edge) {
+    if (!edge || edge.k === 'circle' || !edge.a || !edge.b) return 0;
+    const d = [edge.b[0] - edge.a[0], edge.b[1] - edge.a[1], (edge.b[2] || 0) - (edge.a[2] || 0)];
+    const ax = Math.abs(d[0]), ay = Math.abs(d[1]), az = Math.abs(d[2]);
+    if (ax >= ay && ax >= az) return 0;
+    if (ay >= az) return 1;
+    return 2;
+  };
+  ModelEngine.prototype._alignedAxis = function (dir) {
+    const len = Math.hypot(dir[0] || 0, dir[1] || 0, dir[2] || 0) || 1;
+    const a = [Math.abs(dir[0] || 0) / len, Math.abs(dir[1] || 0) / len, Math.abs(dir[2] || 0) / len];
+    const i = a[0] >= a[1] && a[0] >= a[2] ? 0 : (a[1] >= a[2] ? 1 : 2);
+    return a[i] > 0.98 ? i : -1;
+  };
+  ModelEngine.prototype._worldPerPx = function (at) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const cam = this.camera;
+    if (this.isOrtho) return ((cam.top - cam.bottom) / (cam.zoom || 1)) / Math.max(1, rect.height);
+    const dist = Math.max(1e-3, cam.position.distanceTo(at));
+    return 2 * dist * Math.tan((cam.fov * Math.PI / 180) / 2) / Math.max(1, rect.height);
+  };
+  ModelEngine.prototype._openDimEdit = function (el) {
+    if (!el || el.querySelector('input')) return;
+    const meta = this._dimMeta && this._dimMeta.get(el.dataset.dim);
+    if (!meta) return;
+    this._dimEdit = el.dataset.dim;
+    this._dimShown = meta.id;
+    this._dimHold = meta.id;
+    if (this._dimTimer) { clearTimeout(this._dimTimer); this._dimTimer = null; }
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'decimal';
+    input.value = String(r3(meta.measure));
+    input.setAttribute('aria-label', 'Dimension');
+    el.textContent = '';
+    el.classList.add('editing');
+    el.appendChild(input);
+    input.focus();
+    input.select();
+    let closed = false;
+    let live = false;
+    setTimeout(() => { live = true; }, 250);
+    const done = (commit) => {
+      if (closed) return;
+      closed = true;
+      if (this._dimEdit === el.dataset.dim) this._dimEdit = null;
+      el.classList.remove('editing');
+      this._dimHold = null;
+      this._armDimHide();
+      if (commit) this._commitDim(meta, input.value);
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    });
+    input.addEventListener('blur', () => {
+      if (this._dimEdit !== el.dataset.dim) return;
+      if (!live) { input.focus(); return; }
+      done(true);
+    });
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+  };
+  ModelEngine.prototype._dropBuilt = function (obj) {
+    C().dropBuiltCache(obj);
+    if (obj) delete this._shapeSigs[obj.id];
+  };
+  ModelEngine.prototype._commitDim = function (meta, raw) {
+    const obj = meta && this._obj(meta.id);
+    const next = evalNum(raw, meta && meta.measure);
+    if (!obj || !(next >= 0.1) || !(meta.measure > 1e-6)) return;
+    if (Math.abs(next - meta.measure) < 0.05) return;
+    const rebuild = () => {
+      this._dropBuilt(obj);
+      this._renderList();
+      this._renderInsp();
+      this._changed();
+      this._requestBuild();
+    };
+    if (meta.circle) this._commitRound(obj, meta, next, rebuild);
+    else this._commitLength(obj, meta, next, rebuild);
+  };
+  // A dimension edit always changes every parallel edge. A plain box or
+  // cylinder has one size for that direction, so that size changes. Any body
+  // that is no longer a plain primitive gets a parallel length feature.
+  ModelEngine.prototype._commitLength = function (obj, meta, next, rebuild) {
+    const edge = meta.edge;
+    if (!edge || !edge.a || !edge.b) { this._toast('That edge could not be changed.'); return; }
+    const dir = [edge.b[0] - edge.a[0], edge.b[1] - edge.a[1], (edge.b[2] || 0) - (edge.a[2] || 0)];
+    const delta = C().lengthDelta(meta.measure, next, dir, obj.scale);
+    if (Math.abs(delta) < 0.05) return;
+    const plain = !((obj.features || []).length);
+    const axis = this._alignedAxis(dir);
+    if (plain && axis >= 0 && obj.type === 'box' && obj.size) {
+      const k = 'xyz'[axis];
+      obj.size[k] = r3(Math.max(0.1, obj.size[k] + delta));
+      rebuild();
+      return;
+    }
+    if (plain && axis === 2 && obj.type === 'cylinder' && obj.size) {
+      obj.size.z = r3(Math.max(0.1, obj.size.z + delta));
+      rebuild();
+      return;
+    }
+    if (plain && axis === 2 && obj.type === 'sketch') {
+      const sign = obj.height < 0 ? -1 : 1;
+      obj.height = r3(sign * Math.max(0.001, Math.abs(obj.height) + delta));
+      rebuild();
+      return;
+    }
+    const at = edge.a.map((v, i) => (v + (edge.b[i] || 0)) / 2);
+    obj.features = obj.features || [];
+    obj.features.push({
+      op: 'length',
+      scope: 'parallel',
+      at: at.map((v) => r3(v)),
+      dir: dir.map((v) => r3(v)),
+      delta: r3(delta),
+    });
+    rebuild();
+  };
+  ModelEngine.prototype._loopSamples = function (pts, count) {
+    const src = pts || [];
+    if (src.length <= count) return src.map((p) => p.slice());
+    const out = [];
+    for (let i = 0; i < count; i++) out.push(src[Math.round(i * (src.length - 1) / (count - 1))].slice());
+    return out;
+  };
+  ModelEngine.prototype._commitRound = function (obj, meta, next, rebuild) {
+    const factor = next / meta.measure;
+    if (Math.abs(factor - 1) < 1e-4) return;
+    const plain = !((obj.features || []).length);
+    if (plain && obj.type === 'cylinder' && obj.size) {
+      obj.size.d = r3(Math.max(0.1, obj.size.d * factor));
+      rebuild();
+      return;
+    }
+    if (plain && obj.type === 'sphere' && obj.size) {
+      obj.size.d = r3(Math.max(0.1, obj.size.d * factor));
+      rebuild();
+      return;
+    }
+    const slot = this.objs[obj.id];
+    const world = slot && this._shapeMatrix(slot);
+    const loops = [];
+    let dir = null;
+    for (const edge of this._bodyEdges(obj.id)) {
+      const pts = this._roundLocal(edge);
+      if (!pts || pts.length < 8) continue;
+      if (!world || !this._drawnRound(edge, world)) continue;
+      const n = C().planeNormal(pts);
+      if (!n) continue;
+      if (!dir) dir = n;
+      else if (!C().sameDirection(n, dir)) continue;
+      loops.push(this._loopSamples(pts, 24));
+    }
+    if (!loops.length || !dir) { this._toast('That edge could not be changed.'); return; }
+    const anchor = meta.edge.c || meta.edge.mid || meta.edge.at || [0, 0, 0];
+    obj.features = obj.features || [];
+    obj.features.push({
+      op: 'length',
+      round: true,
+      scope: 'parallel',
+      at: anchor.slice(0, 3).map((v) => r3(v)),
+      dir: dir.map((v) => r3(v)),
+      factor: Math.round(factor * 10000) / 10000,
+      loops,
+    });
+    rebuild();
+  };
+  // Points around a circle, in the circle's own plane. Offset along X is the
+  // axis of a circle that stands on its side, so that point is not on the edge.
+  ModelEngine.prototype._circlePts = function (edge) {
+    const c = edge.c || [0, 0, 0];
+    const r = edge.r || 0;
+    let n = edge.n;
+    if (!n && edge.faces) {
+      const face = edge.faces.find((f) => f.normal);
+      if (face) n = face.normal;
+    }
+    if (!n) n = [0, 0, 1];
+    const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+    n = [n[0] / nl, n[1] / nl, n[2] / nl];
+    const ref = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    let x = [ref[1] * n[2] - ref[2] * n[1], ref[2] * n[0] - ref[0] * n[2], ref[0] * n[1] - ref[1] * n[0]];
+    const xl = Math.hypot(x[0], x[1], x[2]) || 1;
+    x = [x[0] / xl, x[1] / xl, x[2] / xl];
+    const y = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
+    const pts = [];
+    for (let i = 0; i < 12; i++) {
+      const a = i / 12 * Math.PI * 2;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      pts.push([
+        c[0] + r * (ca * x[0] + sa * y[0]),
+        c[1] + r * (ca * x[1] + sa * y[1]),
+        (c[2] || 0) + r * (ca * x[2] + sa * y[2]),
+      ]);
+    }
+    return pts;
+  };
+  ModelEngine.prototype._worldLen = function (pts, world, close) {
+    const T = this.T;
+    let sum = 0;
+    let prev = null;
+    for (const p of pts || []) {
+      const w = new T.Vector3(p[0], p[1], p[2] || 0).applyMatrix4(world);
+      if (prev) sum += prev.distanceTo(w);
+      prev = w;
+    }
+    if (close && prev && pts.length > 2) {
+      const a = new T.Vector3(pts[0][0], pts[0][1], pts[0][2] || 0).applyMatrix4(world);
+      sum += prev.distanceTo(a);
+    }
+    return sum;
+  };
+  // Points on a circular edge in the body frame: a full circle, an arc, or a
+  // curve that may only be part of the circle. A circle split into arcs is
+  // still that circle.
+  ModelEngine.prototype._roundLocal = function (edge) {
+    if (!edge) return null;
+    if (edge.k === 'circle' && edge.c && edge.r) return this._circlePts(edge);
+    if (edge.k === 'arc' && edge.a && edge.mid && edge.b) return this._arcPts(edge);
+    if ((edge.k === 'curve' || edge.pts) && edge.pts && edge.pts.length >= 8) return edge.pts;
+    return null;
+  };
+  ModelEngine.prototype._arcPts = function (edge) {
+    const hit = this._circum3(edge.a, edge.mid, edge.b);
+    if (!hit || !(hit.r > 0.05)) return null;
+    const n = hit.n;
+    const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+    const nn = [n[0] / nl, n[1] / nl, n[2] / nl];
+    const ref = Math.abs(nn[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    let x = [ref[1] * nn[2] - ref[2] * nn[1], ref[2] * nn[0] - ref[0] * nn[2], ref[0] * nn[1] - ref[1] * nn[0]];
+    const xl = Math.hypot(x[0], x[1], x[2]) || 1;
+    x = [x[0] / xl, x[1] / xl, x[2] / xl];
+    const y = [nn[1] * x[2] - nn[2] * x[1], nn[2] * x[0] - nn[0] * x[2], nn[0] * x[1] - nn[1] * x[0]];
+    const ang = (p) => {
+      const v = this._sub3(p, hit.c);
+      return Math.atan2(this._dot3(v, y), this._dot3(v, x));
+    };
+    const wrap = (d) => {
+      let t = d;
+      while (t <= -Math.PI) t += Math.PI * 2;
+      while (t > Math.PI) t -= Math.PI * 2;
+      return t;
+    };
+    const a0 = ang(edge.a);
+    let sweep = wrap(ang(edge.b) - a0);
+    const via = wrap(ang(edge.mid) - a0);
+    if (sweep * via < 0) sweep += sweep > 0 ? -Math.PI * 2 : Math.PI * 2;
+    const pts = [];
+    for (let i = 0; i < 12; i++) {
+      const t = a0 + sweep * i / 11;
+      const ca = Math.cos(t), sa = Math.sin(t);
+      pts.push([
+        hit.c[0] + hit.r * (ca * x[0] + sa * y[0]),
+        hit.c[1] + hit.r * (ca * x[1] + sa * y[1]),
+        (hit.c[2] || 0) + hit.r * (ca * x[2] + sa * y[2]),
+      ]);
+    }
+    return pts;
+  };
+  // Diameter of a round edge after the same scale and turn that draw the body.
+  // A stretched body stores the cutter's circle as an ellipse, then draws it
+  // round again. An arc is the same circle, so it gets that drawn diameter.
+  ModelEngine.prototype._drawnRound = function (edge, world) {
+    const T = this.T;
+    const pts = this._roundLocal(edge);
+    if (!pts) return null;
+    const w = pts.map((p) => new T.Vector3(p[0], p[1], p[2] || 0).applyMatrix4(world));
+    const fit = C().fitCircle(w.map((p) => [p.x, p.y, p.z]));
+    if (!fit) return null;
+    const center = new T.Vector3(fit.c[0], fit.c[1], fit.c[2]);
+    const axis = w[0].clone().sub(center);
+    if (axis.lengthSq() < 1e-8) return null;
+    axis.setLength(fit.r);
+    const normal = new T.Vector3(fit.n[0], fit.n[1], fit.n[2]);
+    if (normal.lengthSq() < 1e-8) normal.set(0, 0, 1);
+    return { d: fit.d, a: center.clone().sub(axis), b: center.clone().add(axis), dir: normal.normalize(), samples: w, center };
   };
   ModelEngine.prototype._layoutDims = function () {
     const host = this.root.querySelector('[data-dims]');
     if (!host || !this.camera || !this.renderer || !this.T) return;
     const T = this.T;
     const rect = this.renderer.domElement.getBoundingClientRect();
+    let svg = host.querySelector('.mdl-dimsvg');
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'mdl-dimsvg');
+      host.prepend(svg);
+    }
+    svg.setAttribute('viewBox', '0 0 ' + rect.width + ' ' + rect.height);
+    const editing = this._dimEdit && this._dimMeta ? this._dimMeta.get(this._dimEdit) : null;
+    const shown = new Set();
+    for (const o of this.data.objects) if (o.dims !== false && !o.hidden) shown.add(o.id);
+    if (editing && editing.id) shown.add(editing.id);
+    if (this.sk || !shown.size) {
+      svg.textContent = '';
+      host.querySelectorAll('[data-dim]').forEach((el) => {
+        if (editing && el.dataset.dim === this._dimEdit) return;
+        el.remove();
+      });
+      return;
+    }
     const items = [];
+    const meshes = [];
     for (const o of this.data.objects) {
       if (o.hidden) continue;
       const slot = this.objs[o.id];
+      if (slot && slot.mesh && slot.group.visible) meshes.push(slot.mesh);
+    }
+    const worldNormal = (world, n) => new T.Vector3(n[0], n[1], n[2] || 0).transformDirection(world).normalize();
+    for (const o of this.data.objects) {
+      if (o.hidden || !shown.has(o.id)) continue;
+      const slot = this.objs[o.id];
       if (!slot || !slot.group.visible || !slot.mesh.geometry) continue;
-      const at = slot.group.getWorldPosition(new T.Vector3());
-      items.push({ key: 'b' + o.id, text: this._sizeText(o), at });
-    }
-    if (this.faceOn && this._faceHit) {
-      const slot = this.objs[this._faceHit.id];
-      const face = slot && slot.faces[this._faceHit.index];
-      const label = this.root.querySelector('[data-facedim]');
-      const text = face ? this._faceDimText(face) : 'Face';
-      if (label) label.textContent = text;
-      if (slot && face && face.center) {
-        items.push({ key: 'face', text, at: new T.Vector3(face.center[0], face.center[1], face.center[2]).applyMatrix4(this._shapeMatrix(slot)) });
+      const world = this._shapeMatrix(slot);
+      const center = slot.group.getWorldPosition(new T.Vector3());
+      const groups = new Map();
+      for (const edge of this._bodyEdges(o.id)) {
+        let worldA;
+        let worldB;
+        let dir;
+        let text;
+        let circle = false;
+        let curveLen = null;
+        const round = this._drawnRound(edge, world);
+        let samples = null;
+        if (round) {
+          circle = true;
+          worldA = round.a;
+          worldB = round.b;
+          dir = round.dir;
+          samples = round.samples;
+          text = 'Ø ' + r3(round.d);
+        } else if (edge.k === 'curve' && edge.pts && edge.pts.length >= 2 && edge.len > 0.2) {
+          const p0 = edge.pts[0];
+          const plast = edge.pts[edge.pts.length - 1];
+          const pmid = edge.pts[Math.floor(edge.pts.length / 2)];
+          const closed = Math.hypot(plast[0] - p0[0], plast[1] - p0[1], (plast[2] || 0) - (p0[2] || 0)) < Math.max(0.5, edge.len * 0.08);
+          const start = closed ? p0 : (edge.a || p0);
+          const end = closed ? pmid : (edge.b || plast);
+          worldA = new T.Vector3(start[0], start[1], start[2] || 0).applyMatrix4(world);
+          worldB = new T.Vector3(end[0], end[1], end[2] || 0).applyMatrix4(world);
+          dir = worldB.clone().sub(worldA);
+          if (dir.lengthSq() < 1e-8) continue;
+          curveLen = this._worldLen(edge.pts, world, closed);
+          text = String(r3(curveLen));
+        } else if (edge.a && edge.b) {
+          worldA = new T.Vector3(edge.a[0], edge.a[1], edge.a[2] || 0).applyMatrix4(world);
+          worldB = new T.Vector3(edge.b[0], edge.b[1], edge.b[2] || 0).applyMatrix4(world);
+          dir = worldB.clone().sub(worldA);
+          if (dir.lengthSq() < 1e-8) continue;
+          text = String(r3(worldA.distanceTo(worldB)));
+        } else continue;
+        let measure = round ? round.d : (curveLen != null ? curveLen : worldA.distanceTo(worldB));
+        const measured = this._measureEdge(edge, world);
+        if (measured && measured.value > 0) {
+          measure = measured.value;
+          if (measured.kind === 'diameter') {
+            circle = true;
+            text = 'Ø ' + r3(measure);
+          } else if (!circle) text = String(r3(measure));
+        }
+        if (measure < 0.2) continue;
+        // Straight edges of one length share a label. Each circle keeps its own,
+        // so both rims of a cylinder are labeled and arcs of one circle share one.
+        const sig = C().dimGroupKey(
+          measure,
+          [dir.x, dir.y, dir.z],
+          round ? [round.center.x, round.center.y, round.center.z] : null
+        );
+        if (!sig) continue;
+        let list = groups.get(sig);
+        if (!list) { list = []; groups.set(sig, list); }
+        list.push({ edge, worldA, worldB, dir, text, measure, circle, samples, id: o.id, axis: this._edgeAxis(edge) });
       }
+      groups.forEach((list) => {
+        const cands = list.map((item) => {
+          const mid = item.worldA.clone().add(item.worldB).multiplyScalar(0.5);
+          const facing = (item.edge.faces || []).some((face) => face.normal && this._seesCamera(worldNormal(world, face.normal), mid));
+          const probes = item.samples && item.samples.length ? item.samples : [mid, item.worldA, item.worldB];
+          return { item, mid, key: item.edge.key, facing, open: probes.some((p) => this._openToCamera(p, meshes)) };
+        });
+        const picked = C().pickDim(cands);
+        const chosen = picked == null ? null : cands.find((c) => c.key === picked);
+        if (!chosen) return;
+        const item = chosen.item;
+        const mid = chosen.mid;
+        const edgeDir = item.worldB.clone().sub(item.worldA);
+        let off = mid.clone().sub(center);
+        if (edgeDir.lengthSq() > 1e-8) off.addScaledVector(edgeDir, -off.dot(edgeDir) / edgeDir.lengthSq());
+        if (off.lengthSq() < 1e-6) {
+          const face = (item.edge.faces || []).find((f) => f.normal);
+          off = face ? worldNormal(world, face.normal) : new T.Vector3(0, 0, 1);
+        }
+        off.normalize();
+        const gap = item.circle ? 0 : 22 * this._worldPerPx(mid);
+        const past = item.circle ? 0 : 6 * this._worldPerPx(mid);
+        item.dimA = item.worldA.clone().addScaledVector(off, gap);
+        item.dimB = item.worldB.clone().addScaledVector(off, gap);
+        item.extA = item.dimA.clone().addScaledVector(off, past);
+        item.extB = item.dimB.clone().addScaledVector(off, past);
+        item.at = item.dimA.clone().add(item.dimB).multiplyScalar(0.5);
+        item.key = item.edge.key;
+        item.text = item.circle ? 'Ø ' + r3(item.measure) : String(r3(item.measure));
+        items.push(item);
+      });
     }
-    const keep = new Set(items.map((it) => it.key));
+    items.sort((a, b) => b.measure - a.measure || (a.key < b.key ? -1 : 1));
+    const placed = [];
+    const visible = [];
+    const project = (v) => {
+      const p = v.clone().project(this.camera);
+      return {
+        x: (p.x * 0.5 + 0.5) * rect.width,
+        y: (-p.y * 0.5 + 0.5) * rect.height,
+        ok: p.z >= -1 && p.z <= 1,
+      };
+    };
     for (const it of items) {
-      let el = host.querySelector('[data-dim="' + it.key + '"]');
+      const a = project(it.dimA);
+      const b = project(it.dimB);
+      const m = project(it.at);
+      if (!a.ok || !b.ok || !m.ok) continue;
+      if (m.x < 0 || m.y < 0 || m.x > rect.width || m.y > rect.height) continue;
+      const hw = Math.max(22, it.text.length * 3.6 + 8);
+      const hh = 12;
+      if (placed.some((q) => Math.abs(q.x - m.x) < q.hw + hw && Math.abs(q.y - m.y) < q.hh + hh)) continue;
+      placed.push({ x: m.x, y: m.y, hw, hh });
+      visible.push({ it, x: m.x, y: m.y, a, b, ea: project(it.worldA), eb: project(it.worldB), xa: project(it.extA), xb: project(it.extB) });
+    }
+    const arrow = (tip, ux, uy) => {
+      const L = Math.hypot(ux, uy) || 1;
+      const x = ux / L, y = uy / L;
+      const s = 7, w = 2.2;
+      const bx = tip.x - x * s, by = tip.y - y * s;
+      return tip.x.toFixed(1) + ',' + tip.y.toFixed(1) + ' ' + (bx - y * w).toFixed(1) + ',' + (by + x * w).toFixed(1) + ' ' + (bx + y * w).toFixed(1) + ',' + (by - x * w).toFixed(1);
+    };
+    const line = (p, q) => '<line class="mdl-dimline" x1="' + p.x.toFixed(1) + '" y1="' + p.y.toFixed(1) + '" x2="' + q.x.toFixed(1) + '" y2="' + q.y.toFixed(1) + '"/>';
+    const parts = [];
+    for (const row of visible) {
+      const a = row.a, b = row.b;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const span = Math.hypot(dx, dy) || 1;
+      const ux = dx / span, uy = dy / span;
+      const outside = span < 46;
+      if (!row.it.circle) {
+        parts.push('<line class="mdl-ext" x1="' + row.ea.x.toFixed(1) + '" y1="' + row.ea.y.toFixed(1) + '" x2="' + row.xa.x.toFixed(1) + '" y2="' + row.xa.y.toFixed(1) + '"/>');
+        parts.push('<line class="mdl-ext" x1="' + row.eb.x.toFixed(1) + '" y1="' + row.eb.y.toFixed(1) + '" x2="' + row.xb.x.toFixed(1) + '" y2="' + row.xb.y.toFixed(1) + '"/>');
+      }
+      const gap = Math.min(span * 0.42, Math.max(22, row.it.text.length * 6.2));
+      if (!outside && span > gap + 16) {
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        const h = gap / 2;
+        parts.push(line(a, { x: mx - ux * h, y: my - uy * h }));
+        parts.push(line({ x: mx + ux * h, y: my + uy * h }, b));
+      } else if (outside) {
+        const pad = 14;
+        parts.push(line({ x: a.x - ux * pad, y: a.y - uy * pad }, { x: b.x + ux * pad, y: b.y + uy * pad }));
+      } else parts.push(line(a, b));
+      if (outside) {
+        parts.push('<polygon class="mdl-arrow" points="' + arrow(a, ux, uy) + '"/>');
+        parts.push('<polygon class="mdl-arrow" points="' + arrow(b, -ux, -uy) + '"/>');
+      } else {
+        parts.push('<polygon class="mdl-arrow" points="' + arrow(a, -ux, -uy) + '"/>');
+        parts.push('<polygon class="mdl-arrow" points="' + arrow(b, ux, uy) + '"/>');
+      }
+      let deg = Math.atan2(dy, dx) * 180 / Math.PI;
+      if (deg > 90) deg -= 180;
+      else if (deg < -90) deg += 180;
+      row.deg = deg;
+    }
+    svg.innerHTML = parts.join('');
+    this._dimMeta = new Map(visible.map((row) => [row.it.key, row.it]));
+    const keep = new Set(visible.map((row) => row.it.key));
+    for (const row of visible) {
+      const it = row.it;
+      let el = host.querySelector('[data-dim="' + CSS.escape(it.key) + '"]');
       if (!el) {
         el = document.createElement('div');
         el.className = 'mdl-dim';
         el.dataset.dim = it.key;
+        el.dataset.body = it.id;
+        el.addEventListener('pointerdown', (e) => {
+          if (!C().dimPressEdits(e.button, e.pointerType)) return;
+          e.stopPropagation();
+          e.preventDefault();
+          this._openDimEdit(el);
+        });
+        el.addEventListener('pointerenter', () => {
+          this._dimHold = el.dataset.body;
+          this._dimShown = el.dataset.body;
+          if (this._dimTimer) { clearTimeout(this._dimTimer); this._dimTimer = null; }
+        });
+        el.addEventListener('pointerleave', () => {
+          if (this._dimEdit) return;
+          if (this._dimHold === el.dataset.body) this._dimHold = null;
+          this._armDimHide();
+        });
         host.appendChild(el);
       }
-      el.textContent = it.text;
-      const p = it.at.clone().project(this.camera);
-      const hidden = p.z < -1 || p.z > 1;
-      el.hidden = hidden;
-      el.style.left = ((p.x * 0.5 + 0.5) * rect.width) + 'px';
-      el.style.top = ((-p.y * 0.5 + 0.5) * rect.height) + 'px';
+      if (this._dimEdit !== it.key) el.textContent = it.text;
+      el.hidden = false;
+      el.style.left = row.x + 'px';
+      el.style.top = row.y + 'px';
+      el.style.transform = this._dimEdit === it.key
+        ? 'translate(-50%, -50%)'
+        : 'translate(-50%, -50%) rotate(' + (row.deg || 0).toFixed(2) + 'deg)';
     }
-    host.querySelectorAll('[data-dim]').forEach((el) => { if (!keep.has(el.dataset.dim)) el.remove(); });
+    host.querySelectorAll('[data-dim]').forEach((el) => {
+      if (el.dataset.dim === this._dimEdit) return;
+      if (!keep.has(el.dataset.dim)) el.remove();
+    });
   };
   ModelEngine.prototype._sketchDone = function () {
     if (!this.sk) return;
@@ -2545,6 +3647,16 @@
     else if (this.sk.chain.length >= 2) {
       this.sk.profiles.push({ k: 'path', pts: this.sk.chain.map((p) => p.slice()) });
       this.sk.chain = [];
+    }
+    if (this.sk.source && this.sk.base) {
+      const added = this.sk.profiles.slice(this.sk.base).filter((p) => p.k !== 'path');
+      const same = this._profileKey(this.sk.profiles[0]) === this.sk.outlineKey;
+      if (same && !added.length) {
+        const hIn = this.root.querySelector('[data-skh]');
+        this._extrudeSourceFace(evalNum(hIn && hIn.value, 1));
+        return;
+      }
+      if (same) this.sk.profiles = this.sk.profiles.slice(this.sk.base);
     }
     if (!this.sk.profiles.some((p) => p.k !== 'path')) { this._toast('Draw a closed shape to extrude.'); return; }
     const hIn = this.root.querySelector('[data-skh]');
@@ -2564,10 +3676,7 @@
       cur.height = r3(height);
       cur.pos = pos;
       cur.rot = rot;
-      delete cur.brep;
-      delete cur.brepHash;
-      delete cur.view;
-      delete this._shapeSigs[cur.id];
+      this._dropBuilt(cur);
       this.sel = cur.id;
       this.multi = [cur.id];
       this._sketchCancel();
@@ -2597,6 +3706,37 @@
     this._syncGizmo();
     this._changed();
     this._requestBuild();
+  };
+  ModelEngine.prototype._profileKey = function (p) {
+    return JSON.stringify(p || null);
+  };
+  // The outline is the face. Extruding a rebuilt copy of it, in either
+  // direction, leaves the original curve behind. Grow or cut the face itself.
+  ModelEngine.prototype._extrudeSourceFace = function (height) {
+    const src = this.sk && this.sk.source;
+    const obj = src && this._obj(src.id);
+    if (!obj || !src.loop || src.loop.length < 3) { this._toast('This face cannot be extruded exactly.'); return; }
+    if (Math.abs(height) < 0.05) { this._toast('Use a length of at least 0.05 mm.'); return; }
+    obj.features.push({
+      op: 'push',
+      loop: src.loop.map((p) => p.slice()),
+      normal: src.normal.slice(),
+      center: src.center.slice(),
+      dist: r3(height),
+      exact: true,
+    });
+    this._dropBuilt(obj);
+    const id = obj.id;
+    this._sketchCancel();
+    this.sel = id;
+    this.multi = [id];
+    if (!this.faceOn) this._faceToggle(true);
+    this._renderList();
+    this._renderInsp();
+    this._syncGizmo();
+    this._changed();
+    this._requestBuild();
+    this._toast(height < 0 ? 'The face is cut.' : 'The face is extruded.');
   };
   ModelEngine.prototype._sketchSourceBar = function () {
     const split = this.root.querySelector('[data-sksplit]');
@@ -2654,10 +3794,7 @@
       normal: this.sk.source.normal.slice(),
       cuts,
     });
-    delete obj.brep;
-    delete obj.brepHash;
-    delete obj.view;
-    delete this._shapeSigs[id];
+    this._dropBuilt(obj);
     this._sketchCancel();
     this.sel = id;
     this.multi = [id];
@@ -2673,7 +3810,7 @@
     if (!this.sk) return;
     if (this._skDrag) {
       this._skDrag = null;
-      if (!this.dragging) this.controls.enabled = true;
+      this._freeNav();
       this._sketchDraw();
       return;
     }
@@ -2695,7 +3832,7 @@
     if (bar) bar.classList.add('hidden');
     if (this._skLines) { this.scene.remove(this._skLines); this._skLines.geometry.dispose(); this._skLines = null; }
     this._sketchSourceBar();
-    if (!this.dragging) this.controls.enabled = true;
+    this._freeNav();
     this._syncGizmo();
   };
 

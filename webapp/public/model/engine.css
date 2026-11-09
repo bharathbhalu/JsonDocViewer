@@ -47,8 +47,15 @@ html[data-theme="dark"] .mdl-root {
   background: radial-gradient(ellipse at 50% 38%, #22252b, var(--mdl-bg));
 }
 .mdl-root:focus { outline: none; }
-.mdl-view { position: absolute; inset: 0; }
-.mdl-view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.mdl-view { position: absolute; inset: 0; touch-action: none; }
+.mdl-view canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
 
 .mdl-rail, .mdl-side, .mdl-pill, .mdl-cube {
   background: var(--mdl-panel);
@@ -67,7 +74,7 @@ html[data-theme="dark"] .mdl-root {
   gap: 4px;
   padding: 6px;
   border-radius: 18px;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-rail button:disabled { opacity: 0.35; cursor: default; }
 .mdl-rail button, .mdl-modes button, .mdl-del {
@@ -78,7 +85,7 @@ html[data-theme="dark"] .mdl-root {
   border-radius: 12px;
   cursor: pointer;
   font: inherit;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-rail button {
   width: 44px;
@@ -134,7 +141,7 @@ html[data-theme="dark"] .mdl-root {
   border-radius: 10px;
   padding: 7px 8px;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-row b { font-weight: 600; }
 .mdl-row span { color: var(--mdl-muted); font-size: 12px; }
@@ -156,7 +163,7 @@ html[data-theme="dark"] .mdl-root {
   justify-content: center;
   padding: 0;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   flex: none;
 }
 .mdl-ico svg { width: 18px; height: 18px; display: block; }
@@ -183,21 +190,76 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
 }
 .mdl-composer .mdl-pointname { border: 1px solid var(--mdl-line); }
 .mdl-item .mdl-pointname:focus { background: var(--mdl-hover); outline: none; }
-.mdl-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 2px; }
+.mdl-actions { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 2px; }
+.mdl-text {
+  appearance: none;
+  margin-right: auto;
+  border: 0;
+  background: var(--mdl-hover);
+  color: var(--mdl-ink);
+  border-radius: 10px;
+  height: 36px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: pan-x pan-y;
+}
+.mdl-text:hover { background: var(--mdl-accent-soft); color: var(--mdl-accent); }
 .mdl-dims { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.mdl-dimsvg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.mdl-ext { stroke: var(--mdl-edge); stroke-width: 0.75; stroke-linecap: square; }
+.mdl-dimline { stroke: var(--mdl-edge); stroke-width: 1; stroke-linecap: butt; }
+.mdl-arrow { fill: var(--mdl-edge); }
 .mdl-dim {
   position: absolute;
-  transform: translate(-50%, -130%);
-  background: var(--mdl-panel);
-  color: var(--mdl-ink);
-  border-radius: 8px;
-  padding: 3px 8px;
+  background: none;
+  color: var(--mdl-edge);
+  padding: 0;
   font-size: 12px;
   font-weight: 650;
-  box-shadow: var(--mdl-shadow);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: 0;
+  box-shadow: none;
   white-space: nowrap;
+  pointer-events: auto;
+  cursor: text;
+  padding: 8px 10px;
+  text-shadow:
+    0 0 2px var(--mdl-bg),
+    1px 0 0 var(--mdl-bg),
+    -1px 0 0 var(--mdl-bg),
+    0 1px 0 var(--mdl-bg),
+    0 -1px 0 var(--mdl-bg);
+}
+.mdl-dim input {
+  width: 4.2em;
+  margin: 0;
+  padding: 2px 0;
+  border: 1px solid var(--mdl-line);
+  border-radius: 4px;
+  background: var(--mdl-panel);
+  color: var(--mdl-ink);
+  font: 600 16px/1.2 inherit;
+  text-align: center;
+  text-shadow: none;
 }
 .mdl-dim[hidden] { display: none; }
+.mdl-dim.editing {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--mdl-panel);
+  box-shadow: var(--mdl-shadow);
+  text-shadow: none;
+  z-index: 6;
+}
+.mdl-dim.editing input { width: 7.2em; }
 .mdl-quiet {
   height: 40px;
   border-radius: 10px;
@@ -206,7 +268,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   background: transparent;
   color: var(--mdl-ink);
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-empty { margin: 8px 4px 12px; color: var(--mdl-muted); font-size: 12.5px; }
 
@@ -223,7 +285,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   padding: 8px 10px;
   user-select: text;
   -webkit-user-select: text;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-fields { display: flex; gap: 6px; }
 .mdl-fields label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--mdl-muted); }
@@ -248,7 +310,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   font: inherit;
   font-weight: 700;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-ax {
   width: 32px;
@@ -463,7 +525,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   text-transform: none;
   padding: 4px 8px;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-more.on { background: var(--mdl-accent-soft); color: var(--mdl-accent); }
 .mdl-skbar {
@@ -485,7 +547,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   border-radius: 16px;
   background: var(--mdl-panel);
   box-shadow: var(--mdl-shadow);
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-root:has(.mdl-skbar:not(.hidden)) .mdl-hint { opacity: 0; }
 .mdl-op { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 2px 6px; }
@@ -503,6 +565,19 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   font-weight: 700;
   white-space: nowrap;
 }
+.mdl-picks { padding: 3px; border-radius: 12px; background: var(--mdl-hover); gap: 2px; }
+.mdl-skbar button.mdl-pick {
+  width: auto;
+  min-width: 76px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--mdl-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.mdl-skbar button.mdl-pick.on { background: var(--mdl-accent); color: #fff; }
 .mdl-skbar button.mdl-ghost { background: transparent; color: var(--mdl-ink); }
 .mdl-vsep { width: 1px; align-self: stretch; background: var(--mdl-line); margin: 6px 4px; }
 .mdl-chip { padding: 0 8px; font-weight: 650; color: var(--mdl-muted); font-size: 12px; white-space: nowrap; }
@@ -518,7 +593,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   font: inherit;
   font-weight: 700;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
 }
 .mdl-skbar .mdl-ico { width: 36px; padding: 0; }
 .mdl-skbar button.on, .mdl-skbar .mdl-plane.on { background: var(--mdl-accent-soft); color: var(--mdl-accent); }
@@ -540,7 +615,7 @@ html[data-theme="dark"] .mdl-ico.mdl-danger { color: #ffb088; }
   .mdl-rail button { width: 52px; height: 52px; }
   .mdl-rail button svg { width: 26px; height: 26px; }
   .mdl-row { padding: 10px 10px; }
-  .mdl-modes button, .mdl-nudge, .mdl-presets button, .mdl-flip, .mdl-ico, .mdl-pointname, .mdl-skbar button.mdl-word { height: 44px; }
+  .mdl-modes button, .mdl-nudge, .mdl-presets button, .mdl-flip, .mdl-ico, .mdl-pointname, .mdl-text, .mdl-skbar button.mdl-word { height: 44px; }
   .mdl-ico { width: 44px; }
   .mdl-axis { grid-template-columns: 44px 44px minmax(0, 1fr) 44px; }
   .mdl-cube { width: 128px; height: 128px; }
